@@ -1,5 +1,13 @@
 # Dependencies and attribution
 
+## Project attribution
+
+[Galavic](https://github.com/Galavic) is the principal contributor and project
+lead for GTA SA OC. This credit applies to this project's work; dependencies
+and original game materials retain the authorship and notices listed below.
+
+## Upstream projects and tools
+
 - [recomp-kit](https://github.com/veritr1x/recomp-kit), revision
   `eb32cc42623e0e9e868b9d27423a57d5a5cba56b`, is an upstream dependency,
   not work authored by this project. Its handwritten implementation is MIT

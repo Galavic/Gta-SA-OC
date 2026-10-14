@@ -1,5 +1,7 @@
 # GTA SA OC — port experimental a WebAssembly
 
+**[Galavic](https://github.com/Galavic) — principal contribuidor y responsable de GTA SA OC.**
+
 Investigación para ejecutar el código original de GTA San Andreas de PC en
 el navegador, conservando su lógica, misiones, animaciones, física y audio.
 
