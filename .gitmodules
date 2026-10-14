@@ -1,0 +1,3 @@
+[submodule "vendor/recomp-kit"]
+    path = vendor/recomp-kit
+    url = https://github.com/veritr1x/recomp-kit.git

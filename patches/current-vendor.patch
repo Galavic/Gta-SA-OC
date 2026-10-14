@@ -1,0 +1,4194 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 20fdc15..1856633 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -2,6 +2,86 @@
+ 
+ ## Unreleased
+ 
++- Preserve guest state in diagnostics when interpreting an unknown jump fails
++  decoding, and stop partial interpreter faults in STRICT_UNKNOWN mode before
++  fabricating a zero result or restoring the caller stack.
++
++- Render a bounded unlit/prelit Direct3D 9 fixed-function subset using real
++  FVF declarations and synthesized SM2 shaders shared by the CPU and GPU
++  paths. Refuse unsupported lighting, fog and texture stages explicitly;
++  preserve programmable bindings/constants and correct CPU point/clamp
++  sampling and DX9 pixel centres. Verify COM draws and offscreen Wasm pixels.
++
++- Add a real generated-code headless PE startup probe with verified local image
++  loading, strict import refusal and opt-in live guest snapshots at strict halts.
++
++- Add an opt-in STRICT_UNKNOWN runtime mode that stops at untranslated
++  calls or failed interpreted execution, retaining live instruction bytes
++  and decoder diagnostics instead of continuing with a zero result.
++
++- Execute PUSHFD/POPFD image trampolines and x87 real-memory load/store and
++  arithmetic forms in the fallback interpreter using the translated CPU's
++  flag, stack, tag and rounding model.
++
++- Implement InitializeCriticalSectionAndSpinCount through the recursive guest
++  lock scheduler and IsProcessorFeaturePresent using the guest CPU contract,
++  with registered stdcall argument counts for dynamic CRT startup calls.
++- Add a diagnostic mode for all generated chunks that keeps backend register
++  allocation without expensive LLVM IR optimization, preserving the normal
++  optimization level of native runtime sources.
++
++- Make guest cursor snapshots optional when a game's mouse object hooks are
++  absent; keep ordinary window and DirectInput motion without borrowing
++  another game's cursor layout.
++- Allow explicitly selected generated chunks to compile at O1 for diagnostic
++  builds, preserving the normal optimization level of every other source.
++- Allow the native formatter to select first-party paths without reformatting
++  unrelated local work.
++
++- Gate game-specific frame-clock substitutions on all configured hook
++  addresses; games without them compile and retain ordinary host-clock reads.
++- Bound computed MOV-immediate/NOP/JMP-register targets only with original
++  bytes and no intervening entry; unknown reachable jumps invalidate opaque
++  branch proofs, while unreachable ones do not invent entry points.
++- Read file offsets from 32-bit guest OVERLAPPED structures, preserve the
++  appropriate handle position, publish status/count/event completion, and
++  implement GetOverlappedResult for completed reads. Complete host reads
++  before returning pending async requests; reject unsupported blocking
++  pending states explicitly. Overlapped writes are not implemented here.
++- Route INT3/INT 3 through the existing fatal breakpoint handler, instead of
++  the ignored generic interrupt hook; SEH breakpoint continuation is not modeled.
++- During recursive recovery, skip only locally proven XOR-self/JE/JNE edges;
++  revisit a conditional if another edge enters it with unknown flags.
++- Publish resumable CALL returns from reachable sites and propagate newly
++  introduced entries to a fixed point; omit proven-dead CALL return markers.
++- Avoid reparsing non-FS operands in SEH scans and reuse each scan's branch
++  target set without changing the chain-head checks.
++- Prove original adjacent XOR-reg-self/JE/JNE branches only with no alternate
++  branch entry or computed jump; retain XOR writes and flags, and remove
++  only CFG paths the proven branch makes unreachable. Preserve taken edges
++  at conditional listing gaps as well as their fallthrough edges.
++- Translate 32-bit ENTER frame construction with nested frame copies,
++  five-bit nesting levels and unchanged arithmetic flags; keep 16-bit ENTER
++  explicitly unsupported pending a reliable differential stack oracle.
++- Recover LOOP taken paths and translate ZF-dependent loop aliases plus JCXZ;
++  respect CX address-size overrides and preserve flags and upper ECX bits.
++- Support same-descriptor segment POPs in the fixed flat Win32 context, with
++  correct stack operand widths; reject descriptor changes and SS single-step
++  states explicitly rather than silently ignoring them.
++- Index the union of decoded table storage ranges during code-pointer scans;
++  preserve covered-entry priority and exclusive interval ends.
++- Accept audited per-call nonlocal dispatcher transfers in resumable-stack
++  translations; preserve original CALL execution and trap unexpected fallthrough.
++- Index normalized declared data/code intervals for large annotated corpora.
++
++- Translate FEMMS with the defined MMX-exit tag effects shared with EMMS.
++
++- Let game translation inputs classify audited embedded PE file buffers as data;
++  retain their bytes and omit their listings and pointer-scan roots.
++
++- Cache immutable instruction decoding across overlapping static recovery walks;
++  preserve caller-specific bounds and return independent instruction objects.
++
+ - Allow native game adapters to place their own cursors at absolute touch
+   positions in logical game pixels. Placement can discard pending DirectInput
+   X/Y movement without losing button, wheel or keyboard input.
+diff --git a/cmake/Translate.cmake b/cmake/Translate.cmake
+index 2542377..a291325 100644
+--- a/cmake/Translate.cmake
++++ b/cmake/Translate.cmake
+@@ -40,6 +40,34 @@ if(POP_HAVE_GEN)
+   target_include_directories(recomp_gen PRIVATE ${POP_GEN_DIR} ${POP_ROOT} ${POP_ROOT}/runtime)
+   target_include_directories(recomp_gen INTERFACE ${POP_GEN_DIR})
+   target_compile_options(recomp_gen PRIVATE ${POP_WARN_GEN})
++  set(RECOMP_GEN_LOW_OPT_CHUNKS "" CACHE STRING "Generated chunks compiled at O1 for diagnostic builds")
++  foreach(chunk IN LISTS RECOMP_GEN_LOW_OPT_CHUNKS)
++    if(NOT chunk MATCHES "^chunk_[0-9]+\\.c$" OR NOT EXISTS "${POP_GEN_DIR}/${chunk}")
++      message(FATAL_ERROR "Unknown low-optimization generated chunk: ${chunk}")
++    endif()
++    set_source_files_properties("${POP_GEN_DIR}/${chunk}" PROPERTIES COMPILE_OPTIONS "-O1")
++  endforeach()
++  set(RECOMP_GEN_DIAGNOSTIC_CHUNKS "" CACHE STRING "Generated chunks with backend register allocation but without expensive IR optimization")
++  option(RECOMP_GEN_DIAGNOSTIC_ALL "Use the diagnostic backend for every generated chunk" OFF)
++  set(_diagnostic_chunks ${RECOMP_GEN_DIAGNOSTIC_CHUNKS})
++  if(RECOMP_GEN_DIAGNOSTIC_ALL)
++    foreach(source IN LISTS POP_GEN_SOURCES)
++      get_filename_component(chunk "${source}" NAME)
++      if(chunk MATCHES "^chunk_[0-9]+\\.c$")
++        list(APPEND _diagnostic_chunks ${chunk})
++      endif()
++    endforeach()
++    list(REMOVE_DUPLICATES _diagnostic_chunks)
++  endif()
++  foreach(chunk IN LISTS _diagnostic_chunks)
++    if(NOT chunk MATCHES "^chunk_[0-9]+\\.c$" OR NOT EXISTS "${POP_GEN_DIR}/${chunk}")
++      message(FATAL_ERROR "Unknown diagnostic generated chunk: ${chunk}")
++    endif()
++    # O0 creates a distinct Wasm local for each temporary and can exceed V8's
++    # local limit. Keep backend O1 register allocation while bypassing the IR
++    # optimizer for pathological control-flow graphs in diagnostic chunks.
++    set_source_files_properties("${POP_GEN_DIR}/${chunk}" PROPERTIES COMPILE_OPTIONS "-O1;-g0;-Xclang;-disable-llvm-passes")
++  endforeach()
+   # A game's native replacements. funcs.h includes this header before it
+   # defines FN_<addr>, so every call site, tail call and jump-table case for a
+   # replaced address goes to the native function instead.
+diff --git a/docs/testing.md b/docs/testing.md
+index bb8776b..4e77013 100644
+--- a/docs/testing.md
++++ b/docs/testing.md
+@@ -12,6 +12,28 @@ Run checks appropriate to your change. Every suite's output belongs under ignore
+ | `tools/test.py --mods` | Real loader/hooks/settings/native Options and replay contracts | Yes, plus translated archive |
+ | `tools/test.py --gameplay` | Menu navigation, mode cycling, selection, movement and clean exit | Yes, plus translated archive |
+ 
++`startup_win32_tests` exercises CRT critical-section and processor-feature
++imports through the real registry and dispatcher without an image or window.
++It checks dynamic resolution, stdcall stack cleanup, recursive ownership and
++the guest CPU feature contract. Its Emscripten build runs under Node.
++
++`game_boot_probe` links the real generated executable and auxiliary modules,
++then calls the verified PE entry through `run_entry` with the scheduler and
++actual import adapters. Its null graphics/audio host makes this a CPU startup
++diagnostic, not browser rendering or gameplay acceptance. Build the target
++through `tools/build.py`'s build API for the selected game. For Emscripten, run
++`node <output>/game_boot_probe.js <verified-executable>`; NODERAWFS reads the
++local installation and the loader still verifies every configured image hash.
++Both `RECOMP_STRICT_UNKNOWN` and `RECOMP_STRICT_IMPORTS` are forced on, so missing
++code, missing import implementations or unknown import signatures stop the run.
++Use an external execution timeout. `RECOMP_PROBE_DUMP=<existing-dir>/halt` writes
++live main/auxiliary images, stack, TEB and register metadata before a strict
++halt. These private diagnostic binaries belong under ignored `build/`.
++Decoder refusals also invoke the snapshot hook before executing instructions.
++`interp_tests --strict-fault` is an expected-abort check: a decoded routine
++pushes two stack words before an invalid memory read, and strict mode must
++retain that fault state rather than manufacture a successful zero return.
++
+ Native suites are CTest entries with labels: `nogame` runs everywhere and in CI,
+ `game` needs your installation, `gpu` needs a Metal device, `device` needs a
+ real Metal and audio device (the offline audio render is not what a hosted CI
+diff --git a/dx/CMakeLists.txt b/dx/CMakeLists.txt
+index a16dd2f..a95c864 100644
+--- a/dx/CMakeLists.txt
++++ b/dx/CMakeLists.txt
+@@ -2,7 +2,7 @@ set(POP_DX_SOURCES
+   com.cpp dx.cpp host_api.cpp display_stubs.cpp ddraw.cpp d3d.cpp d3d11.cpp dxgi.cpp d3dcompiler.cpp
+   d3dx10.cpp dsound.cpp dshow.cpp mp3_source.cpp dinput.cpp dinput_joystick.cpp xinput.cpp qmixer.cpp
+   mss32.cpp redbook.cpp avi.cpp waveout.cpp fmod.cpp soundlib.cpp galaxy_stub.cpp riff.cpp bink.cpp video_frame.cpp mf_media.cpp
+-  mf.cpp weanetr.cpp d3d9.cpp d3d9_raster.cpp d3d9_shader.cpp d3d9_shadergen.cpp host_d9_default.cpp
++  mf.cpp weanetr.cpp d3d9.cpp d3d9_ffp.cpp d3d9_raster.cpp d3d9_shader.cpp d3d9_shadergen.cpp host_d9_default.cpp
+   d3dx9.cpp)
+ 
+ add_library(recomp_dx OBJECT ${POP_DX_SOURCES})
+@@ -22,6 +22,18 @@ target_compile_options(recomp_dx_null PRIVATE ${POP_WARN_HOST})
+ pop_optimize(recomp_dx_null 1)
+ 
+ if(NOT IOS AND NOT ANDROID)
++add_executable(d3d9_ffp_tests tests/d3d9_ffp_tests.cpp
++  ${POP_ROOT}/runtime/tests/stub_recomp_call.cpp)
++target_link_libraries(d3d9_ffp_tests PRIVATE recomp_platform recomp_dx recomp_runtime)
++target_compile_options(d3d9_ffp_tests PRIVATE ${POP_WARN_HOST})
++pop_optimize(d3d9_ffp_tests 1)
++pop_test_binary(d3d9_ffp_tests)
++if(EMSCRIPTEN)
++  target_link_options(d3d9_ffp_tests PRIVATE -sALLOW_MEMORY_GROWTH=1
++    -sINITIAL_MEMORY=1073741824 -sENVIRONMENT=node -sEXIT_RUNTIME=1)
++endif()
++add_test(NAME d3d9_ffp_tests COMMAND d3d9_ffp_tests WORKING_DIRECTORY ${POP_ROOT})
++set_tests_properties(d3d9_ffp_tests PROPERTIES LABELS nogame TIMEOUT 120)
+ # host_api.h is a C header too. The C11 consumer is an object the DX tests
+ # link; the header is also parsed as C++17 on its own.
+ add_library(host_api_header_test OBJECT tests/host_api_header_test.c)
+diff --git a/dx/d3d9.cpp b/dx/d3d9.cpp
+index 1973efb..a865505 100644
+--- a/dx/d3d9.cpp
++++ b/dx/d3d9.cpp
+@@ -21,6 +21,7 @@
+ #include "../runtime/memory.h"
+ #include "host_api.h"
+ #include "d3d9_pipeline.h"
++#include "d3d9_ffp.h"
+ #include "d3d9_raster.h"
+ #include "d3d9_shader.h"
+ #include "host_d9.h"
+@@ -401,10 +402,7 @@ D9_STUB(SetNPatchMode, 2)
+ D9_STUB(GetNPatchMode, 1)
+ D9_STUB(ProcessVertices, 6)
+ D9_STUB(GetVertexDeclaration, 2)
+-D9_STUB(SetFVF, 2)
+-D9_STUB(GetFVF, 2)
+ D9_STUB(CreateVertexShader, 3)
+-D9_STUB(SetVertexShader, 2)
+ D9_STUB(GetVertexShader, 2)
+ D9_STUB(GetVertexShaderConstantF, 4)
+ D9_STUB(SetVertexShaderConstantI, 4)
+@@ -416,7 +414,6 @@ D9_STUB(SetStreamSourceFreq, 3)
+ D9_STUB(GetStreamSourceFreq, 3)
+ D9_STUB(GetIndices, 2)
+ D9_STUB(CreatePixelShader, 3)
+-D9_STUB(SetPixelShader, 2)
+ D9_STUB(GetPixelShader, 2)
+ D9_STUB(GetPixelShaderConstantF, 4)
+ D9_STUB(SetPixelShaderConstantI, 4)
+@@ -1402,10 +1399,79 @@ void Dev_SetVertexDeclaration(X86 *c) {
+     if (dev) {
+         dev->current_viewport = (d && d->kind == K_D3D9DECL) ? d->id : 0;
+         d9_pipeline(dev->id).declaration = dev->current_viewport;
++        d9_pipeline(dev->id).fvf = 0;
+     }
+     com_ret(c, D3D_OK9);
+ }
+ 
++// A supported FVF installs a real declaration. Failed validation leaves the
++// previous declaration intact, and repeated identical bindings reuse it.
++void Dev_SetFVF(X86 *c) {
++    ComObj *dev = this_device9(c);
++    D9FVF format;
++    std::string why;
++    uint32_t fvf = arg(c, 1);
++    if (!dev || !d9_fvf_decode(fvf, format, why)) {
++        LOGW("d3d9: SetFVF refused: %s", why.c_str());
++        com_ret(c, D3DERR_INVALIDCALL);
++        return;
++    }
++    D9Pipeline &p = d9_pipeline(dev->id);
++    if (p.fvf_cached != fvf || !com_get(p.fvf_declaration)) {
++        ComObj *decl = com_new(K_D3D9DECL);
++        if (!decl) {
++            com_ret(c, E_OUTOFMEMORY);
++            return;
++        }
++        decl->dev_d3d = dev->id;
++        decl->blob = std::move(format.declaration);
++        ComObj *old = com_get(p.fvf_declaration);
++        p.fvf_declaration = decl->id;
++        p.fvf_cached = fvf;
++        if (old)
++            com_release(old);
++    }
++    p.fvf = fvf;
++    p.declaration = dev->current_viewport = p.fvf_declaration;
++    com_ret(c, D3D_OK9);
++}
++
++void Dev_GetFVF(X86 *c) {
++    ComObj *dev = this_device9(c);
++    uint32_t out = arg(c, 1);
++    if (!dev || !out || !gm_fits(out, 4)) {
++        com_ret(c, D3DERR_INVALIDCALL);
++        return;
++    }
++    wr32(out, d9_pipeline(dev->id).fvf);
++    com_ret(c, D3D_OK9);
++}
++
++// The adapter does not yet expose standalone shader COM objects. Unbinding
++// them is nevertheless a real operation, needed to leave an effect's pass.
++void Dev_SetVertexShader(X86 *c) {
++    ComObj *dev = this_device9(c);
++    if (!dev || arg(c, 1)) {
++        com_ret(c, D3DERR_INVALIDCALL);
++        return;
++    }
++    D9Pipeline &p = d9_pipeline(dev->id);
++    p.vs = {};
++    p.vs_key = 0;
++    com_ret(c, D3D_OK9);
++}
++void Dev_SetPixelShader(X86 *c) {
++    ComObj *dev = this_device9(c);
++    if (!dev || arg(c, 1)) {
++        com_ret(c, D3DERR_INVALIDCALL);
++        return;
++    }
++    D9Pipeline &p = d9_pipeline(dev->id);
++    p.ps = {};
++    p.ps_key = 0;
++    com_ret(c, D3D_OK9);
++}
++
+ // (this, Type, ppQuery). A query with no GPU behind it answers immediately.
+ void Dev_CreateQuery(X86 *c) {
+     ComObj *dev = this_device9(c);
+@@ -1580,15 +1646,61 @@ static void target_viewport(ComObj *dev, const HostD9Target &t, int32_t vp[4]) {
+     vp[3] = rt ? (int32_t)rt->height : (int32_t)dev->height;
+ }
+ 
+-// One draw, handed to the GPU renderer with everything the device has bound.
+-static void gpu_draw(ComObj *dev, HostD9Draw &d) {
+-    D9Pipeline &pl = d9_pipeline(dev->id);
+-    if (pl.vs.empty() || pl.ps.empty()) {
+-        log_once("d3d9.gpu.ffp",
+-                 "d3d9: a draw with no shaders bound is skipped; the fixed-function "
+-                 "pipeline is not rendered on the GPU yet");
+-        return;
++// Synthesized bindings last only while the draw is captured. host_d9_draw
++// predecodes/caches its programs and copies constants into the owned batch
++// before this scope restores the application's programmable state.
++struct FixedFunctionBinding {
++    D9Pipeline &pl;
++    D9ShaderBytes saved_vs, saved_ps;
++    uint64_t saved_vs_key = 0, saved_ps_key = 0;
++    float saved_vconst[6][4], saved_pconst[1][4];
++    bool changed = false, ok = false;
++    explicit FixedFunctionBinding(ComObj *dev) : pl(d9_pipeline(dev->id)) {
++        if (!pl.vs.empty() && !pl.ps.empty()) {
++            ok = true;
++            return;
++        }
++        D9FixedFunction ff;
++        std::string why;
++        ComObj *rt = com_get(dev->render_target);
++        if (!pl.vs.empty() || !pl.ps.empty())
++            why = "mixed programmable/fixed-function shaders are not implemented";
++        else if (d9_ffp_prepare(pl, pl.fvf, rt ? rt->width : dev->width,
++                                rt ? rt->height : dev->height, ff, why)) {
++            saved_vs = pl.vs;
++            saved_ps = pl.ps;
++            saved_vs_key = pl.vs_key;
++            saved_ps_key = pl.ps_key;
++            memcpy(saved_vconst, pl.vconst, sizeof saved_vconst);
++            memcpy(saved_pconst, pl.pconst, sizeof saved_pconst);
++            pl.vs = ff.vs;
++            pl.ps = ff.ps;
++            pl.vs_key = pl.ps_key = 0;
++            memcpy(pl.vconst, ff.vconst, sizeof ff.vconst);
++            memcpy(pl.pconst, ff.pconst, sizeof ff.pconst);
++            changed = ok = true;
++            return;
++        }
++        log_once(("d3d9.ffp.refused." + why).c_str(), "d3d9: fixed-function draw refused: %s",
++                 why.c_str());
++    }
++    ~FixedFunctionBinding() {
++        if (!changed)
++            return;
++        pl.vs = saved_vs;
++        pl.ps = saved_ps;
++        pl.vs_key = saved_vs_key;
++        pl.ps_key = saved_ps_key;
++        memcpy(pl.vconst, saved_vconst, sizeof saved_vconst);
++        memcpy(pl.pconst, saved_pconst, sizeof saved_pconst);
+     }
++};
++
++static bool gpu_draw(ComObj *dev, HostD9Draw &d) {
++    FixedFunctionBinding binding(dev);
++    if (!binding.ok)
++        return false;
++    D9Pipeline &pl = binding.pl;
+     d.target = gpu_target(dev);
+     target_viewport(dev, d.target, d.viewport);
+     d.depth_range[0] = pl.viewport_z[0];
+@@ -1614,7 +1726,7 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
+     ComObj *decl = com_get(pl.declaration);
+     if (!decl || decl->kind != K_D3D9DECL) {
+         log_once("d3d9.gpu.nodecl", "d3d9: a draw with no vertex declaration is skipped");
+-        return;
++        return false;
+     }
+     d.decl = decl->blob.data();
+     d.decl_size = (uint32_t)decl->blob.size();
+@@ -1649,19 +1761,26 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
+     bool color_write = !pl.rs_set[168] || (pl.rs[168] & 0xf) != 0;
+     bool z_write = (!pl.rs_set[14] || pl.rs[14]) && (!pl.rs_set[7] || pl.rs[7]);
+     gpu_target_drawn(dev, color_write, z_write);
++    return true;
+ }
+ 
+ // Hands one draw to the CPU renderer with what the device has bound.
+-static void raster(X86 *c, const D9DrawCall &call) {
++static bool raster(X86 *c, const D9DrawCall &call) {
+     ComObj *dev = this_device9(c);
+     if (!dev)
+-        return;
++        return false;
+     ComObj *target = com_get(dev->render_target);
+     if (!target)
+         target = device_backbuffer(dev);
++    if (!target)
++        return false;
++    FixedFunctionBinding binding(dev);
++    if (!binding.ok)
++        return false;
+     ComObj *decl = com_get(dev->current_viewport); // SetVertexDeclaration keeps it here
+     static const std::vector<uint8_t> none;
+     d9_raster_draw(dev, target, (decl && decl->kind == K_D3D9DECL) ? decl->blob : none, call);
++    return true;
+ }
+ 
+ // (this, PrimitiveType, StartVertex, PrimitiveCount)
+@@ -1675,8 +1794,7 @@ void Dev_DrawPrimitive(X86 *c) {
+         d.primitive = arg(c, 1);
+         d.primitive_count = arg(c, 3);
+         d.start = arg(c, 2);
+-        gpu_draw(dev, d);
+-        com_ret(c, D3D_OK9);
++        com_ret(c, gpu_draw(dev, d) ? D3D_OK9 : D3DERR_INVALIDCALL);
+         return;
+     }
+     ComObj *vb = dev ? com_get(dev->back_obj) : nullptr;
+@@ -1688,7 +1806,10 @@ void Dev_DrawPrimitive(X86 *c) {
+         call.vertex_bytes = vb->blob.size() - dev->lock_off;
+         call.stride = dev->rate;
+         call.first = arg(c, 2);
+-        raster(c, call);
++        if (!raster(c, call)) {
++            com_ret(c, D3DERR_INVALIDCALL);
++            return;
++        }
+     }
+     com_ret(c, D3D_OK9);
+ }
+@@ -1701,6 +1822,7 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
+     ComObj *dev = this_device9(c);
+     if (dev && gpu_on()) {
+         ComObj *ibo = com_get(d9_pipeline(dev->id).index_buffer);
++        bool rendered = false;
+         if (ibo) {
+             gpu_sync_buffer(ibo);
+             HostD9Draw d{};
+@@ -1710,9 +1832,9 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
+             d.base_vertex = (int32_t)arg(c, 2);
+             d.index_buffer = ibo->id;
+             d.index_size = ibo->rmask ? ibo->rmask : 2;
+-            gpu_draw(dev, d);
++            rendered = gpu_draw(dev, d);
+         }
+-        com_ret(c, D3D_OK9);
++        com_ret(c, rendered ? D3D_OK9 : D3DERR_INVALIDCALL);
+         return;
+     }
+     ComObj *vb = dev ? com_get(dev->back_obj) : nullptr;
+@@ -1729,7 +1851,10 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
+         call.index_size = ib->rmask ? ib->rmask : 2;
+         call.base_vertex = (int32_t)arg(c, 2);
+         call.first = arg(c, 5);
+-        raster(c, call);
++        if (!raster(c, call)) {
++            com_ret(c, D3DERR_INVALIDCALL);
++            return;
++        }
+     }
+     com_ret(c, D3D_OK9);
+ }
+@@ -1801,6 +1926,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
+             describe_draw_inputs(c, arg(c, 3), arg(c, 4), arg(c, 2) + 2);
+     }
+     if (ComObj *dev = this_device9(c); dev && gpu_on()) {
++        bool rendered = false;
+         HostD9Draw d{};
+         d.primitive = arg(c, 1);
+         d.primitive_count = arg(c, 2);
+@@ -1809,9 +1935,9 @@ void Dev_DrawPrimitiveUP(X86 *c) {
+             d.stream[0].stride = arg(c, 4);
+             d.inline_vertices = gm_ptr(arg(c, 3));
+             d.inline_bytes = bytes;
+-            gpu_draw(dev, d);
++            rendered = gpu_draw(dev, d);
+         }
+-        com_ret(c, D3D_OK9);
++        com_ret(c, rendered ? D3D_OK9 : D3DERR_INVALIDCALL);
+         return;
+     }
+     D9DrawCall call;
+@@ -1819,8 +1945,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
+     call.prim_count = arg(c, 2);
+     call.vertices = arg(c, 3);
+     call.stride = arg(c, 4);
+-    raster(c, call);
+-    com_ret(c, D3D_OK9);
++    com_ret(c, raster(c, call) ? D3D_OK9 : D3DERR_INVALIDCALL);
+ }
+ 
+ // (this, PrimitiveType, MinVertexIndex, NumVertices, PrimitiveCount,
+@@ -1831,6 +1956,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
+              "indices at %08x",
+              g_draws, prim_name(arg(c, 1)), arg(c, 4), arg(c, 3), arg(c, 8), arg(c, 7), arg(c, 5));
+     if (ComObj *dev = this_device9(c); dev && gpu_on()) {
++        bool rendered = false;
+         HostD9Draw d{};
+         d.primitive = arg(c, 1);
+         d.primitive_count = arg(c, 4);
+@@ -1844,9 +1970,9 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
+             d.inline_indices = gm_ptr(arg(c, 5));
+             d.inline_index_bytes = ibytes;
+             d.index_size = isize;
+-            gpu_draw(dev, d);
++            rendered = gpu_draw(dev, d);
+         }
+-        com_ret(c, D3D_OK9);
++        com_ret(c, rendered ? D3D_OK9 : D3DERR_INVALIDCALL);
+         return;
+     }
+     D9DrawCall call;
+@@ -1856,8 +1982,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
+     call.stride = arg(c, 8);
+     call.indices = arg(c, 5);
+     call.index_size = arg(c, 6) == 102 ? 4 : 2;
+-    raster(c, call);
+-    com_ret(c, D3D_OK9);
++    com_ret(c, raster(c, call) ? D3D_OK9 : D3DERR_INVALIDCALL);
+ }
+ 
+ // ---------------------------------------------------------------------------
+diff --git a/dx/d3d9_pipeline.h b/dx/d3d9_pipeline.h
+index cc84cf4..7cef5bc 100644
+--- a/dx/d3d9_pipeline.h
++++ b/dx/d3d9_pipeline.h
+@@ -61,6 +61,7 @@ struct D9Pipeline {
+     Stream stream[8];
+     uint32_t index_buffer = 0;
+     uint32_t declaration = 0;
++    uint32_t fvf = 0, fvf_cached = 0, fvf_declaration = 0;
+     uint32_t color_target[4] = {}; // render target 0 lives on the device too
+     int32_t scissor[4] = {};       // left, top, right, bottom
+     const char *label = nullptr;   // effect/technique/pass that bound the shaders, for diagnostics
+@@ -68,6 +69,9 @@ struct D9Pipeline {
+     // Direct3D 9's documented defaults. ZENABLE also depends on whether the
+     // device was made with a depth buffer; CreateDevice and Reset set it.
+     D9Pipeline() {
++        for (auto &matrix : transform)
++            for (uint32_t i = 0; i < 4; ++i)
++                matrix[5 * i] = 1.0f;
+         auto f = [](float x) {
+             uint32_t b;
+             memcpy(&b, &x, 4);
+@@ -125,6 +129,7 @@ struct D9Pipeline {
+             tss[i][5] = 2;
+             tss[i][6] = 1;
+             tss[i][11] = (uint32_t)i; // TEXCOORDINDEX
++            tss[i][28] = 1;           // RESULTARG current
+         }
+     }
+ };
+diff --git a/dx/d3d9_raster.cpp b/dx/d3d9_raster.cpp
+index 00e088b..6b59ed6 100644
+--- a/dx/d3d9_raster.cpp
++++ b/dx/d3d9_raster.cpp
+@@ -196,8 +196,11 @@ const Decoded *texture_rgba(uint32_t texture_id) {
+ float wrap_coord(float t, uint32_t mode) {
+     switch (mode) {
+     case 3: // clamp
+-    case 4: // border, treated as clamp
+         return std::min(std::max(t, 0.0f), 1.0f);
++    case 4: // border coordinates must survive until the texel lookup
++        return t;
++    case 5: // mirror once
++        return std::min(std::fabs(t), 1.0f);
+     case 2: { // mirror
+         float f = t - 2.0f * std::floor(t / 2.0f);
+         return f > 1.0f ? 2.0f - f : f;
+@@ -223,10 +226,28 @@ V4 sample(const D9Pipeline &pl, uint32_t stage, const V4 &uv) {
+     int x0 = (int)std::floor(u), y0 = (int)std::floor(v);
+     float fx = u - x0, fy = v - y0;
+     auto texel = [&](int x, int y, int k) -> float {
+-        x = ((x % (int)t->width) + (int)t->width) % (int)t->width;
+-        y = ((y % (int)t->height) + (int)t->height) % (int)t->height;
++        auto address = [](int i, int size, uint32_t mode) {
++            if (mode == 3 || mode == 5)
++                return std::min(std::max(i, 0), size - 1);
++            if (mode == 4)
++                return i < 0 || i >= size ? -1 : i;
++            if (mode == 2) {
++                i = ((i % (2 * size)) + 2 * size) % (2 * size);
++                return i >= size ? 2 * size - 1 - i : i;
++            }
++            return ((i % size) + size) % size;
++        };
++        x = address(x, (int)t->width, au);
++        y = address(y, (int)t->height, av);
++        if (x < 0 || y < 0)
++            return ((pl.sampler_state[stage][4] >> (k == 3 ? 24 : (2 - k) * 8)) & 255) / 255.0f;
+         return t->rgba[((size_t)y * t->width + (size_t)x) * 4 + k] / 255.0f;
+     };
++    if (pl.sampler_state[stage][5] == 1) {
++        for (int k = 0; k < 4; ++k)
++            out[k] = texel((int)std::floor(u + .5f), (int)std::floor(v + .5f), k);
++        return out;
++    }
+     for (int k = 0; k < 4; ++k) {
+         float a = texel(x0, y0, k) * (1 - fx) + texel(x0 + 1, y0, k) * fx;
+         float b = texel(x0, y0 + 1, k) * (1 - fx) + texel(x0 + 1, y0 + 1, k) * fx;
+@@ -881,8 +902,9 @@ void d9_raster_draw(ComObj *device, ComObj *target, const std::vector<uint8_t> &
+             if (w <= 1e-6f)
+                 return; // behind the eye; no clipping yet
+             iw[i] = 1.0f / w;
+-            sx[i] = vpx + (v[i]->pos[0] * iw[i] + 1.0f) * 0.5f * vpw;
+-            sy[i] = vpy + (1.0f - v[i]->pos[1] * iw[i]) * 0.5f * vph;
++            // Match the GPU paths' DX9 pixel-centre and top-left correction.
++            sx[i] = vpx + (v[i]->pos[0] * iw[i] + 1.0f) * 0.5f * vpw + 63.0f / 128.0f;
++            sy[i] = vpy + (1.0f - v[i]->pos[1] * iw[i]) * 0.5f * vph + 63.0f / 128.0f;
+         }
+         float area = (sx[1] - sx[0]) * (sy[2] - sy[0]) - (sx[2] - sx[0]) * (sy[1] - sy[0]);
+         if (std::fabs(area) < 1e-8f)
+diff --git a/host/input_gate.cpp b/host/input_gate.cpp
+index 2dd011b..49f466a 100644
+--- a/host/input_gate.cpp
++++ b/host/input_gate.cpp
+@@ -158,7 +158,7 @@ bool pointer_correction(const HitResult &hit, int32_t *dx, int32_t *dy, bool del
+     // 00526dd2 is MOV ECX,0xd0595c (B9 immediate), NOT MOV ECX,[...].
+     // Resolve a fresh snapshot each delivery; neither the context pointer nor
+     // the coordinate values survive into the next delivery.
+-    const auto p = host_guest_pointer_resolve(g_mem, GUEST_SIZE, RECOMP_HOOK_MOUSE_DEVICE_PTR);
++    const auto p = host_guest_pointer_snapshot();
+     if (p.failure != HostGuestPointer::None) {
+         const char *reason = host_guest_pointer_failure_name(p.failure);
+         const std::string key = std::string("host.pointer.") + reason;
+@@ -441,6 +441,8 @@ const char *host_guest_pointer_failure_name(HostGuestPointer::Failure failure) {
+         return "bounds-invalid";
+     case HostGuestPointer::CoordinatesOutsideBounds:
+         return "coordinates-outside-bounds";
++    case HostGuestPointer::HooksUnavailable:
++        return "hooks-unavailable";
+     }
+     return "unknown-failure";
+ }
+@@ -454,6 +456,10 @@ HostGuestPointer host_guest_pointer_resolve(const uint8_t *arena, uint32_t size,
+         p.failure = why;
+         return p;
+     };
++#ifndef RECOMP_HOOK_MOUSE_VTABLE
++    // An unknown game's cursor object layout cannot be read as another's.
++    return fail(HostGuestPointer::HooksUnavailable);
++#else
+     auto valid = [&](uint32_t address, uint32_t length) {
+         return address < size && length <= size - address;
+     };
+@@ -491,6 +497,19 @@ HostGuestPointer host_guest_pointer_resolve(const uint8_t *arena, uint32_t size,
+     if (!(p.x >= p.left && p.x <= p.right && p.y >= p.top && p.y <= p.bottom))
+         return fail(HostGuestPointer::CoordinatesOutsideBounds);
+     return p;
++#endif
++}
++
++HostGuestPointer host_guest_pointer_snapshot() {
++#if defined(RECOMP_HOOK_MOUSE_DEVICE_PTR) && defined(RECOMP_HOOK_MOUSE_VTABLE)
++    return host_guest_pointer_resolve(g_mem, GUEST_SIZE, RECOMP_HOOK_MOUSE_DEVICE_PTR);
++#else
++    HostGuestPointer p;
++    p.failure = HostGuestPointer::HooksUnavailable;
++    p.arena_available = g_mem != nullptr;
++    p.arena_size = GUEST_SIZE;
++    return p;
++#endif
+ }
+ 
+ void host_pointer_set_mode(int w, int h) {
+@@ -725,9 +744,11 @@ void host_gate_release_all() {
+ }
+ 
+ void host_gate_reset() {
++#ifdef RECOMP_HOOK_MOUSE_DEVICE_RIGHT
+     if (g_installed_cursor_right && g_mem && gm_valid(RECOMP_HOOK_MOUSE_DEVICE_RIGHT, 4) &&
+         int32_t(rd32(RECOMP_HOOK_MOUSE_DEVICE_RIGHT)) == g_installed_cursor_right)
+         wr32(RECOMP_HOOK_MOUSE_DEVICE_RIGHT, g_saved_cursor_right);
++#endif
+     g_saved_cursor_right = g_installed_cursor_right = 0;
+     memset(g_guest_key, 0, sizeof g_guest_key);
+     memset(g_phys_mod, 0, sizeof g_phys_mod);
+@@ -952,6 +973,8 @@ extern "C" void host_input_pointer_correction(int32_t *dx, int32_t *dy) {
+     // Only extend a recognized full-surface bound, never a game's modal clamp.
+     auto &saved_right = g_saved_cursor_right;
+     auto &installed_right = g_installed_cursor_right;
++#if defined(RECOMP_HOOK_MOUSE_DEVICE_PTR) && defined(RECOMP_HOOK_MOUSE_VTABLE) &&                  \
++    defined(RECOMP_HOOK_MOUSE_DEVICE_RIGHT)
+     if (g_mem && gm_valid(RECOMP_HOOK_MOUSE_DEVICE_PTR, 0x48) &&
+         rd32(RECOMP_HOOK_MOUSE_DEVICE_PTR) == RECOMP_HOOK_MOUSE_VTABLE) {
+         int right = int32_t(rd32(RECOMP_HOOK_MOUSE_DEVICE_RIGHT));
+@@ -970,6 +993,7 @@ extern "C" void host_input_pointer_correction(int32_t *dx, int32_t *dy) {
+             saved_right = installed_right = 0;
+         }
+     }
++#endif
+     if (!g_pointer_target_valid)
+         return;
+     const auto hit = host_gate_hit_test(nullptr, g_target_window_x, g_target_window_y);
+@@ -999,7 +1023,7 @@ bool host_gate_pointer_place(int32_t x, int32_t y) {
+         g_pointer_target_valid = false;
+         return true;
+     }
+-    const auto p = host_guest_pointer_resolve(g_mem, GUEST_SIZE, RECOMP_HOOK_MOUSE_DEVICE_PTR);
++    const auto p = host_guest_pointer_snapshot();
+     if (p.failure != HostGuestPointer::None)
+         return false;
+     x = std::clamp(x, 0, std::max(0, g_layout.drawable_w - 1));
+diff --git a/host/input_gate.h b/host/input_gate.h
+index 9211514..ba20612 100644
+--- a/host/input_gate.h
++++ b/host/input_gate.h
+@@ -180,13 +180,16 @@ struct HostGuestPointer {
+         ObjectOutsideArena,
+         VtableMismatch,
+         BoundsInvalid,
+-        CoordinatesOutsideBounds
++        CoordinatesOutsideBounds,
++        HooksUnavailable
+     } failure = None;
+     bool arena_available = false;
+     uint32_t arena_size = 0, object = 0, vtable = 0, context = 0;
+     int32_t x = 0, y = 0, left = 0, top = 0, right = 0, bottom = 0;
+ };
+ HostGuestPointer host_guest_pointer_resolve(const uint8_t *arena, uint32_t size, uint32_t object);
++// Resolve game-specific coordinates only when its mouse object is configured.
++HostGuestPointer host_guest_pointer_snapshot();
+ const char *host_guest_pointer_failure_name(HostGuestPointer::Failure failure);
+ 
+ // Task 9 compositor mapping. Except set_layout (presenter publication), these
+diff --git a/host/sdl/main.cpp b/host/sdl/main.cpp
+index d983f15..d23a6e4 100644
+--- a/host/sdl/main.cpp
++++ b/host/sdl/main.cpp
+@@ -467,8 +467,7 @@ void apply_motion(int32_t x, int32_t y, double drawable_dx, double drawable_dy)
+     const double now = (double(os_monotonic_ns()) / 1e9);
+     if (trace && now - last_trace >= 0.1) {
+         last_trace = now;
+-        const auto guest =
+-            host_guest_pointer_resolve(g_mem, GUEST_SIZE, RECOMP_HOOK_MOUSE_DEVICE_PTR);
++        const auto guest = host_guest_pointer_snapshot();
+         fprintf(stderr,
+                 "[pointer-game] drawable %d,%d hit %d at %d,%d delivered %d guest %d,%d bounds "
+                 "%d,%d,%d,%d\n",
+diff --git a/runtime/CMakeLists.txt b/runtime/CMakeLists.txt
+index 10a5e39..d7dd40d 100644
+--- a/runtime/CMakeLists.txt
++++ b/runtime/CMakeLists.txt
+@@ -23,6 +23,12 @@ add_custom_command(
+ list(APPEND POP_RUNTIME_SOURCES ${POP_BUNDLED_FONTS_CPP})
+ 
+ add_library(recomp_runtime OBJECT ${POP_RUNTIME_SOURCES})
++if(EMSCRIPTEN)
++  # The interpreter's bounded execution uses a private Fault exception. Both
++  # its own catch sites and consumers' links must retain exception support.
++  set_source_files_properties(interp.cpp PROPERTIES COMPILE_OPTIONS "-fexceptions")
++  target_link_options(recomp_runtime INTERFACE -fexceptions)
++endif()
+ target_include_directories(recomp_runtime PUBLIC ${POP_ROOT} ${CMAKE_CURRENT_SOURCE_DIR})
+ target_link_libraries(recomp_runtime PUBLIC recomp_platform)
+ target_compile_options(recomp_runtime PRIVATE ${POP_WARN_HOST})
+@@ -43,6 +49,10 @@ endif()
+ # recomp_call, which the test provides.
+ if(NOT IOS AND NOT ANDROID)
+ add_executable(interp_tests tests/interp_tests.cpp interp.cpp)
++if(EMSCRIPTEN)
++  target_link_options(interp_tests PRIVATE -sALLOW_MEMORY_GROWTH=1
++    -sINITIAL_MEMORY=1073741824 -sENVIRONMENT=node -sEXIT_RUNTIME=1 -fexceptions)
++endif()
+ target_include_directories(interp_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+ target_compile_options(interp_tests PRIVATE ${POP_WARN_HOST})
+ pop_test_binary(interp_tests)
+@@ -79,6 +89,17 @@ add_test(NAME runtime_tests COMMAND runtime_tests WORKING_DIRECTORY ${POP_ROOT})
+ # code through the interpreter. It takes two seconds when that returns.
+ set_tests_properties(runtime_tests PROPERTIES LABELS game TIMEOUT 600
+                      ENVIRONMENT RECOMP_PYTHON=${Python3_EXECUTABLE})
++add_executable(startup_win32_tests tests/startup_win32_tests.cpp tests/stub_recomp_call.cpp)
++target_link_libraries(startup_win32_tests PRIVATE recomp_platform recomp_runtime recomp_dx)
++target_compile_options(startup_win32_tests PRIVATE ${POP_WARN_HOST})
++pop_optimize(startup_win32_tests 1)
++pop_test_binary(startup_win32_tests)
++if(EMSCRIPTEN)
++  target_link_options(startup_win32_tests PRIVATE -sALLOW_MEMORY_GROWTH=1
++    -sINITIAL_MEMORY=1073741824 -sENVIRONMENT=node -sEXIT_RUNTIME=1)
++endif()
++add_test(NAME startup_win32_tests COMMAND startup_win32_tests WORKING_DIRECTORY ${POP_ROOT})
++set_tests_properties(startup_win32_tests PROPERTIES LABELS nogame TIMEOUT 120)
+ add_executable(gdi_tests tests/gdi_tests.cpp tests/stub_recomp_call.cpp)
+ target_link_libraries(gdi_tests PRIVATE recomp_platform recomp_runtime)
+ target_compile_options(gdi_tests PRIVATE ${POP_WARN_HOST})
+@@ -94,6 +115,22 @@ set_tests_properties(gdi_draw_tests PROPERTIES LABELS nogame)
+ endif()
+ 
+ if(POP_REAL_GEN AND NOT IOS AND NOT ANDROID)
++  # Runs the verified original PE entry with actual generated CPU code. This
++  # is a CPU startup diagnostic, never a graphics/gameplay acceptance test.
++  add_executable(game_boot_probe tests/game_boot_probe.cpp)
++  target_link_libraries(game_boot_probe PRIVATE recomp_platform recomp_runtime recomp_dx_null)
++  target_compile_options(game_boot_probe PRIVATE ${POP_WARN_HOST})
++  pop_optimize(game_boot_probe 1)
++  pop_link_gen(game_boot_probe)
++  if(EMSCRIPTEN)
++    # Read the user's local installation directly. No assets are embedded or
++    # copied into source control; loader_load still enforces configured hashes.
++    target_link_options(game_boot_probe PRIVATE -pthread -sPTHREAD_POOL_SIZE=24
++      -sNODERAWFS=1 -sENVIRONMENT=node -sEXIT_RUNTIME=1
++      -sINITIAL_MEMORY=1073741824 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4294967296
++      -sSTACK_SIZE=8388608 -sDEFAULT_PTHREAD_STACK_SIZE=16777216)
++  endif()
++
+   # The headless parity fixture: null host, real generated code, core mods installed.
+   add_executable(pop_fixture fixture.cpp)
+   target_link_libraries(pop_fixture PRIVATE recomp_platform recomp_runtime recomp_snapshot recomp_dx_null recomp_mods lua)
+diff --git a/runtime/cpu.cpp b/runtime/cpu.cpp
+index 06d5e2b..c57d587 100644
+--- a/runtime/cpu.cpp
++++ b/runtime/cpu.cpp
+@@ -20,6 +20,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <map>
++#include <algorithm>
+ #include <vector>
+ 
+ // ---------------------------------------------------------------------------
+@@ -95,9 +96,24 @@ const int recomp_resumable_stacks = RECOMP_RESUMABLE_STACKS;
+ // this opt-in translation mode; ordinary games retain their existing path.
+ void recomp_run(X86 *c, uint32_t target) {
+     c->eip = target;
++    if (!recomp_resumable_stacks) {
++        recomp_call(c, c->eip);
++        return;
++    }
+     do {
++        jmp_buf *checkpoint;
++        while ((checkpoint = recomp_seh_resume_frame(c)) != nullptr) {
++            if (setjmp(*checkpoint)) {
++                recomp_seh_land(c);
++                if (c->eip == GUEST_RETURN_SENTINEL) {
++                    recomp_seh_resume_boundary(c);
++                    return;
++                }
++            }
++        }
+         recomp_call(c, c->eip);
+-    } while (recomp_resumable_stacks && c->eip != GUEST_RETURN_SENTINEL);
++        recomp_seh_resume_boundary(c);
++    } while (c->eip != GUEST_RETURN_SENTINEL);
+ }
+ 
+ void recomp_module_register(const RecompModule *m) {
+@@ -185,6 +201,8 @@ static void return_as_if_ret(X86 *c) {
+     c->r[R_EAX] = 0;
+ }
+ 
++void __attribute__((weak)) recomp_unknown_diagnostic(X86 *, uint32_t) {}
++
+ // An indirect call whose target landed in the trampoline range.
+ void recomp_shim_call(X86 *c, uint32_t target) {
+     if (imports_dispatch(c, target))
+@@ -209,8 +227,18 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
+     // call through a null pointer faults at the call, and there are no
+     // instructions at it to interpret. Reading them would be the very
+     // dereference this page exists to refuse.
+-    if (target >= GUEST_NULL_LIMIT && interp_call(c, target))
++    const char *strict_option = recomp_env("STRICT_UNKNOWN");
++    bool strict = strict_option && strcmp(strict_option, "0") != 0;
++    if (target >= GUEST_NULL_LIMIT && interp_call(c, target)) {
++        if (strict && interp_last_error()[0]) {
++            LOGW("interpreter failed at %08x: %s; refusing to skip guest code", target,
++                 interp_last_error());
++            recomp_unknown_diagnostic(c, target);
++            fflush(stderr);
++            abort();
++        }
+         return;
++    }
+     if (target == GUEST_RETURN_SENTINEL) {
+         recomp_callback_return(c);
+         // With no matching live callback this is an ordinary undeliverable
+@@ -251,16 +279,33 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
+     // object in a register and reached this target through the object's vtable,
+     // so a null target beside a plausible object means the vtable slot is
+     // empty, while a wild object means the pointer never was one.
+-    if (log_once(key,
++    bool fresh =
++        log_once(key,
+                  "call to unknown target %08x (ESP=%08x, return=%08x, EAX=%08x EBX=%08x "
+-                 "ECX=%08x EDX=%08x ESI=%08x EDI=%08x): returning 0",
++                 "ECX=%08x EDX=%08x ESI=%08x EDI=%08x): %s",
+                  target, c->r[R_ESP], ret, c->r[R_EAX], c->r[R_EBX], c->r[R_ECX], c->r[R_EDX],
+-                 c->r[R_ESI], c->r[R_EDI]) &&
+-        unknown_calls().size() < 256)
++                 c->r[R_ESI], c->r[R_EDI], strict ? "unsupported in strict mode" : "returning 0");
++    if (fresh && unknown_calls().size() < 256)
+         unknown_calls().push_back(UnknownCall{target, ret});
++    if (fresh && target >= GUEST_NULL_LIMIT && target < GUEST_SIZE) {
++        // Inspect current guest bytes: image code may have been changed by
++        // its own dispatcher, so original-file bytes alone are insufficient.
++        char bytes[97] = {};
++        uint32_t size = std::min(32u, GUEST_SIZE - target);
++        for (uint32_t i = 0; i < size; ++i)
++            snprintf(bytes + 3 * i, sizeof(bytes) - 3 * i, "%02x ", rd8(target + i));
++        LOGW("untranslated code %08x, live bytes: %s; decoder: %s", target, bytes,
++             interp_last_error());
++    }
+     // Every undeliverable call is an address the run proves is code, so it is
+     // also what a regeneration wants back (see discovery.h).
+     discovery_note("call", target, ret);
++    if (strict && target >= GUEST_NULL_LIMIT) {
++        LOGW("refusing to skip untranslated code at %08x (caller return=%08x)", target, ret);
++        recomp_unknown_diagnostic(c, target);
++        fflush(stderr);
++        abort();
++    }
+     return_as_if_ret(c);
+ }
+ 
+@@ -326,13 +371,11 @@ void recomp_null_access(uint32_t addr, int write) {
+     abort();
+ }
+ 
+-// An SSE/SSE2 instruction the translator left as a trap (MMX is translated).
+-// The CPUID below advertises neither extension, so only a guest that skips the
+-// CPUID check gets here; continuing would compute garbage, so this is fatal.
++// Unsupported guest instructions or operand states must stop explicitly.
++// This also covers CPU extensions the CPUID contract does not advertise.
+ void recomp_unmodelled(X86 *c, uint32_t addr) {
+-    LOGW("unmodelled SSE instruction at %08x (ESP=%08x, return=%08x): the guest used a "
+-         "CPU extension recomp_cpuid does not advertise",
+-         addr, c->r[R_ESP], rd32(c->r[R_ESP]));
++    LOGW("unmodelled guest instruction or operand state at %08x (ESP=%08x, return=%08x)", addr,
++         c->r[R_ESP], rd32(c->r[R_ESP]));
+     abort();
+ }
+ 
+@@ -411,6 +454,25 @@ void recomp_int(X86 *c, uint32_t vec) {
+     LOGW("INT %02x at EIP %08x: no interrupt handling, continuing", vec, c->eip);
+ }
+ 
++void recomp_illegal_instruction(X86 *c, uint32_t address) {
++    c->eip = address;
++    // A handler may patch its faulting UD2 and resume at the same address.
++    // In that case execute the current bytes, rather than raising forever
++    // from a stale statically translated instruction.
++    if (rd16(address) != 0x0b0fu) {
++        if (interp_call(c, address) && !interp_last_error()[0])
++            return;
++        recomp_unmodelled(c, address);
++        return;
++    }
++    if (recomp_seh_fault(c, 0xc000001du, address))
++        return;
++    LOGW("Unhandled illegal instruction at %08x", address);
++    fflush(stdout);
++    fflush(stderr);
++    abort();
++}
++
+ // ---------------------------------------------------------------------------
+ // _setjmp / _longjmp intrinsics. See intrinsics.h for the two substitution
+ // forms and why the two-call one is correct.
+diff --git a/runtime/imports.cpp b/runtime/imports.cpp
+index ec1d2b1..4d1b701 100644
+--- a/runtime/imports.cpp
++++ b/runtime/imports.cpp
+@@ -1,4 +1,5 @@
+ #include "imports.h"
++#include "../platform/os.h"
+ #include "gdi32_internal.h"
+ #include "user32_internal.h"
+ #include "kernel32_internal.h"
+@@ -413,11 +414,18 @@ bool imports_dispatch(X86 *c, uint32_t target) {
+     uint32_t idx = (target - TRAMP_BASE) / TRAMP_STRIDE;
+     if (idx >= tramps().size() || !tramps()[idx].atomic)
+         sched_checkpoint();
++    const char *strict_option = recomp_env("STRICT_IMPORTS");
++    bool strict = strict_option && strcmp(strict_option, "0") != 0;
+     if (idx >= tramps().size()) {
+         // No shim to say how many arguments to drop, but the return address
+         // must still be consumed or the guest stack is displaced from here on.
+         LOGW("imports: call to unallocated trampoline %08x (ESP=%08x, return=%08x)", target,
+              c->r[R_ESP], rd32(c->r[R_ESP]));
++        if (strict) {
++            recomp_unknown_diagnostic(c, target);
++            fflush(stderr);
++            abort();
++        }
+         c->eip = rd32(c->r[R_ESP]);
+         c->r[R_ESP] += 4;
+         set_eax(c, 0);
+@@ -432,6 +440,13 @@ bool imports_dispatch(X86 *c, uint32_t target) {
+     // across that call, and do not retain a pointer into the movable vector.
+     char desc[512];
+     snprintf(desc, sizeof desc, "%s", tramps()[idx].desc.c_str());
++    if (strict && (!fn || argc == ARGC_UNKNOWN)) {
++        LOGW("strict imports: refusing %s (%s)", desc,
++             !fn ? "no implementation" : "unknown calling convention");
++        recomp_unknown_diagnostic(c, target);
++        fflush(stderr);
++        abort();
++    }
+     ++tramps()[idx].calls;
+     ++g_import_calls;
+ 
+diff --git a/runtime/imports.h b/runtime/imports.h
+index d01eb0a..f11465e 100644
+--- a/runtime/imports.h
++++ b/runtime/imports.h
+@@ -157,3 +157,7 @@ void imports_dump_report(FILE *out);
+ void imports_coverage(uint32_t *implemented, uint32_t *logging_only, uint32_t *unknown_argc);
+ uint32_t imports_call_count(const char *dll, const char *name);
+ uint32_t imports_count();
++
++// Optional host diagnostic at a strict halt or decoder refusal; default no-op.
++// Called synchronously on the guest baton holder; it must not mutate guest state.
++extern "C" void recomp_unknown_diagnostic(X86 *c, uint32_t target);
+diff --git a/runtime/interp.cpp b/runtime/interp.cpp
+index b210e66..b00c5d3 100644
+--- a/runtime/interp.cpp
++++ b/runtime/interp.cpp
+@@ -1,9 +1,13 @@
+ // interp.cpp - see interp.h.
+ #include "interp.h"
++#include "imports.h"
++#include "../platform/os.h"
+ 
+ #include "thunks.h"
+ 
+ #include <cstdio>
++#include <cstdlib>
++#include <cstring>
+ #include <memory>
+ #include <mutex>
+ #include <unordered_map>
+@@ -28,6 +32,11 @@ enum Op : uint8_t {
+     DEC,
+     PUSH,
+     POP,
++    PUSHFD,
++    POPFD,
++    FLOAD,
++    FSTORE,
++    FARITH,
+     CALL, // direct: target; indirect: src
+     RET,
+     JMP,
+@@ -59,6 +68,8 @@ struct Ins {
+     uint32_t target_index = 0; // JMP, Jcc: `target`'s index in Routine::code
+     bool indirect = false;
+     uint16_t ret_pop = 0;
++    uint8_t fp_width = 0, fp_operation = 0;
++    bool fp_pop = false;
+ };
+ 
+ // How far the decoder reads before it gives up looking for the last RET.
+@@ -159,6 +170,38 @@ bool decode(uint32_t a, Ins &in) {
+     case 0x90:
+         in.op = NOP;
+         break;
++    case 0x9c:
++        in.op = PUSHFD;
++        break;
++    case 0x9d:
++        in.op = POPFD;
++        break;
++    case 0xd9:
++    case 0xdd:
++    case 0xd8:
++    case 0xdc: {
++        Operand rm;
++        if (!(n = modrm(p, rm, reg)) || rm.kind != 2)
++            return false; // Register-stack and comparison forms are not decoded here.
++        p += n;
++        in.fp_width = (b == 0xdd || b == 0xdc) ? 8 : 4;
++        in.src = rm;
++        if (b == 0xd9 || b == 0xdd) {
++            if (reg == 0)
++                in.op = FLOAD;
++            else if (reg == 2 || reg == 3) {
++                in.op = FSTORE;
++                in.fp_pop = reg == 3;
++            } else
++                return false;
++        } else {
++            if (reg == 2 || reg == 3)
++                return false; // FCOM/FCOMP require separate condition-code handling.
++            in.op = FARITH;
++            in.fp_operation = reg;
++        }
++        break;
++    }
+     case 0x01:
+     case 0x09:
+     case 0x21:
+@@ -788,11 +831,73 @@ void run(X86 *c, const Routine &r) {
+             store(c, in.dst, v);
+             break;
+         }
++        case PUSHFD:
++            flags_settle(c, f);
++            push(c, x86_get_eflags(c) & ~0x30000u);
++            c->eflags_misc &= ~0x10000u;
++            break;
++        case POPFD:
++            flags_settle(c, f);
++            x86_set_eflags(c, pop(c));
++            break;
++        case FLOAD:
++        case FSTORE:
++        case FARITH: {
++            uint32_t at = address_of(c, in.src);
++            if (!readable(at, in.fp_width)) {
++                snprintf(g_error, sizeof g_error, "x87 memory operand %08x outside guest memory",
++                         at);
++                throw Fault{};
++            }
++            // Share the translated code's x87 stack, tags, rounding and #Z
++            // model; no host-CPU feature or native host FPU state is substituted.
++            if (in.op == FSTORE) {
++                if (in.fp_width == 4)
++                    wrf32(at, fto_float(c, c->st[c->fpu_top]));
++                else
++                    wrf64(at, c->st[c->fpu_top]);
++                if (in.fp_pop)
++                    fdrop(c);
++            } else {
++                double value = in.fp_width == 4 ? (double)rdf32(at) : rdf64(at);
++                if (in.op == FLOAD)
++                    fpush(c, value);
++                else {
++                    double st0 = c->st[c->fpu_top], result;
++                    switch (in.fp_operation) {
++                    case 0:
++                        result = st0 + value;
++                        break;
++                    case 1:
++                        result = st0 * value;
++                        break;
++                    case 4:
++                        result = st0 - value;
++                        break;
++                    case 5:
++                        result = value - st0;
++                        break;
++                    case 6:
++                        result = fdivz(c, st0, value);
++                        break;
++                    default:
++                        result = fdivz(c, value, st0);
++                        break;
++                    }
++                    fset(c, 0, result);
++                }
++            }
++            break;
++        }
+         case CALL: {
+             uint32_t target = in.indirect ? load(c, in.src) : in.target;
+             push(c, in.addr + in.len);
+             flags_settle(c, f); // translated code reads the guest's own fields
+             recomp_call(c, target);
++            // A switched guest stack may resume elsewhere. Match generated
++            // CALLs: hand that state back rather than consume inline bytes.
++            if (recomp_resumable_stacks && c->eip != in.addr + in.len)
++                return;
+             break;
+         }
+         case RET:
+@@ -821,8 +926,12 @@ void run(X86 *c, const Routine &r) {
+ extern "C" int interp_call(X86 *c, uint32_t target) {
+     g_error[0] = 0;
+     std::shared_ptr<Routine> r = routine_at(target);
+-    if (!r)
++    if (!r) {
++        // Decoding has not executed guest instructions. Preserve this state
++        // for unknown jumps too, whose generated dispatcher aborts directly.
++        recomp_unknown_diagnostic(c, target);
+         return 0;
++    }
+     const uint32_t entry_esp = c->r[R_ESP];
+     if (g_depth++ == 0)
+         g_steps_left = kMaxSteps;
+@@ -834,6 +943,17 @@ extern "C" int interp_call(X86 *c, uint32_t target) {
+     try {
+         run(c, *r);
+     } catch (const Fault &) {
++        const char *strict = recomp_env("STRICT_UNKNOWN");
++        if (strict && std::strcmp(strict, "0") != 0) {
++            // Unknown jumps also enter here. Do not manufacture a successful
++            // return after a partially executed routine in strict mode.
++            fprintf(stderr,
++                    "[recomp] interpreter failed at %08x: %s; refusing to skip guest code\n",
++                    target, g_error);
++            recomp_unknown_diagnostic(c, target);
++            fflush(stderr);
++            std::abort();
++        }
+         // Part of the routine ran; carry on as if it had returned zero.
+         fprintf(stderr, "[recomp] interp: routine %08x stopped: %s\n", target, g_error);
+         c->r[R_EAX] = 0;
+diff --git a/runtime/interp.h b/runtime/interp.h
+index 0cefcbe..ca18d07 100644
+--- a/runtime/interp.h
++++ b/runtime/interp.h
+@@ -11,7 +11,9 @@
+ // The instruction set is the integer subset such routines use: MOV, LEA,
+ // ADD/SUB/CMP/AND/OR/XOR, TEST, IMUL, INC/DEC, PUSH/POP, CALL, RET, JMP and
+ // Jcc, on 32-bit registers and memory, plus 8-bit immediates stored to
+-// memory. A CALL goes back through recomp_call, so the routine can call the
++// memory. PUSHFD/POPFD and x87 real-memory FLD/FST/FSTP and arithmetic forms
++// share the translated CPU's flags, tags and rounding helpers. x87 register
++// and comparison forms remain unsupported here. A CALL goes back through recomp_call, so the routine can call the
+ // executable's translated functions and other heap routines.
+ //
+ // Execution is bounded: a routine that never reaches its RET - code that
+diff --git a/runtime/kernel32.cpp b/runtime/kernel32.cpp
+index 529d27d..8f9b37d 100644
+--- a/runtime/kernel32.cpp
++++ b/runtime/kernel32.cpp
+@@ -98,8 +98,9 @@ struct HObj {
+     HKind kind = H_NONE;
+     std::string object_name; // Named events, mutexes and mappings share a kernel object.
+     uint32_t references = 1;
+-    int fd = -1;      // H_FILE, H_MAPPING
+-    std::string path; // H_FILE, H_MAPPING, H_MODULE
++    int fd = -1;                  // H_FILE, H_MAPPING
++    bool file_overlapped = false; // FILE_FLAG_OVERLAPPED on H_FILE
++    std::string path;             // H_FILE, H_MAPPING, H_MODULE
+     // H_FILE opened for writing on an existing file: the open went through
+     // the read tier, and the write tier is resolved by the first write. See
+     // file_promote_for_write.
+@@ -805,9 +806,28 @@ void k_CreateFileA(X86 *c) {
+     create_file_named(c, gm_str(arg(c, 0)));
+ }
+ 
++static void file_read_complete(uint32_t overlapped, uint32_t status, uint32_t count) {
++    if (!overlapped)
++        return;
++    wr32(overlapped, status);
++    wr32(overlapped + 4, count);
++    uint32_t event = rd32(overlapped + 16) & ~1u;
++    if (event) {
++        win32_signal_event(event, false);
++        sched_wake_all();
++    }
++}
++
+ void k_ReadFile(X86 *c) {
+     HObj *o = handle_get(arg(c, 0), H_FILE);
+-    uint32_t buf = arg(c, 1), want = arg(c, 2), pread = arg(c, 3);
++    uint32_t buf = arg(c, 1), want = arg(c, 2), pread = arg(c, 3), overlapped = arg(c, 4);
++    if ((pread && !gm_valid(pread, 4)) || (overlapped && !gm_valid(overlapped, 20))) {
++        set_last_error(87); // ERROR_INVALID_PARAMETER
++        set_eax(c, 0);
++        return;
++    }
++    if (pread)
++        wr32(pread, 0);
+     if (!o) {
+         if (handle_get(arg(c, 0), H_STD)) {
+             if (pread)
+@@ -824,21 +844,102 @@ void k_ReadFile(X86 *c) {
+         set_eax(c, 0);
+         return;
+     }
+-    int64_t n = os_fd_read(o->fd, g_mem + buf, want);
++    if (o->file_overlapped && !overlapped) {
++        set_last_error(87);
++        set_eax(c, 0);
++        return;
++    }
++    int64_t saved_position = -1;
++    if (overlapped) {
++        uint32_t event = rd32(overlapped + 16) & ~1u;
++        if (event && !win32_reset_event(event)) {
++            set_last_error(ERROR_INVALID_HANDLE_);
++            set_eax(c, 0);
++            return;
++        }
++        wr32(overlapped, 0x103u); // STATUS_PENDING during the host operation
++        wr32(overlapped + 4, 0);
++        uint64_t position = rd32(overlapped + 8) | ((uint64_t)rd32(overlapped + 12) << 32);
++        saved_position = os_fd_seek(o->fd, 0, OS_SEEK_CUR);
++        if (saved_position < 0 || position > INT64_MAX ||
++            (want && os_fd_seek(o->fd, (int64_t)position, OS_SEEK_SET) < 0)) {
++            file_read_complete(overlapped, 0xc000000du, 0); // STATUS_INVALID_PARAMETER
++            set_last_error(87);
++            set_eax(c, 0);
++            return;
++        }
++    }
++    int64_t n = want ? os_fd_read(o->fd, g_mem + buf, want) : 0;
++    // Asynchronous handles retain their file pointer. A synchronous offset
++    // read updates it only when data was read; EOF/zero-byte operations leave
++    // it unchanged, as observed in native Windows reference tests.
++    if (overlapped && (o->file_overlapped || n <= 0)) {
++        if (os_fd_seek(o->fd, saved_position, OS_SEEK_SET) < 0)
++            n = -1;
++    }
+     if (recomp_env("TRACE_FILES"))
+         LOGW("file: read handle=%08x want=%u got=%lld", arg(c, 0), want, (long long)n);
+     if (n < 0) {
++        file_read_complete(overlapped, 0xc0000022u, 0); // STATUS_ACCESS_DENIED
+         set_last_error(ERROR_ACCESS_DENIED_);
+         if (pread)
+             wr32(pread, 0);
+         set_eax(c, 0);
+         return;
+     }
++    bool eof = overlapped && want && n == 0;
++    file_read_complete(overlapped, eof ? 0xc0000011u : 0u, (uint32_t)n);
++    if (o->file_overlapped) {
++        // Real bytes are already available and the completion event is
++        // signalled. Windows permits completion before the caller observes
++        // ERROR_IO_PENDING; GetOverlappedResult reads the actual result.
++        set_last_error(997); // ERROR_IO_PENDING
++        set_eax(c, 0);
++        return;
++    }
++    if (eof) {
++        set_last_error(38); // ERROR_HANDLE_EOF
++        set_eax(c, 0);
++        return;
++    }
+     if (pread)
+         wr32(pread, (uint32_t)n);
+     set_eax(c, 1);
+ }
+ 
++void k_GetOverlappedResult(X86 *c) {
++    uint32_t overlapped = arg(c, 1), transferred = arg(c, 2);
++    if (!handle_get(arg(c, 0), H_FILE)) {
++        set_last_error(ERROR_INVALID_HANDLE_);
++        set_eax(c, 0);
++        return;
++    }
++    if (!overlapped || !transferred || !gm_valid(overlapped, 20) || !gm_valid(transferred, 4)) {
++        set_last_error(87);
++        set_eax(c, 0);
++        return;
++    }
++    uint32_t status = rd32(overlapped);
++    if (status == 0x103u) {
++        // This runtime completes file reads before returning to guest code.
++        // A pending blocking operation from another API is not modeled.
++        if (arg(c, 3)) {
++            recomp_unmodelled(c, c->eip);
++            return;
++        }
++        set_last_error(996); // ERROR_IO_INCOMPLETE
++        set_eax(c, 0);
++        return;
++    }
++    wr32(transferred, rd32(overlapped + 4));
++    if (status) {
++        set_last_error(status == 0xc0000011u ? 38 : status == 0xc000000du ? 87 : 5);
++        set_eax(c, 0);
++        return;
++    }
++    set_eax(c, 1);
++}
++
+ void k_WriteFile(X86 *c) {
+     uint32_t h = arg(c, 0), buf = arg(c, 1), want = arg(c, 2), pwrote = arg(c, 3);
+     HObj *o = handle_any(h);
+@@ -1501,6 +1602,10 @@ void k_GetDriveTypeA(X86 *c) {
+ // drives simulation: 004a5590 uses 005cd92c/005cd930 and the real clock.
+ // Return the draw deadline to retire after reading the real host time.
+ static uint32_t native_frame_clock(X86 *c) {
++#if defined(RECOMP_HOOK_FRAME_CLOCK_BEGIN) && defined(RECOMP_HOOK_FRAME_CLOCK_WAIT) &&             \
++    defined(RECOMP_HOOK_FRAME_CLOCK_WAIT_CLAMP) &&                                                 \
++    defined(RECOMP_HOOK_FRAME_CLOCK_CLAMP_DEADLINE) &&                                             \
++    defined(RECOMP_HOOK_FRAME_CLOCK_WAIT_DEADLINE)
+     using Clock = std::chrono::steady_clock;
+     static FrameDeadline deadline;
+     static int active = 0;
+@@ -1537,6 +1642,12 @@ static uint32_t native_frame_clock(X86 *c) {
+         return RECOMP_HOOK_FRAME_CLOCK_WAIT_DEADLINE;
+     }
+     return 0;
++#else
++    // Only games with audited draw-loop addresses can use this substitution.
++    // The ordinary GetTickCount path below still returns real host time.
++    (void)c;
++    return 0;
++#endif
+ }
+ void k_GetTickCount(X86 *c) {
+     const uint32_t draw_deadline = native_frame_clock(c);
+@@ -1728,6 +1839,26 @@ void k_InitializeCriticalSection(X86 *c) {
+     }
+     set_eax(c, 0);
+ }
++// GetSystemInfo exposes one guest processor. Windows ignores dwSpinCount on
++// that topology, so the existing scheduler-backed object has SpinCount == 0.
++// This API returns BOOL, unlike InitializeCriticalSection's void return.
++void k_InitializeCriticalSectionAndSpinCount(X86 *c) {
++    uint32_t p = arg(c, 0);
++    if (!p || !gm_valid(p, 24)) {
++        set_eax(c, 0);
++        recomp_seh_raise(c, 0xc0000005u, 0, 0, 0);
++        return;
++    }
++    k_InitializeCriticalSection(c);
++    set_eax(c, 1);
++}
++
++// Report the emulated x86 CPU, not the host CPU or Wasm SIMD support.
++// recomp_cpuid advertises FPU, TSC and CMOV only; of the Windows PF_* feature
++// selectors, only PF_RDTSC_INSTRUCTION_AVAILABLE (8) is therefore present.
++void k_IsProcessorFeaturePresent(X86 *c) {
++    set_eax(c, arg(c, 0) == 8 ? 1 : 0);
++}
+ void k_EnterCriticalSection(X86 *c) {
+     imports_call_leaves_surfaces();
+     sched_enter_critsec(arg(c, 0));
+@@ -4218,6 +4349,7 @@ void create_file_named(X86 *c, const std::string &name) {
+     uint32_t h = handle_new(H_FILE);
+     handles()[h].fd = fd;
+     handles()[h].path = host;
++    handles()[h].file_overlapped = (arg(c, 5) & 0x40000000u) != 0;
+     if (deferred) {
+         handles()[h].write_pending = true;
+         handles()[h].write_flags = wanted;
+@@ -4849,7 +4981,7 @@ const ImportShim g_kernel32_shims[] = {
+     {"KERNEL32.dll", "GetTimeFormatA", 6, nullptr},
+     {"KERNEL32.dll", "GetDiskFreeSpaceExA", 4, nullptr},
+     {"KERNEL32.dll", "GetLongPathNameA", 3, nullptr},
+-    {"KERNEL32.dll", "GetOverlappedResult", 4, nullptr},
++    {"KERNEL32.dll", "GetOverlappedResult", 4, k_GetOverlappedResult},
+     {"KERNEL32.dll", "HeapValidate", 3, nullptr},
+     {"KERNEL32.dll", "QueueUserAPC", 3, nullptr},
+     {"KERNEL32.dll", "SetConsoleCtrlHandler", 2, nullptr},
+@@ -4864,6 +4996,9 @@ const ImportShim g_kernel32_shims[] = {
+     {"KERNEL32.dll", "InterlockedDecrement", 1, k_InterlockedDecrement},
+     {"KERNEL32.dll", "InterlockedExchange", 2, k_InterlockedExchange},
+     {"KERNEL32.dll", "InitializeCriticalSection", 1, k_InitializeCriticalSection},
++    {"KERNEL32.dll", "InitializeCriticalSectionAndSpinCount", 2,
++     k_InitializeCriticalSectionAndSpinCount},
++    {"KERNEL32.dll", "IsProcessorFeaturePresent", 1, k_IsProcessorFeaturePresent},
+     {"KERNEL32.dll", "EnterCriticalSection", 1, k_EnterCriticalSection},
+     {"KERNEL32.dll", "LeaveCriticalSection", 1, k_LeaveCriticalSection},
+     {"KERNEL32.dll", "DeleteCriticalSection", 1, k_DeleteCriticalSection},
+diff --git a/runtime/seh.cpp b/runtime/seh.cpp
+index ac94a12..3c7cb86 100644
+--- a/runtime/seh.cpp
++++ b/runtime/seh.cpp
+@@ -168,7 +168,7 @@ void finish_dispatch(SehDispatch *d) {
+     release_dispatch(d);
+ }
+ 
+-uint32_t call_handler(X86 *c, uint32_t reg, SehDispatch *d) {
++uint32_t call_handler(X86 *c, uint32_t reg, SehDispatch *d, bool allow_continue = false) {
+     uint32_t handler = rd32(reg + 4);
+     if (!handler || !gm_valid(handler, 1))
+         invalid_chain(c, reg, handler, "invalid handler");
+@@ -176,19 +176,41 @@ uint32_t call_handler(X86 *c, uint32_t reg, SehDispatch *d) {
+          rd32(d->record + 4));
+     uint32_t args[] = {d->record, reg, d->context, 0};
+     uint32_t disposition = guest_call(c, handler, args, 4);
+-    if (disposition == 0) {
++    if (disposition == 0 && !allow_continue) {
+         LOGW("ExceptionContinueExecution requested; not supported (record=%08x code=%08x "
+              "registration=%08x handler=%08x)",
+              d->record, rd32(d->record), reg, handler);
+         fatal_abort();
+     }
+-    if (disposition != 1) {
++    if (disposition != 1 && !(allow_continue && disposition == 0)) {
+         LOGW("SEH: unsupported disposition %u (record=%08x registration=%08x handler=%08x)",
+              disposition, d->record, reg, handler);
+         fatal_abort();
+     }
+     return disposition;
+ }
++
++void restore_fault_context(X86 *c, const X86 &saved, uint32_t context) {
++    const uint32_t flags = rd32(context);
++    if ((flags & 0xffff0000u) != 0x10000u || (flags & ~0x10003u))
++        invalid_chain(c, 0, context, "unsupported fault CONTEXT fields");
++    *c = saved; // handler callbacks are allowed to clobber their own CPU registers
++    if (flags & 2u) {
++        const int regs[] = {R_EDI, R_ESI, R_EBX, R_EDX, R_ECX, R_EAX};
++        for (uint32_t i = 0; i < 6; ++i)
++            c->r[regs[i]] = rd32(context + 0x9c + i * 4);
++    }
++    if (flags & 1u) {
++        if (rd32(context + 0xbc) != 0x1bu || rd32(context + 0xc8) != 0x23u)
++            invalid_chain(c, 0, context, "unsupported fault segment continuation");
++        if (rd32(context + 0xc0) & (0x100u | 0x3000u | 0x20000u | 0x4000u))
++            invalid_chain(c, 0, context, "unsupported fault debug or privileged flags");
++        c->r[R_EBP] = rd32(context + 0xb4);
++        c->eip = rd32(context + 0xb8);
++        c->r[R_ESP] = rd32(context + 0xc4);
++        x86_set_eflags(c, rd32(context + 0xc0));
++    }
++}
+ } // namespace
+ 
+ extern "C" {
+@@ -291,6 +313,42 @@ jmp_buf *recomp_seh_frame_adopt(X86 *c) {
+     return nullptr;
+ }
+ 
++void recomp_seh_resume_boundary(X86 *c) {
++    // Called only after recomp_call returned to the persistent dispatcher.
++    // Every host environment at this callback depth has now expired,
++    // including one whose CONTEXT moved ESP above its registration.
++    for (SehFrame *f : state.frames)
++        if (f->cpu == c && f->callback_depth == recomp_callback_depth() && !f->retired)
++            f->orphan = true;
++}
++
++jmp_buf *recomp_seh_resume_frame(X86 *c) {
++    for (size_t i = state.frames.size(); i-- > 0;) {
++        SehFrame *f = state.frames[i];
++        if (f->cpu != c || !f->orphan || f->retired ||
++            f->callback_depth != recomp_callback_depth())
++            continue;
++        // CONTEXT continuation may have abandoned several translated host
++        // frames. Reanchor every still-linked registration, not just FS:[0].
++        ChainWalk walk;
++        bool linked = false;
++        for (uint32_t reg = chain_head(c); reg != END_CHAIN; reg = rd32(reg)) {
++            walk.visit(c, reg, 0);
++            if (reg == f->registration) {
++                linked = true;
++                break;
++            }
++        }
++        if (!linked)
++            continue;
++        f->orphan = false;
++        f->profile_depth = recomp_profile_depth();
++        f->dispatch_depth = state.dispatches.size();
++        return &f->env;
++    }
++    return nullptr;
++}
++
+ void recomp_seh_frame_leave(X86 *c) {
+     recomp_seh_validate_chain(c, "leave", "");
+     bool removed = false;
+@@ -425,6 +483,35 @@ void recomp_seh_reset(X86 *c) {
+     }
+ }
+ 
++int recomp_seh_fault(X86 *c, uint32_t code, uint32_t instruction) {
++    c->eip = instruction;
++    recomp_seh_validate_chain(c, "hardware fault", "");
++    X86 saved = *c;
++    SehDispatch *d = new_dispatch(c);
++    wr32(d->record, code);
++    wr32(d->record + 12, instruction);
++    wr32(d->context + 0xb8, instruction);
++    // x86 faults save RF=1 in the hardware context. PUSHFD hides RF and VM.
++    wr32(d->context + 0xc0, x86_get_eflags(c) | 0x10000u);
++    ChainWalk walk;
++    for (uint32_t reg = chain_head(c); reg != END_CHAIN;) {
++        walk.visit(c, reg, 0);
++        uint32_t next = rd32(reg);
++        if (call_handler(c, reg, d, true) == 0) {
++            if (rd32(d->record + 4) & 1u)
++                invalid_chain(c, reg, d->record, "unsupported noncontinuable fault continuation");
++            restore_fault_context(c, saved, d->context);
++            finish_dispatch(d);
++            return 1;
++        }
++        reg = next;
++    }
++    *c = saved;
++    LOGW("SEH: unhandled hardware fault at %08x code=%08x", instruction, code);
++    finish_dispatch(d);
++    return 0;
++}
++
+ int recomp_seh_raise(X86 *c, uint32_t code, uint32_t flags, uint32_t nargs, uint32_t args) {
+     recomp_seh_validate_chain(c, "raise", "");
+     X86 saved = *c;
+diff --git a/runtime/seh.h b/runtime/seh.h
+index b457d2f..936e056 100644
+--- a/runtime/seh.h
++++ b/runtime/seh.h
+@@ -30,6 +30,13 @@ void recomp_seh_callback_leave(X86 *c, uint32_t depth);
+ /* Returns zero for an exhausted chain; kernel32 retains its abort diagnostics.
+  * A nonzero return is possible only through the test-only unhandled hook. */
+ int recomp_seh_raise(X86 *c, uint32_t code, uint32_t flags, uint32_t nargs, uint32_t args);
++/* Hardware fault: record/context EIP is the instruction, not a CALL return.
++ * Supports continuation through the integer/control fields of x86 CONTEXT. */
++int recomp_seh_fault(X86 *c, uint32_t code, uint32_t instruction);
++/* Resumable dispatch owns these checkpoint environments. A completed host
++ * step orphans its frames; the persistent run loop reanchors live records. */
++void recomp_seh_resume_boundary(X86 *c);
++jmp_buf *recomp_seh_resume_frame(X86 *c);
+ void recomp_seh_unwind(X86 *c, uint32_t target, uint32_t target_ip, uint32_t record,
+                        uint32_t retval);
+ 
+diff --git a/runtime/tests/interp_tests.cpp b/runtime/tests/interp_tests.cpp
+index d20c50b..3a38d57 100644
+--- a/runtime/tests/interp_tests.cpp
++++ b/runtime/tests/interp_tests.cpp
+@@ -24,7 +24,22 @@ uint8_t *g_mem;
+ RecompDirty g_dirty[RECOMP_DIRTY_SLOTS];
+ uint32_t g_dirty_count;
+ uint32_t g_watch_base, g_watch_len; // the memory watch, never armed here
++extern "C" const int recomp_resumable_stacks = 1;
+ extern "C" void recomp_watch_hit(uint32_t, uint32_t, uint64_t) {}
++static uint32_t g_diagnostic_calls = 0, g_diagnostic_target = 0;
++static X86 g_diagnostic_state;
++static bool g_strict_fault = false;
++extern "C" const char *recomp_env(const char *name) {
++    return g_strict_fault && strcmp(name, "STRICT_UNKNOWN") == 0 ? "1" : nullptr;
++}
++extern "C" void recomp_unknown_diagnostic(X86 *c, uint32_t target) {
++    ++g_diagnostic_calls;
++    g_diagnostic_target = target;
++    g_diagnostic_state = *c;
++    if (g_strict_fault)
++        fprintf(stderr, "[strict-fault] target=%08x eax=%08x esp=%08x\n", target, c->r[R_EAX],
++                c->r[R_ESP]);
++}
+ 
+ // The interpreter tests link neither cpu.cpp nor a guest with handlers, so a
+ // null dereference has nowhere to raise to: report it and stop, which is what
+@@ -46,11 +61,24 @@ static int g_checks = 0, g_failures = 0;
+ 
+ const uint32_t CODE = 0x01000000, HELPER = 0x01001000, DATA = 0x02000000, STACK = 0x0e000000;
+ const uint32_t NATIVE = 0x00401000, RETURN = 0x00400ff0;
++const uint32_t REDIRECT = NATIVE + 0x10;
+ static uint32_t g_native_arg = 0, g_native_calls = 0;
++static uint32_t g_redirect_calls = 0, g_redirect_return = 0, g_redirect_flags = 0;
+ 
+ // The generated table's stand-in: NATIVE is a "translated" cdecl function
+ // that returns its argument plus one; heap addresses go to the interpreter.
+ extern "C" void recomp_call(X86 *c, uint32_t target) {
++    if (target == REDIRECT) {
++        ++g_redirect_calls;
++        g_redirect_return = rd32(c->r[R_ESP]);
++        g_redirect_flags = x86_get_eflags(c);
++        c->r[R_EAX] = 0x11223344;
++        c->r[R_ECX] = 0x76543210;
++        c->r[R_ESP] = STACK - 0x400;
++        c->eip = HELPER + 0x20;
++        x86_set_eflags(c, 0xAD7);
++        return;
++    }
+     if (target == NATIVE) {
+         ++g_native_calls;
+         g_native_arg = rd32(c->r[R_ESP] + 4);
+@@ -92,6 +120,166 @@ static X86 fresh() {
+     return c;
+ }
+ 
++static void test_call_redirected_state() {
++    for (bool indirect : {false, true}) {
++        std::vector<uint8_t> code = {0x83, 0xc0, 0x01}; // ADD EAX,1: lazy flags
++        const uint32_t site = CODE + uint32_t(code.size());
++        if (indirect)
++            code.insert(code.end(), {0xff, 0xd2}); // CALL EDX
++        else
++            code.insert(code.end(), {0xe8, 0, 0, 0, 0});
++        const uint32_t continuation = CODE + uint32_t(code.size());
++        code.insert(code.end(), {0xc7, 0x03, 0xef, 0xbe, 0xad, 0xde,   // MOV [EBX],deadbeef
++                                 0xb9, 0x88, 0x77, 0x66, 0x55, 0xc3}); // MOV ECX; RET
++        put(CODE, code);
++        if (!indirect)
++            put_call(site, REDIRECT);
++        X86 c = fresh();
++        c.r[R_EAX] = 0xffffffff;
++        c.r[R_EBX] = DATA + 0x40;
++        c.r[R_EDX] = REDIRECT;
++        const uint32_t esp = c.r[R_ESP];
++        wr32(esp, RETURN);
++        wr32(DATA + 0x40, 0xaabbccdd);
++        g_redirect_calls = 0;
++        CHECK(interp_call(&c, CODE) == 1);
++        CHECK(g_redirect_calls == 1);
++        CHECK(g_redirect_return == continuation);
++        CHECK(g_redirect_flags == 0x257); // settled ADD: CF/PF/AF/ZF, not SF/OF
++        CHECK(rd32(esp - 4) == continuation);
++        CHECK(rd32(esp) == RETURN);
++        CHECK(c.r[R_ESP] == STACK - 0x400);
++        CHECK(c.eip == HELPER + 0x20);
++        CHECK(c.r[R_EAX] == 0x11223344);
++        CHECK(c.r[R_ECX] == 0x76543210);
++        CHECK(c.r[R_EBX] == DATA + 0x40);
++        CHECK(c.r[R_EDX] == REDIRECT);
++        CHECK(x86_get_eflags(&c) == 0xAD7);
++        CHECK(rd32(DATA + 0x40) == 0xaabbccdd); // post-CALL writes never execute
++    }
++    for (bool indirect : {false, true}) {
++        std::vector<uint8_t> code = {0x6a, 0x05}; // PUSH 5
++        const uint32_t site = CODE + uint32_t(code.size());
++        if (indirect)
++            code.insert(code.end(), {0xff, 0xd2});
++        else
++            code.insert(code.end(), {0xe8, 0, 0, 0, 0});
++        code.insert(code.end(), {0x83, 0xc4, 0x04, 0x89, 0x03, // ADD ESP,4; MOV [EBX],EAX
++                                 0xb9, 0x88, 0x77, 0x66, 0x55, 0xc3});
++        put(CODE, code);
++        if (!indirect)
++            put_call(site, NATIVE);
++        X86 c = fresh();
++        c.r[R_EDX] = NATIVE;
++        c.r[R_EBX] = DATA + 0x40;
++        const uint32_t esp = c.r[R_ESP];
++        wr32(esp, RETURN);
++        wr32(DATA + 0x40, 0xaabbccdd);
++        g_native_calls = 0;
++        CHECK(interp_call(&c, CODE) == 1);
++        CHECK(g_native_calls == 1);
++        CHECK(c.r[R_EAX] == 6);
++        CHECK(c.r[R_ECX] == 0x55667788);
++        CHECK(rd32(DATA + 0x40) == 6);
++        CHECK(c.eip == RETURN);
++        CHECK(c.r[R_ESP] == esp + 4);
++    }
++}
++
++static void test_stack_flags_thunk() {
++    // PUSH/PUSH/PUSH/PUSHFD/SUB [ESP+4]/POPFD/RET is an original image
++    // trampoline shape. Its RET transfers to the computed dispatcher and
++    // leaves two metadata words on the guest stack, without changing GPRs.
++    std::vector<uint8_t> code;
++    auto immediate = [&](uint32_t value) {
++        for (unsigned i = 0; i < 4; ++i)
++            code.push_back(uint8_t(value >> (8 * i)));
++    };
++    for (uint32_t value : {CODE + 26, 0x12345678u, NATIVE + 0x117d0u}) {
++        code.push_back(0x68);
++        immediate(value);
++    }
++    code.insert(code.end(), {0x9c, 0x81, 0x6c, 0x24, 0x04});
++    immediate(0x117d0);
++    code.insert(code.end(), {0x9d, 0xc3});
++    CHECK(code.size() == 26);
++    put(CODE, code);
++    for (uint32_t flags : {0x202u, 0x246u, 0xad7u, 0x10202u}) {
++        X86 c = fresh();
++        x86_set_eflags(&c, flags);
++        uint32_t expected_flags = x86_get_eflags(&c) & ~0x30000u;
++        uint32_t before = c.r[R_ESP];
++        wr32(before, RETURN);
++        CHECK(interp_call(&c, CODE) == 1);
++        CHECK(!interp_last_error()[0]);
++        CHECK(c.eip == NATIVE);
++        CHECK(c.r[R_ESP] == before - 8);
++        CHECK(rd32(c.r[R_ESP]) == 0x12345678);
++        CHECK(rd32(c.r[R_ESP] + 4) == CODE + 26);
++        CHECK(rd32(c.r[R_ESP] + 8) == RETURN);
++        CHECK(x86_get_eflags(&c) == expected_flags);
++    }
++    // A lazy integer result must be committed before PUSHFD saves it, and
++    // POPFD must replace the flags generated by the intervening SUB.
++    put(CODE, {0x31, 0xc0, 0x9c, 0x83, 0xc0, 0x01, 0x9d, 0xc3});
++    X86 c = fresh();
++    wr32(c.r[R_ESP], RETURN);
++    CHECK(interp_call(&c, CODE) == 1);
++    CHECK(c.r[R_EAX] == 1 && c.eflags_zf == 1 && c.eflags_cf == 0);
++}
++
++static void test_x87_memory() {
++    // Known exact input/result pairs for all accepted arithmetic memory
++    // forms, including reverse SUB/DIV and both float widths.
++    const double expected[] = {8.0, 12.0, 4.0, -4.0, 3.0, 1.0 / 3.0};
++    const unsigned operation[] = {0, 1, 4, 5, 6, 7};
++    for (unsigned width : {4u, 8u}) {
++        for (unsigned index = 0; index < 6; ++index) {
++            for (bool popping : {false, true}) {
++                std::vector<uint8_t> code;
++                auto memory = [&](uint8_t opcode, unsigned group, uint32_t address) {
++                    code.push_back(opcode);
++                    code.push_back(uint8_t((group << 3) | 5));
++                    for (unsigned i = 0; i < 4; ++i)
++                        code.push_back(uint8_t(address >> (i * 8)));
++                };
++                memory(width == 4 ? 0xd9 : 0xdd, 0, DATA);
++                memory(width == 4 ? 0xd8 : 0xdc, operation[index], DATA + 8);
++                memory(width == 4 ? 0xd9 : 0xdd, popping ? 3 : 2, DATA + 16);
++                code.push_back(0xc3);
++                put(CODE, code);
++                wrf64(DATA, 6.0);
++                wrf64(DATA + 8, 2.0);
++                if (width == 4) {
++                    wrf32(DATA, 6.0f);
++                    wrf32(DATA + 8, 2.0f);
++                }
++                X86 c = fresh();
++                c.fpu_tag = 0xffff;
++                c.fpu_cw = 0x037f;
++                x86_set_eflags(&c, 0xad7);
++                uint32_t flags = x86_get_eflags(&c), before = c.r[R_ESP];
++                wr32(before, RETURN);
++                CHECK(interp_call(&c, CODE) == 1);
++                CHECK(!interp_last_error()[0]);
++                CHECK(c.eip == RETURN && c.r[R_ESP] == before + 4);
++                CHECK(width == 4 ? rdf32(DATA + 16) == (float)expected[index]
++                                 : rdf64(DATA + 16) == expected[index]);
++                CHECK(c.fpu_top == (popping ? 0u : 7u));
++                CHECK(c.fpu_tag == (popping ? 0xffffu : 0x3fffu));
++                CHECK(c.fpu_cw == 0x037f);
++                CHECK(x86_get_eflags(&c) == flags);
++            }
++        }
++    }
++    // FCOM is not admitted as ordinary arithmetic; unsupported forms must
++    // fail decoding before any instruction changes registers or memory.
++    put(CODE, {0xd8, 0x15, 0, 0, 0, 2, 0xc3});
++    X86 c = fresh(), before = c;
++    CHECK(interp_call(&c, CODE) == 0);
++    CHECK(memcmp(&c, &before, sizeof c) == 0);
++}
++
+ static void test_bank_routine() {
+     // The shape of an audio bank routine: fetch values through helpers and
+     // store them into the parameter block the caller passes.
+@@ -180,10 +368,14 @@ static void test_tail_call_out() {
+ 
+ static void test_refusals() {
+     // An instruction outside the set: nothing runs.
+-    put(CODE, {0x56, 0xd9, 0x46, 0x04, 0x5e, 0xc3}); // push esi; fld [esi+4]; pop esi; ret
++    put(CODE, {0x56, 0xd8, 0x56, 0x04, 0x5e, 0xc3}); // push esi; fcom [esi+4]; pop esi; ret
+     X86 c = fresh();
+     X86 before = c;
++    uint32_t diagnostics_before = g_diagnostic_calls;
+     CHECK(interp_call(&c, CODE) == 0);
++    CHECK(g_diagnostic_calls == diagnostics_before + 1);
++    CHECK(g_diagnostic_target == CODE);
++    CHECK(memcmp(&g_diagnostic_state, &before, sizeof before) == 0);
+     CHECK(memcmp(&c, &before, sizeof c) == 0);
+     CHECK(strstr(interp_last_error(), "unsupported") != nullptr);
+     // A branch into the middle of an instruction.
+@@ -310,6 +502,15 @@ int main(int argc, char **argv) {
+         return 1;
+     if (argc == 3 && !strcmp(argv[1], "--run"))
+         return run_hex(argv[2]);
++    if (argc == 2 && !strcmp(argv[1], "--strict-fault")) {
++        g_strict_fault = true;
++        put(CODE, {0x56, 0x56, 0x8b, 0x05, 0xff, 0xff, 0xff, 0xff, 0x5e, 0x5e, 0xc3});
++        X86 c = fresh();
++        c.r[R_EAX] = 5;
++        interp_call(&c, CODE);
++        fprintf(stderr, "FAIL strict fault returned\n");
++        return 1;
++    }
+     // Without the interpreter's step budget the checks in test_step_budget do
+     // not fail, they never come back; the watchdog turns that into a failure.
+     // The whole suite inside the budget is a fraction of a second.
+@@ -318,6 +519,9 @@ int main(int argc, char **argv) {
+     alarm(30);
+ #endif
+     test_bank_routine();
++    test_call_redirected_state();
++    test_stack_flags_thunk();
++    test_x87_memory();
+     test_tail_call_out();
+     test_refusals();
+     test_step_budget();
+diff --git a/runtime/tests/runtime_tests.cpp b/runtime/tests/runtime_tests.cpp
+index 7016990..9444f6e 100644
+--- a/runtime/tests/runtime_tests.cpp
++++ b/runtime/tests/runtime_tests.cpp
+@@ -2844,6 +2844,35 @@ static void creation_polling_wndproc(X86 *c) {
+     set_eax(c, 1);
+ }
+ 
++static void test_startup_win32(X86 *c) {
++    section("Win32 CRT startup signatures and CPU features");
++    uint32_t cs = scratch_block(24);
++    // The spin-count variant is dynamically resolved by CRT startup. It has a
++    // BOOL result and two stdcall arguments; the call helper verifies ESP.
++    memset(g_mem + cs, 0xa5, 24);
++    call_import(c, "KERNEL32.dll", "SetLastError", {0x13579});
++    check(call_import(c, "KERNEL32.dll", "InitializeCriticalSectionAndSpinCount", {cs, 4000}) == 1,
++          "InitializeCriticalSectionAndSpinCount resolves and returns success");
++    check(rd32(cs + 4) == 0xffffffffu && rd32(cs + 8) == 0 && rd32(cs + 12) == 0,
++          "spin-count initialization creates an unowned, nonrecursive section");
++    check(rd32(cs + 20) == 0, "the single guest processor ignores the spin count");
++    check(call_import(c, "KERNEL32.dll", "GetLastError", {}) == 0x13579,
++          "successful critical-section initialization preserves last error");
++    call_import(c, "KERNEL32.dll", "EnterCriticalSection", {cs});
++    call_import(c, "KERNEL32.dll", "EnterCriticalSection", {cs});
++    check(rd32(cs + 8) == 2, "spin-count sections use the existing recursive scheduler lock");
++    call_import(c, "KERNEL32.dll", "LeaveCriticalSection", {cs});
++    call_import(c, "KERNEL32.dll", "LeaveCriticalSection", {cs});
++    call_import(c, "KERNEL32.dll", "DeleteCriticalSection", {cs});
++    for (uint32_t feature : {0u, 1u, 2u, 3u, 6u, 8u, 9u, 10u, 12u, 13u, 17u, 0xffffffffu}) {
++        check(call_import(c, "KERNEL32.dll", "IsProcessorFeaturePresent", {feature}) ==
++                  (feature == 8 ? 1u : 0u),
++              "processor feature %u matches the guest CPUID contract", feature);
++    }
++    check(call_import(c, "KERNEL32.dll", "GetLastError", {}) == 0x13579,
++          "processor-feature queries preserve last error");
++}
++
+ static void test_scheduling(X86 *c) {
+     section("cooperative scheduling contracts");
+     uint32_t pcode = scratch_block(4);
+@@ -2998,6 +3027,8 @@ static void test_scheduling(X86 *c) {
+     call_import(c, "KERNEL32.dll", "LeaveCriticalSection", {cs});
+     call_import(c, "KERNEL32.dll", "DeleteCriticalSection", {cs});
+ 
++    test_startup_win32(c);
++
+     // --- a contended critical section really blocks -------------------------
+     g_cs_addr = scratch_block(24);
+     g_cs_order_n = 0;
+diff --git a/runtime/x86.h b/runtime/x86.h
+index 4dc8955..d60a757 100644
+--- a/runtime/x86.h
++++ b/runtime/x86.h
+@@ -432,6 +432,7 @@ void recomp_unknown_call(X86 *c, uint32_t target);
+ /* A popped callback sentinel can bypass translated callers. The innermost
+  * guest_call owns the live host return checkpoint and its guest stack range. */
+ void recomp_callback_return(X86 *c);
++void recomp_illegal_instruction(X86 *c, uint32_t address);
+ uint32_t recomp_callback_depth(void);
+ void recomp_callback_truncate(uint32_t depth);
+ void recomp_callback_reset(X86 *c);
+diff --git a/tools/build.py b/tools/build.py
+index 6c3d908..b972cbc 100644
+--- a/tools/build.py
++++ b/tools/build.py
+@@ -408,6 +408,12 @@ def parse_args(argv, system=None):
+     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 2, 8))
+     parser.add_argument("--preset", default=default_preset(system), help="CMake configure preset")
+     parser.add_argument("--config", choices=("Release", "Debug"), default="Release")
++    parser.add_argument("--low-opt-chunks", nargs="*", default=[],
++                        help="Compile only these generated chunk filenames at O1")
++    parser.add_argument("--diagnostic-chunks", nargs="*", default=[],
++                        help="Compile these chunks with backend register allocation, without IR optimization or debug information")
++    parser.add_argument("--diagnostic-all", action="store_true",
++                        help="Use that diagnostic backend for every generated chunk")
+     parser.add_argument("--game-dir", type=Path, default=ROOT / "games/stub",
+                         help="Absolute directory holding the game.toml this build is for (default: the kit's stub game)")
+     parser.add_argument("--stub", action="store_true",
+@@ -452,6 +458,9 @@ def main():
+     preset = preset_name(args.preset, args.config, stub=args.stub, target=args.target)
+     build_dir = build_dir_for(args.build_root, preset)
+     defines = game_defines(args.game_dir, args.build_root)
++    defines.append("-DRECOMP_GEN_LOW_OPT_CHUNKS:STRING=" + ";".join(args.low_opt_chunks))
++    defines.append("-DRECOMP_GEN_DIAGNOSTIC_CHUNKS:STRING=" + ";".join(args.diagnostic_chunks))
++    defines.append("-DRECOMP_GEN_DIAGNOSTIC_ALL:BOOL=" + ("ON" if args.diagnostic_all else "OFF"))
+     try:
+         # The lock lives at <build root>/recomp/.lock: BuildLock joins build/recomp/.lock onto its argument.
+         with buildlock.BuildLock(args.build_root.parent, "tools/build.py"):
+diff --git a/tools/format.py b/tools/format.py
+index 81654b4..7abbd88 100644
+--- a/tools/format.py
++++ b/tools/format.py
+@@ -22,6 +22,8 @@ def main():
+     """Check formatting by default; --write explicitly applies the checked-in style."""
+     parser = argparse.ArgumentParser(description=__doc__)
+     parser.add_argument("--write", action="store_true")
++    parser.add_argument("--path", action="append", default=[], type=Path,
++                        help="Format only these first-party source paths")
+     args = parser.parse_args()
+     binary = Path(sys.executable).parent / "clang-format"
+     if not binary.is_file():
+@@ -29,6 +31,11 @@ def main():
+     if not binary:
+         parser.error("Install requirements-dev.txt in the Python environment running this command")
+     files = source_files()
++    if args.path:
++        allowed = {path.resolve() for path in files}
++        files = [(ROOT / path).resolve() for path in args.path]
++        if any(path not in allowed for path in files):
++            parser.error("--path must select a first-party native source")
+     flags = ["-i"] if args.write else ["--dry-run", "--Werror"]
+     for offset in range(0, len(files), 50):
+         subprocess.run([str(binary), *flags, *map(str, files[offset:offset + 50])],
+diff --git a/tools/recomp/tests/test_translate_driver.py b/tools/recomp/tests/test_translate_driver.py
+index 71465b7..567fee9 100644
+--- a/tools/recomp/tests/test_translate_driver.py
++++ b/tools/recomp/tests/test_translate_driver.py
+@@ -885,7 +885,7 @@ def test_bounded_continuation_recovery_rejects_incomplete_code(code, bound):
+     assert img.recover(entry, set(), bounds=(entry, entry + bound)) == []
+ 
+ 
+-def translate_entry_fixture(tmp_path, monkeypatch, img, listings_at):
++def translate_entry_fixture(tmp_path, monkeypatch, img, listings_at, report=None):
+     """Run discovery over a synthetic PE while preserving real scan order."""
+     listings = tmp_path / "functions"
+     listings.mkdir()
+@@ -913,8 +913,11 @@ def translate_entry_fixture(tmp_path, monkeypatch, img, listings_at):
+     monkeypatch.setattr(T, "FUNCTION_ALIGNMENT", 4)
+     monkeypatch.setattr(T, "EXTRA_ENTRY_POINTS", frozenset())
+     monkeypatch.setattr(T, "Image", lambda path: img)
+-    monkeypatch.setattr(sys, "argv", ["translate.py", "--game", str(tmp_path),
+-                                      "--out", str(out), "--quiet"])
++    arguments = ["translate.py", "--game", str(tmp_path),
++                 "--out", str(out), "--quiet"]
++    if report is not None:
++        arguments.extend(["--report", str(report)])
++    monkeypatch.setattr(sys, "argv", arguments)
+     assert T.main() == 0
+     return "\n".join(p.read_text() for p in out.glob("chunk_*.c"))
+ 
+@@ -1279,8 +1282,16 @@ def test_final_table_gate_still_rejects_an_undecoded_live_site(tmp_path, monkeyp
+     entry, table = 0x00601000, 0x00601900
+     raw = b"\xff\x24\x85" + struct.pack("<I", table)
+     img = synthetic_image({entry: raw, table: b"\0" * 4}, base=0x00600000)
++    report = tmp_path / "translation.json"
+     with pytest.raises(T.TranslateError, match="1 table sites decoded nothing"):
+-        translate_entry_fixture(tmp_path, monkeypatch, img, {entry: raw})
++        translate_entry_fixture(tmp_path, monkeypatch, img, {entry: raw}, report=report)
++    import json
++    blockers = json.loads(report.with_suffix(".blockers.json").read_text())
++    assert blockers["translation_complete"] is False
++    assert blockers["gate"] == "jump_table_coverage"
++    assert blockers["table_sites_undecoded"] == [
++        {"caller": "00601000", "site": "00601000", "base": "00601900"}]
++    assert not report.exists()  # A rejected translation is never a success report.
+ 
+ 
+ @pytest.mark.parametrize("relocated", [False, True])
+diff --git a/tools/recomp/tests/test_translate_seh.py b/tools/recomp/tests/test_translate_seh.py
+index e31c835..7c0fbff 100644
+--- a/tools/recomp/tests/test_translate_seh.py
++++ b/tools/recomp/tests/test_translate_seh.py
+@@ -2,6 +2,7 @@
+ import json
+ import struct
+ import sys
++from types import SimpleNamespace
+ 
+ import pytest
+ 
+@@ -141,6 +142,114 @@ def test_other_teb_writes_do_not_create_checkpoints():
+     assert "recomp_seh_" not in translate_case(case)
+ 
+ 
++def msvc_register_frame(register=0):
++    handler = BASE + 0x100
++    raw = b"\x68" + struct.pack("<I", handler)
++    raw += bytes([0x64, 0x8b, 0x05 + register * 8]) + b"\0" * 4
++    raw += bytes([0x50 + register]) + bytes.fromhex("64892500000000")
++    raw += bytes([0x58 + register])
++    raw += bytes([0x64, 0x89, 0x05 + register * 8]) + b"\0" * 4
++    raw += bytes.fromhex("83c404c3")
++    image = synthetic_image({BASE: raw, handler: b"\xc3"}, base=BASE, size=0x1000)
++    insns = image.recover(BASE, set())
++    fn = T.Function(BASE, "msvc_register_frame", len(raw), insns)
++    fn.measure(image)
++    return image, fn, handler
++
++
++@pytest.mark.parametrize("register", [0, 1, 2, 3, 5, 6, 7])
++def test_msvc_register_chain_head_creates_and_retires_checkpoint(register):
++    image, fn, handler = msvc_register_frame(register)
++    translator = T.Translator(image, {BASE, handler}, SimpleNamespace(eager_flags=False))
++    translator.prepare(fn)
++    assert fn.seh_sites == {3: handler}
++    text = "\n".join(translator.translate(fn))
++    assert "recomp_seh_frame_enter(c)" in text
++    assert "if (setjmp(*b_)) { recomp_seh_land(c); return; }" in text
++    assert "recomp_seh_frame_leave(c)" in text
++
++
++@pytest.mark.parametrize("index", [1, 2, 3])
++def test_msvc_register_chain_head_rejects_partial_alternate_entries(index):
++    image, fn, handler = msvc_register_frame()
++    assert T.seh_frame_sites(fn, image, entries={fn.insns[index].addr}) == {}
++    translator = T.Translator(image, {BASE, handler, fn.insns[index].addr},
++                              SimpleNamespace(eager_flags=False))
++    translator.prepare(fn)
++    assert fn.seh_sites == {}
++
++
++@pytest.mark.parametrize("partial_index", [None, 1, 2, 3])
++def test_msvc_frame_borrows_global_entries_without_iteration(partial_index):
++    image, fn, handler = msvc_register_frame()
++
++    class MembershipOnly:
++        def __init__(self):
++            self.values = set(range(50000))
++            if partial_index is not None:
++                self.values.add(fn.insns[partial_index].addr)
++            self.membership_checks = 0
++
++        def __contains__(self, address):
++            self.membership_checks += 1
++            return address in self.values
++
++        def __iter__(self):
++            raise AssertionError("Global function entries must not be copied or iterated")
++
++    entries = MembershipOnly()
++    sites = T.seh_frame_sites(fn, image, entries)
++    assert sites == ({3: handler} if partial_index is None else {})
++    assert 1 <= entries.membership_checks <= 3
++
++
++@pytest.mark.parametrize("index", [1, 2, 3])
++def test_msvc_register_chain_head_rejects_pushed_partial_continuations(index):
++    image, fn, _ = msvc_register_frame()
++    fn.pushed_continuations = {fn.insns[index].addr}
++    assert T.seh_frame_sites(fn, image) == {}
++
++
++def test_msvc_register_chain_head_rejects_esp_even_when_push_matches():
++    image, fn, _ = msvc_register_frame(4)
++    assert T.seh_frame_sites(fn, image) == {}
++
++
++@pytest.mark.parametrize("index", [1, 2, 3])
++def test_msvc_register_chain_head_rejects_branch_into_partial_pattern(index):
++    image, fn, _ = msvc_register_frame()
++    fn.insns.append(T.Insn(BASE + 0x80, "JMP", None,
++                           ["0x%x" % fn.insns[index].addr], ""))
++    fn.contiguous.append(False)
++    assert T.seh_frame_sites(fn, image) == {}
++
++
++@pytest.mark.parametrize("index", [0, 1, 2])
++def test_msvc_register_chain_head_rejects_listing_gaps(index):
++    image, fn, _ = msvc_register_frame()
++    fn.contiguous[index] = False
++    assert T.seh_frame_sites(fn, image) == {}
++
++
++@pytest.mark.parametrize("index,operands", [
++    (0, ["EAX"]),
++    (1, ["AX", "word ptr FS:[0x0]"]),
++    (1, ["ESP", "dword ptr FS:[0x0]"]),
++    (1, ["EAX", "dword ptr FS:[0x4]"]),
++    (1, ["EAX", "dword ptr [0x0]"]),
++    (1, ["EAX", "dword ptr FS:[ECX]"]),
++    (2, ["ECX"]),
++    (2, ["AX"]),
++    (3, ["word ptr FS:[0x0]", "SP"]),
++    (3, ["dword ptr FS:[0x4]", "ESP"]),
++    (3, ["dword ptr FS:[0x0]", "EAX"]),
++])
++def test_msvc_register_chain_head_rejects_unproven_record(index, operands):
++    image, fn, _ = msvc_register_frame()
++    fn.insns[index].ops = operands
++    assert T.seh_frame_sites(fn, image) == {}
++
++
+ @pytest.mark.parametrize("reg,zeroed,checkpoint", [("EDX", True, True), ("EDX", False, False),
+                                                  ("ESP", True, False)])
+ def test_frame_establishment_through_edx_needs_a_zero_base(reg, zeroed, checkpoint):
+diff --git a/tools/recomp/translate.py b/tools/recomp/translate.py
+index 944f2ca..17c24c3 100644
+--- a/tools/recomp/translate.py
++++ b/tools/recomp/translate.py
+@@ -24,7 +24,8 @@ import re
+ import struct
+ import sys
+ import time
+-from collections import defaultdict
++from collections import defaultdict, namedtuple
++from functools import lru_cache
+ from pathlib import Path
+ from bisect import bisect_right
+ 
+@@ -83,6 +84,7 @@ def configure_module(cfg, key):
+     global EXTRA_ENTRY_POINTS, FUNCTION_ALIGNMENT, SYMBOL_PREFIX, AUX_MODULE
+     global RESUMABLE_STACKS
+     RESUMABLE_STACKS = cfg["translate"].get("resumable_stacks", False)
++    configure_legacy_intrinsics(cfg["translate"].get("legacy_address_intrinsics", True))
+     mods = {m["key"]: m for m in cfg.get("aux_modules", [])}
+     if key not in mods:
+         raise SystemExit("game.toml has no [modules.aux.%s]" % key)
+@@ -130,6 +132,7 @@ def configure(cfg):
+     global EXTRA_ENTRY_POINTS, FUNCTION_ALIGNMENT
+     global RESUMABLE_STACKS
+     RESUMABLE_STACKS = cfg["translate"].get("resumable_stacks", False)
++    configure_legacy_intrinsics(cfg["translate"].get("legacy_address_intrinsics", True))
+     EXTRA_ENTRY_POINTS = frozenset(int(a) for a in cfg["translate"].get("entry_points", ()))
+     FUNCTION_ALIGNMENT = cfg["translate"].get("function_alignment", 16)
+     global OPERAND_REDIRECTS, INSTRUCTION_PATCHES, DATA_SEEDS
+@@ -301,6 +304,16 @@ INTRINSIC_BODY = {
+     INTRINSIC_LONGJMP: "recomp_longjmp(c);",
+     INTRINSIC_SETJMP:  "recomp_setjmp(c);",   # single-call fallback, indirect only
+ }
++LEGACY_INTRINSIC_BODY = dict(INTRINSIC_BODY)
++
++
++def configure_legacy_intrinsics(enabled):
++    """Legacy addresses belong to the original kit game, not every PE image."""
++    if not isinstance(enabled, bool):
++        raise ValueError("legacy_address_intrinsics must be a boolean")
++    INTRINSIC_BODY.clear()
++    if enabled:
++        INTRINSIC_BODY.update(LEGACY_INTRINSIC_BODY)
+ 
+ # --------------------------------------------------------------- registers --
+ 
+@@ -433,6 +446,18 @@ IMM_RE = re.compile(r"^-?0x[0-9a-fA-F]+$|^-?[0-9]+$")
+ #: and data selectors, FS for the TEB.  Read-only here; the game never
+ #: reloads a segment register.
+ SEGMENT_SELECTOR = {"CS": 0x1b, "DS": 0x23, "ES": 0x23, "SS": 0x23, "FS": 0x3b, "GS": 0x00}
++
++
++def instruction_prefixes(image, address):
++    """Original legacy prefixes; address and operand widths are independent."""
++    prefixes = []
++    for offset in range(15):
++        byte = image.rd8(address + offset)
++        if byte not in (0x26, 0x2e, 0x36, 0x3e, 0x64, 0x65, 0x66, 0x67, 0xf0, 0xf2, 0xf3):
++            break
++        prefixes.append(byte)
++    return prefixes
++
+ ST_RE = re.compile(r"^ST([0-7])$")
+ MM_RE = re.compile(r"^MM([0-7])$")
+ 
+@@ -456,12 +481,12 @@ VECTOR_MNEM = frozenset((
+ def is_vector_insn(mnem, ops):
+     """True for an MMX/SSE/SSE2 instruction (see VECTOR_REG_RE).
+ 
+-    EMMS is not one of them here: it names no register and only marks every
++    EMMS/FEMMS are not classified here: they name no register and mark every
+     x87 register empty, which the x87 model can do. Codecs call a lone
+     `emms; ret` helper unconditionally, whatever CPUID said, so trapping it
+     stopped a game that never used MMX arithmetic at all.
+     """
+-    if mnem == "EMMS":
++    if mnem in ("EMMS", "FEMMS"):
+         return False
+     return mnem in VECTOR_MNEM or any(VECTOR_REG_RE.search(o) for o in ops)
+ 
+@@ -668,6 +693,8 @@ def parse_listing_text(text):
+                 raise TranslateError("bad listing line %r" % line)
+             addr = int(m.group(1), 16)
+             mnem = m.group(2)
++            if mnem == "SAL":
++                mnem = "SHL"
+             rep = None
+             if "." in mnem:
+                 mnem, rep = mnem.split(".", 1)
+@@ -708,9 +735,14 @@ for _dst, _src in (("E", "Z"), ("NE", "NZ"), ("NAE", "C"), ("NB", "NC"),
+ 
+ JCC = {"J" + k: v for k, v in COND.items()}
+ JCC["JECXZ"] = ("c->r[1] == 0", ())
++JCC["JCXZ"] = ("(c->r[1] & 0xffffu) == 0u", ())
+ # LOOP decrements ECX and branches while it is not zero; the decrement is
+ # the condition, so it happens whichever way the branch goes.
+ JCC["LOOP"] = ("(c->r[1] = c->r[1] - 1u) != 0u", ())
++JCC["LOOPZ"] = ("((c->r[1] = c->r[1] - 1u) != 0u && c->eflags_zf)", ("zf",))
++JCC["LOOPNZ"] = ("((c->r[1] = c->r[1] - 1u) != 0u && !c->eflags_zf)", ("zf",))
++JCC["LOOPE"] = JCC["LOOPZ"]
++JCC["LOOPNE"] = JCC["LOOPNZ"]
+ SETCC = {"SET" + k: v for k, v in COND.items()}
+ CMOVCC = {"CMOV" + k: v for k, v in COND.items()}
+ 
+@@ -765,6 +797,7 @@ FLAG_EFFECT = {
+     "SAHF": (frozenset(("cf", "pf", "af", "zf", "sf")), NO_FLAGS),
+     "POPFD": (ALL_FLAGS, NO_FLAGS),
+     "PUSHFD": (NO_FLAGS, ALL_FLAGS),
++    "UD2": (NO_FLAGS, ALL_FLAGS),
+     "POPF": (ALL_FLAGS, NO_FLAGS),
+     "PUSHF": (NO_FLAGS, ALL_FLAGS),
+     "SCASB": (ARITH_ALL, NO_FLAGS),
+@@ -818,6 +851,9 @@ def flag_effect(insn):
+ 
+ # ------------------------------------------------------------------- image --
+ 
++RecoveryInstruction = namedtuple("RecoveryInstruction", "address size mnemonic op_str fields error")
++
++
+ class Image(object):
+     def __init__(self, path):
+         import pefile
+@@ -917,8 +953,61 @@ class Image(object):
+         return out
+ 
+     def is_exec(self, va):
++        if hasattr(self, "exec_range_starts"):
++            index = bisect_right(self.exec_range_starts, va) - 1
++            return index >= 0 and va < self.exec_ranges[index][1]
+         return any(lo <= va < hi for lo, hi, _ in self.exec_ranges)
+ 
++    def is_declared_data(self, va):
++        if hasattr(self, "declared_data_starts"):
++            index = bisect_right(self.declared_data_starts, va) - 1
++            return index >= 0 and va < self.declared_data_regions[index][1]
++        return any(lo <= va < hi for lo, hi in getattr(self, "declared_data_regions", ()))
++
++    def _without_declared_data(self, ranges):
++        """Split source ranges around audited file images stored as opaque data."""
++        result = []
++        for lo, hi, name in ranges:
++            spans = [(lo, hi)]
++            for begin, end in getattr(self, "declared_data_regions", ()):
++                next_spans = []
++                for a, b in spans:
++                    if end <= a or b <= begin:
++                        next_spans.append((a, b))
++                    else:
++                        if a < begin:
++                            next_spans.append((a, begin))
++                        if end < b:
++                            next_spans.append((end, b))
++                spans = next_spans
++            result.extend((a, b, name) for a, b in spans)
++        return result
++
++    def declare_data_regions(self, ranges):
++        """Keep embedded file bytes readable without adopting them as this PE's code.
++
++        A loaded DLL has its own mapped base and translation. Its stored file
++        image cannot be decoded at the containing EXE's buffer address.
++        Regions are per-game audited inputs; no game-specific literals live here.
++        """
++        regions = []
++        for region in ranges:
++            if (len(region) != 2 or any(type(v) is not int for v in region)
++                    or not self.base <= region[0] < region[1] <= self.end):
++                raise TranslateError("declared data region must fit inside the image: %r" % (region,))
++            regions.append(tuple(region))
++        merged = []
++        for begin, end in sorted(regions):
++            if merged and begin <= merged[-1][1]:
++                merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
++            else:
++                merged.append((begin, end))
++        self.declared_data_regions = merged
++        self.declared_data_starts = [lo for lo, _ in merged]
++        self.exec_ranges = self._without_declared_data(self.exec_ranges)
++        self.exec_ranges.sort()
++        self.exec_range_starts = [lo for lo, _, _ in self.exec_ranges]
++
+     def seh_landings(self, stub):
+         """Classify a Delphi handler stub by structure, never by its target's name.
+ 
+@@ -1266,12 +1355,23 @@ class Image(object):
+         looks at every byte offset.
+         """
+         starts, interior = set(), set()
+-        skip = list(exclude)
++        # Table ranges overlap, so index their union rather than rescanning
++        # every table for every candidate in the byte-by-byte image scan.
++        skip = []
++        for lo, hi in sorted(exclude):
++            if lo >= hi:
++                continue
++            if skip and lo <= skip[-1][1]:
++                skip[-1] = (skip[-1][0], max(skip[-1][1], hi))
++            else:
++                skip.append((lo, hi))
++        skip_starts = [lo for lo, _ in skip]
+ 
+         def excluded(va):
+-            return any(lo <= va < hi for lo, hi in skip)
++            index = bisect_right(skip_starts, va) - 1
++            return index >= 0 and va < skip[index][1]
+ 
+-        for lo, hi, _ in self.data_ranges + self.exec_ranges:
++        for lo, hi, _ in self._without_declared_data(self.data_ranges + self.exec_ranges):
+             blob = self.data[lo - self.base:hi - self.base]
+             # len(blob) - 3 so the section's final dword is examined too.
+             for off in range(len(blob) - 3):
+@@ -1335,7 +1435,7 @@ class Image(object):
+     REP_PREFIX = {"rep": "REP", "repe": "REPE", "repz": "REPE",
+                   "repne": "REPNE", "repnz": "REPNE"}
+     #: Mnemonics capstone spells differently from the listing grammar.
+-    MNEM_ALIAS = {"POPAL": "POPAD", "PUSHAL": "PUSHAD",
++    MNEM_ALIAS = {"SAL": "SHL", "POPAL": "POPAD", "PUSHAL": "PUSHAD",
+                   "POPFL": "POPFD", "PUSHFL": "PUSHFD",
+                   "CWTL": "CWDE", "CLTD": "CDQ", "CBTW": "CBW",
+                   "IRETD": "IRET"}
+@@ -1381,7 +1481,17 @@ class Image(object):
+             words = words[1:]
+         mnem = words[-1].upper()
+         mnem = self.MNEM_ALIAS.get(mnem, mnem)
+-        ops = [self._op_text(ci, o, mnem) for o in ci.operands]
++        # CsInsn already owns a copy of its detail record. Its lazy public
++        # operands property copies every operand again and extracts all x86
++        # detail fields. Borrow views only while ci is alive, converting them
++        # immediately into our immutable strings. Keep the public fallback
++        # for bindings without this owned detail layout.
++        try:
++            detail = ci._raw.detail.contents.arch.x86
++            operands = detail.operands[:detail.op_count]
++        except AttributeError:
++            operands = ci.operands
++        ops = [self._op_text(ci, o, mnem) for o in operands]
+         if rep or mnem in Translator.STRING_MNEM:
+             ops = []            # implicit ES:EDI / ESI operands carry nothing
+         text = "%08x  %s%s%s" % (ci.address, mnem, "." + rep if rep else "",
+@@ -1400,6 +1510,27 @@ class Image(object):
+     #: 00430ad2 was reaching back 60 KB to 0041fc70.
+     RECOVER_WINDOW = 0x8000
+ 
++    @lru_cache(maxsize=262144)
++    def _decode_recovery_instruction(self, va, data):
++        """Decode immutable image bytes once across overlapping recovery walks.
++
++        Bounds, claimed entries and candidate boundaries remain caller checks.
++        Store immutable fields, not a shared mutable Insn. Include the byte image
++        in the key so replacing a synthetic image cannot reuse stale decoding.
++        The bounded cache limits memory retained during large discovery passes.
++        """
++        got = list(self.md.disasm(data[va - self.base:va - self.base + 16], va, count=1))
++        if not got:
++            return None
++        ci = got[0]
++        try:
++            ins = self.to_insn(ci)
++            fields = (ins.addr, ins.mnem, ins.rep, tuple(ins.ops), ins.raw)
++            error = None
++        except TranslateError as exc:
++            fields, error = None, str(exc)
++        return RecoveryInstruction(ci.address, ci.size, ci.mnemonic, ci.op_str, fields, error)
++
+     def recover(self, start, listed, limit=None, bounds=None, boundaries=(),
+                 may_pass=None):
+         """Decode the block at `start`, following its branches.
+@@ -1432,22 +1563,33 @@ class Image(object):
+         boundary_set = set(boundaries)
+         self.md.detail = True
+         seen = {}
++        # A conditional decoded after XOR-self may later acquire another
++        # incoming edge. Revisit it once with unknown flags rather than
++        # permanently discarding its other path on the first visit.
++        unknown_condition_seen = {}
+         pending = [start]
+         truncated = False
+         while pending and len(seen) < limit:
+             va = pending.pop()
++            previous_zero = False
+             while len(seen) < limit:
+                 claimed = va in listed and not (may_pass is not None and may_pass(va))
+-                if va in seen or claimed or va in boundary_set or not (lo <= va < hi):
++                revisit_condition = (va in seen and not previous_zero
++                                     and unknown_condition_seen.get(va) is False)
++                if (va in seen and not revisit_condition) or claimed or va in boundary_set or not (lo <= va < hi):
+                     break
+-                got = list(self.md.disasm(self.data[va - self.base:va - self.base + 16],
+-                                          va, count=1))
+-                if not got or got[0].address + got[0].size > hi:
++                # Audited non-code bytes are never translated: entry, branch
++                # and fall-through paths all stop here, bounded or not. The
++                # pointer scan and entry loading already refuse these ranges;
++                # recovery must not decode through them either.
++                if self.is_declared_data(va):
++                    break
++                ci = self._decode_recovery_instruction(va, self.data)
++                if ci is None or ci.address + ci.size > hi:
+                     if bounds is not None:
+                         self.md.detail = False
+                         return []
+                     break
+-                ci = got[0]
+                 index = bisect_right(boundaries, va)
+                 if index < len(boundaries) and ci.address + ci.size > boundaries[index]:
+                     break  # Do not consume another candidate's first opcode byte.
+@@ -1456,25 +1598,35 @@ class Image(object):
+                         self.md.detail = False
+                         return []
+                     break
+-                try:
+-                    seen[va] = self.to_insn(ci)
+-                except TranslateError as e:
++                if ci.error is not None:
+                     self.recover_errors.append(
+-                        "%08x: recovery abandoned at %08x: %s" % (start, ci.address, e))
++                        "%08x: recovery abandoned at %08x: %s" % (start, ci.address, ci.error))
+                     self.md.detail = False
+                     return []
++                addr, mnem, rep, ops, raw = ci.fields
++                seen[va] = Insn(addr, mnem, rep, list(ops), raw)
+                 nxt = ci.address + ci.size
++                zero_condition = ci.mnemonic in ("je", "jne") and previous_zero
++                if ci.mnemonic in ("je", "jne"):
++                    unknown_condition_seen[va] = unknown_condition_seen.get(va, False) or not previous_zero
+                 if ci.op_str.startswith("0x") and (
+-                        ci.mnemonic == "jmp" or ci.mnemonic.startswith("j")):
++                        ci.mnemonic == "jmp" or ci.mnemonic.startswith("j")
++                        or ci.mnemonic.startswith("loop")):
+                     t = int(ci.op_str, 16)
+                     if (abs(t - start) <= self.RECOVER_WINDOW and t not in listed
+                             and lo <= t < hi and self.is_exec(t)):
+-                        pending.append(t)
+-                if ci.mnemonic in ("ret", "retn", "jmp"):
++                        if not zero_condition or ci.mnemonic == "je":
++                            pending.append(t)
++                if zero_condition and ci.mnemonic == "je":
++                    break
++                if ci.mnemonic in ("ret", "retn", "jmp", "ud2"):
+                     break
+                 if (ci.mnemonic == "call" and ci.op_str.startswith("0x")
+-                        and int(ci.op_str, 16) in self.noreturn_callees):
++                        and (ci.address in getattr(self, "noreturn_sites", ())
++                             or int(ci.op_str, 16) in self.noreturn_callees)):
+                     break
++                previous_zero = (mnem == "XOR" and len(ops) == 2 and ops[0] == ops[1]
++                                 and ops[0] in REG32 + REG16 + REG8L + REG8H)
+                 va = nxt
+             else:
+                 truncated = True
+@@ -1495,8 +1647,13 @@ class Image(object):
+         """
+         if self.md is None or not (self.base <= va and va + 16 <= self.end):
+             return None
+-        o = va - self.base
+-        got = list(self.md.disasm(self.data[o:o + 16], va, count=2))
++        return self._instruction_end_for_bytes(va, mnem, self.data, self.base)
++
++    @lru_cache(maxsize=262144)
++    def _instruction_end_for_bytes(self, va, mnem, data, base):
++        """Reuse size-only decoding while retaining WAIT and byte-image identity."""
++        o = va - base
++        got = list(self.md.disasm(data[o:o + 16], va, count=2))
+         if not got:
+             return None
+         if (got[0].mnemonic in ("wait", "fwait") and mnem != "WAIT"
+@@ -1520,6 +1677,23 @@ class Image(object):
+ 
+ # -------------------------------------------------------------- translator --
+ 
++class RecoveryStopsWithout(object):
++    """Membership-only difference for one synchronous recovery operation.
++
++    Recovery asks only whether an address is a stop. Materializing the entire
++    ownership set for a handful of excluded continuation instructions costs
++    O(all discovered instructions) for every candidate. Borrow the unchanged
++    stop set instead; snapshot the exclusions so subsequent local mutations
++    cannot change this view. No view is cached across ownership updates.
++    """
++    def __init__(self, stops, excluded):
++        self.stops = stops
++        self.excluded = frozenset(excluded)
++
++    def __contains__(self, address):
++        return address not in self.excluded and address in self.stops
++
++
+ class Function(object):
+     def __init__(self, addr, name, size, insns):
+         self.addr = addr
+@@ -1544,7 +1718,7 @@ class Function(object):
+                 self.contiguous[i] = False
+ 
+ 
+-TERMINATORS = frozenset(("RET", "JMP"))
++TERMINATORS = frozenset(("RET", "JMP", "UD2"))
+ 
+ 
+ def seh_chain_operand(op, zero_base=0):
+@@ -1553,14 +1727,15 @@ def seh_chain_operand(op, zero_base=0):
+             and op.base in (None, zero_base) and op.index is None and op.disp == 0)
+ 
+ 
+-def seh_zero_base(fn, i, reg):
++def seh_zero_base(fn, i, reg, targets=None):
+     """Prove a zero FS base through a short straight-line register-preserving span."""
+     if reg is None:
+         return True
+     if reg == R_ESP:
+         return False
+-    targets = {Translator.branch_target(ins) for ins in fn.insns
+-               if ins.mnem in JCC or ins.mnem == "JMP"}
++    if targets is None:
++        targets = {Translator.branch_target(ins) for ins in fn.insns
++                   if ins.mnem in JCC or ins.mnem == "JMP"}
+     for j in range(i - 1, max(-1, i - 16), -1):
+         if not fn.contiguous[j] or fn.insns[j + 1].addr in targets:
+             return False
+@@ -1579,11 +1754,17 @@ def seh_zero_base(fn, i, reg):
+ def seh_restore_sites(fn):
+     """Recognize unlink-only helpers as well as restores in establishing bodies."""
+     result = set()
++    targets = None
+     for i, ins in enumerate(fn.insns):
+-        if ins.mnem not in ("POP", "MOV") or not ins.ops:
++        if ins.mnem not in ("POP", "MOV") or not ins.ops or "FS:" not in ins.ops[0]:
+             continue
+         dst = parse_operand(ins.ops[0])
+-        if not seh_chain_operand(dst, dst.base) or not seh_zero_base(fn, i, dst.base):
++        if not seh_chain_operand(dst, dst.base):
++            continue
++        if targets is None:
++            targets = {Translator.branch_target(x) for x in fn.insns
++                       if x.mnem in JCC or x.mnem == "JMP"}
++        if not seh_zero_base(fn, i, dst.base, targets):
+             continue
+         if ins.mnem == "POP":
+             result.add(i)
+@@ -1594,9 +1775,10 @@ def seh_restore_sites(fn):
+     return result
+ 
+ 
+-def seh_frame_sites(fn, image=None):
++def seh_frame_sites(fn, image=None, entries=()):
+     """Map establishing MOV/helper CALL indices to their handler addresses."""
+     sites = {}
++    targets = None
+     helper = getattr(image, "seh_constructor_helper", None)
+     if helper is not None:
+         stub = helper(fn.addr)
+@@ -1605,7 +1787,7 @@ def seh_frame_sites(fn, image=None):
+             # through ECX. Keep its checkpoint live until its return, then
+             # let the caller adopt it; never leave setjmp in a dead helper.
+             for i, ins in enumerate(fn.insns):
+-                if ins.mnem == "MOV" and len(ins.ops) == 2:
++                if ins.mnem == "MOV" and len(ins.ops) == 2 and "FS:" in ins.ops[0]:
+                     dst, src = [parse_operand(op) for op in ins.ops]
+                     if (seh_chain_operand(dst, 2) and dst.base == 2
+                             and src.kind == "reg" and src.reg == 1):
+@@ -1624,16 +1806,50 @@ def seh_frame_sites(fn, image=None):
+             stub = helper(target)
+             if stub is not None:
+                 sites[i] = stub
++    # MSVC materializes the previous chain head in a register before pushing
++    # it. All four instructions must belong to one straight-line entry path:
++    # entering after the handler PUSH cannot establish this stack record.
++    # The image-wide entry set has tens of thousands of addresses. Borrow it
++    # for membership instead of copying it for every function/recovery pass.
++    partial_entries = set(getattr(fn, "pushed_continuations", ()))
++    partial_entries.update(Translator.branch_target(ins) for ins in fn.insns
++                           if ins.mnem in JCC or ins.mnem in ("JMP", "CALL"))
++    for i in range(3, len(fn.insns)):
++        handler, load, push, publish = fn.insns[i - 3:i + 1]
++        if (handler.mnem != "PUSH" or load.mnem != "MOV" or push.mnem != "PUSH"
++                or publish.mnem != "MOV" or len(handler.ops) != 1
++                or len(load.ops) != 2 or len(push.ops) != 1 or len(publish.ops) != 2
++                or not all(fn.contiguous[j] for j in range(i - 3, i))
++                or any(ins.addr in entries or ins.addr in partial_entries
++                       for ins in (load, push, publish))):
++            continue
++        try:
++            stub = parse_operand(handler.ops[0])
++            reg, previous = [parse_operand(op) for op in load.ops]
++            saved = parse_operand(push.ops[0])
++            head, stack = [parse_operand(op) for op in publish.ops]
++            if (stub.kind == "imm" and reg.kind == saved.kind == "reg"
++                    and reg.size == saved.size == 32 and reg.reg == saved.reg
++                    and reg.reg != R_ESP and previous.size == head.size == 32
++                    and seh_chain_operand(previous) and seh_chain_operand(head)
++                    and stack.kind == "reg" and stack.size == 32 and stack.reg == R_ESP):
++                sites[i] = stub.imm
++        except TranslateError:
++            continue
+     for i in range(2, len(fn.insns)):
+         mov, push = fn.insns[i], fn.insns[i - 1]
+-        if mov.mnem != "MOV" or push.mnem != "PUSH" or len(mov.ops) != 2:
++        if (mov.mnem != "MOV" or push.mnem != "PUSH" or len(mov.ops) != 2
++                or "FS:" not in mov.ops[0]):
+             continue
+         try:
+             dst, src = [parse_operand(o) for o in mov.ops]
+             # The same frame idiom can zero another register before its
+             # three PUSHes. Prove that spelling locally; an arbitrary FS
+             # register operand can address a different TEB field.
+-            zero_base = dst.base if seh_zero_base(fn, i, dst.base) else 0
++            if targets is None:
++                targets = {Translator.branch_target(x) for x in fn.insns
++                           if x.mnem in JCC or x.mnem == "JMP"}
++            zero_base = dst.base if seh_zero_base(fn, i, dst.base, targets) else 0
+             if (not seh_chain_operand(dst, zero_base) or src.kind != "reg" or src.reg != 4
+                     or src.size != 32 or not seh_chain_operand(parse_operand(push.ops[0]), zero_base)
+                     or not fn.contiguous[i - 1]):
+@@ -1734,6 +1950,9 @@ class Translator(object):
+         #: A CALL to one ends its block: the emitter leaves a trap in place of
+         #: the fall-through instead of a jump onto the padding that follows.
+         self.noreturn_callees = set()
++        # Audited call sites that transfer to a dispatcher and cannot execute
++        # their inline metadata as a normal native CALL continuation.
++        self.noreturn_sites = set(getattr(image, "noreturn_sites", ()))
+         self.seh_helpers = set()
+         #: Does a pointer to this address name data rather than code? The
+         #: driver installs its judgement before the first translation pass
+@@ -1796,7 +2015,7 @@ class Translator(object):
+         if ins.mnem != "CALL":
+             return False
+         t = self.branch_target(ins)
+-        return t is not None and t in self.noreturn_callees
++        return ins.addr in self.noreturn_sites or (t is not None and t in self.noreturn_callees)
+ 
+     @staticmethod
+     def closed_noreturn_loop(fn):
+@@ -1956,7 +2175,9 @@ class Translator(object):
+                 result.add(ops[0].reg)
+             adjustment = None
+             if m in ("PUSH", "POP"):
+-                adjustment = operand_size(ops, hint=32) // 8 * (-1 if m == "PUSH" else 1)
++                width = ((16 if 0x66 in instruction_prefixes(self.image, ins.addr) else 32)
++                         if ops[0].kind == "sreg" else operand_size(ops, hint=32))
++                adjustment = width // 8 * (-1 if m == "PUSH" else 1)
+             elif m in ("PUSHAD", "PUSHFD", "PUSHF", "POPFD", "POPF"):
+                 adjustment = {"PUSHAD": -32, "PUSHFD": -4, "PUSHF": -2,
+                               "POPFD": 4, "POPF": 2}[m]
+@@ -2011,6 +2232,8 @@ class Translator(object):
+         if t is not None and t not in fn.pushed_continuations:
+             return [fn.index[t]] if t in fn.index else []
+         nxt = i + 1 if (i + 1 < len(fn.insns) and fn.contiguous[i]) else None
++        if m == "UD2":
++            return [] # continuation is supplied by the exception's CONTEXT
+         if m == "INT3":
+             # MSVC pads between functions with INT3, and a listing cut at a
+             # call that never returns runs that padding into the next
+@@ -2021,6 +2244,11 @@ class Translator(object):
+         if m == "RET":
+             return [fn.index[t] for t in sorted(fn.pushed_continuations)]
+         if m in JCC:
++            if i in getattr(fn, "proven_zero_branches", ()):
++                t = self.branch_target(ins)
++                if fn.proven_zero_branches[i]:
++                    return [fn.index[t]] if t in fn.index else []
++                return [nxt] if nxt is not None else []
+             out = [nxt] if nxt is not None else []
+             t = self.branch_target(ins)
+             if t is not None and t in fn.index:
+@@ -2072,10 +2300,6 @@ class Translator(object):
+         """Indices control flow reaches from `roots` and the pushed
+         continuations; every index if the body has a computed jump that is
+         not POP reg; JMP reg. A call that never returns ends a path."""
+-        if any(ins.mnem == "JMP" and self.branch_target(ins) is None
+-               and not self.jumptables.get((fn.addr, ins.addr))
+-               and not self.popped_jump(fn, i) for i, ins in enumerate(fn.insns)):
+-            return set(range(len(fn.insns)))
+         roots = set(roots) | set(fn.pushed_continuations)
+         work = [fn.index[a] for a in roots if a in fn.index]
+         live = set()
+@@ -2086,18 +2310,123 @@ class Translator(object):
+             live.add(i)
+             if self.never_returns(fn.insns[i]):
+                 continue
++            if fn.insns[i].mnem == "JMP" and self.branch_target(fn.insns[i]) is None:
++                fixed = getattr(fn, "proven_fixed_jumps", {})
++                if i in fixed:
++                    if fixed[i] in fn.index:
++                        work.append(fn.index[fixed[i]])
++                    continue
++                if (not self.jumptables.get((fn.addr, fn.insns[i].addr))
++                        and not self.popped_jump(fn, i)):
++                    return set(range(len(fn.insns)))
+             if self.popped_jump(fn, i):
+                 work.extend(fn.index[t] for t in fn.pushed_continuations)
+                 continue
+-            if fn.insns[i].mnem not in TERMINATORS and not fn.contiguous[i]:
++            if (fn.insns[i].mnem not in TERMINATORS and fn.insns[i].mnem != "INT3"
++                    and not fn.contiguous[i]
++                    and getattr(fn, "proven_zero_branches", {}).get(i) is not True):
+                 # A listing gap: emission jumps to the fall-through address.
++                # A conditional branch still has its taken successor too.
+                 t = fn.fallthrough[i]
+                 if t in fn.index:
+                     work.append(fn.index[t])
+-                continue
+             work.extend(j for j in self.successors(fn, i) if j is not None)
+         return live
+ 
++    def constant_zero_branches(self, fn, roots):
++        """Prove adjacent original XOR reg,reg / JE or JNE single-entry branches.
++
++        Keep every independently callable branch conditional. Unknown computed
++        jumps can enter any instruction, so disable this proof for such bodies.
++        No flags or guest writes of the original XOR are removed.
++        """
++        protected = set(roots) | set(fn.pushed_continuations)
++        for ins in fn.insns:
++            if ins.mnem in JCC or ins.mnem in ("JMP", "CALL", "PUSH"):
++                t = self.branch_target(ins)
++                if t is not None:
++                    protected.add(t)
++            protected.update(self.jumptables.get((fn.addr, ins.addr), ()))
++        decoder = getattr(self.image, "md", None)
++        if decoder is None:
++            return {}
++        fn.proven_fixed_jumps = self.fixed_register_jumps(fn, protected)
++        protected.update(fn.proven_fixed_jumps.values())
++        proven = {}
++        for i in range(1, len(fn.insns)):
++            xor, branch = fn.insns[i - 1], fn.insns[i]
++            if (xor.mnem != "XOR" or branch.mnem not in ("JE", "JZ", "JNE", "JNZ")
++                    or branch.addr in protected or not fn.contiguous[i - 1]
++                    or len(xor.ops) != 2 or xor.ops[0] != xor.ops[1]
++                    or xor.ops[0] not in REG32 + REG16 + REG8L + REG8H):
++                continue
++            offset = xor.addr - self.image.base
++            decoded = list(decoder.disasm(self.image.data[offset:offset + 30], xor.addr, count=2))
++            if len(decoded) != 2:
++                continue
++            x, j = decoded
++            if (x.mnemonic != "xor" or x.op_str.upper().replace(" ", "").split(",") != xor.ops
++                    or x.address + x.size != branch.addr or j.address != branch.addr
++                    or j.mnemonic != ("je" if branch.mnem in ("JE", "JZ") else "jne")):
++                continue
++            try:
++                target = int(j.op_str, 0)
++            except ValueError:
++                continue
++            if target == self.branch_target(branch):
++                proven[i] = branch.mnem in ("JE", "JZ")
++        # A reachable unknown computed jump could bypass the XOR and enter
++        # its conditional directly. Reject the whole proof in that case.
++        previous = getattr(fn, "proven_zero_branches", {})
++        fn.proven_zero_branches = proven
++        live = self.reached(fn, roots)
++        fn.proven_zero_branches = previous
++        if any(i in live and ins.mnem == "JMP" and self.branch_target(ins) is None
++               and i not in fn.proven_fixed_jumps
++               and not self.jumptables.get((fn.addr, ins.addr))
++               and not self.popped_jump(fn, i) for i, ins in enumerate(fn.insns)):
++            return {}
++        return proven
++
++    def fixed_register_jumps(self, fn, protected):
++        """Original MOV r32,imm / NOP* / JMP r32 with no intervening entry.
++
++        This is an analysis fact only: emission retains the original register
++        writes and indirect jump. Never infer an arbitrary table or selector.
++        """
++        fixed = {}
++        for i, jump in enumerate(fn.insns):
++            if jump.mnem != "JMP" or len(jump.ops) != 1 or jump.ops[0] not in REG32:
++                continue
++            for j in range(i - 1, max(-1, i - 16), -1):
++                if not fn.contiguous[j] or fn.insns[j + 1].addr in protected:
++                    break
++                setter = fn.insns[j]
++                at = setter.addr - self.image.base
++                decoded = list(self.image.md.disasm(self.image.data[at:at + 15], setter.addr, count=1))
++                if not decoded:
++                    break
++                original = decoded[0]
++                if setter.mnem == "NOP" and original.mnemonic == "nop":
++                    continue
++                if (setter.mnem != "MOV" or len(setter.ops) != 2
++                        or setter.ops[0] != jump.ops[0] or original.mnemonic != "mov"):
++                    break
++                try:
++                    reg, value = original.op_str.upper().replace(" ", "").split(",")
++                    target = int(value, 0) & 0xffffffff
++                    if reg != jump.ops[0] or target != (parse_imm(setter.ops[1]) & 0xffffffff):
++                        break
++                except (ValueError, TranslateError):
++                    break
++                at = jump.addr - self.image.base
++                decoded_jump = list(self.image.md.disasm(self.image.data[at:at + 15], jump.addr, count=1))
++                if (decoded_jump and decoded_jump[0].mnemonic == "jmp"
++                        and decoded_jump[0].op_str.upper() == jump.ops[0]):
++                    fixed[i] = target
++                break
++        return fixed
++
+     @staticmethod
+     def branch_target(ins):
+         if ins.ops and ins.ops[0].startswith("0x"):
+@@ -2547,9 +2876,11 @@ class Translator(object):
+ 
+     @staticmethod
+     def writes_reg32(ins, reg):
++        if ins.mnem == "ENTER":
++            return reg in (R_ESP, R_EBP)
+         if not ins.ops:
+             return False
+-        if ins.mnem == "LOOP":
++        if ins.mnem.startswith("LOOP"):
+             return reg == 1                # ECX
+         if ins.mnem in ("CMP", "TEST", "PUSH", "JMP") or ins.mnem in JCC:
+             return False
+@@ -2571,8 +2902,10 @@ class Translator(object):
+         is strict and a target that is still not an instruction boundary is an
+         error."""
+         fn.index = {ins.addr: k for k, ins in enumerate(fn.insns)}
++        fn.proven_zero_branches = {}
++        fn.proven_fixed_jumps = {}
+         fn.pushed_continuations = self.live_continuations(fn)
+-        fn.seh_sites = seh_frame_sites(fn, self.image)
++        fn.seh_sites = seh_frame_sites(fn, self.image, self.func_addrs)
+         fn.seh_restores = seh_restore_sites(fn)
+         self.strict = strict
+         for i, ins in enumerate(fn.insns):
+@@ -2595,6 +2928,8 @@ class Translator(object):
+         preceded by a dispatch switch, and every entry is a three-line wrapper,
+         so no code is duplicated."""
+         entries = sorted(set(entries))
++        fn.proven_zero_branches = {}
++        fn.proven_fixed_jumps = {}
+         # An alternate entry must be an instruction in THIS body.  A block can
+         # be re-recovered between the discovery rounds and the final pass -
+         # recursive descent makes them grow - so an entry registered against
+@@ -2612,9 +2947,29 @@ class Translator(object):
+             live_out = [ALL_FLAGS] * len(fn.insns)
+         else:
+             live_out = self.liveness(fn)
++        # Compare against the ordinary conservative CFG, dropping only paths
++        # made impossible by an original-byte, single-entry XOR/JE proof.
++        roots = {fn.addr} | set(entries) | (set(fn.index) & self.func_addrs)
++        roots.update(t for ins in fn.insns if ins.mnem == "CALL"
++                     and (t := self.branch_target(ins)) in fn.index)
++        fn.proven_zero_branches = {}
++        proven = self.constant_zero_branches(fn, roots)
++        # Establish original fixed-register destinations before deciding
++        # whether a computed jump can enter a nonreturning CALL's metadata.
++        # Independently dispatched alternate entries remain roots; raw
++        # pointer candidates may instead name literals excluded by the driver.
+         dead = self.dead_after_noreturn(fn, entries)
++        noreturn_dead = {fn.insns[i].addr for i in dead}
++        if proven:
++            baseline_live = self.reached(fn, roots)
++            fn.proven_zero_branches = proven
++            optimized_live = self.reached(fn, roots)
++            removed = baseline_live - optimized_live
++            dead.update(removed)
++            self.stats["_constant_zero_branches"] += len(proven)
++            self.stats["_constant_zero_dead_insns"] += len(removed)
+         fn.dead_addrs = {fn.insns[i].addr for i in dead}
+-        self.dead_after_noreturn_addrs.update(fn.dead_addrs)
++        self.dead_after_noreturn_addrs.update(noreturn_dead)
+ 
+         labels = set(fn.pushed_continuations)
+         # RTL fill/move routines compute addresses within unrolled code rather
+@@ -2637,12 +2992,13 @@ class Translator(object):
+                     labels.add(t)
+             # A listing gap or an end-of-block fall-through emits a transfer
+             # too, and its target needs a label just as much as a branch's.
+-            if ins.mnem not in TERMINATORS and not fn.contiguous[i]:
++            if (ins.mnem not in TERMINATORS and not fn.contiguous[i]
++                    and fn.proven_zero_branches.get(i) is not True):
+                 t = fn.fallthrough[i]
+                 if t in fn.index:
+                     labels.add(t)
+         last = max(i for i in range(len(fn.insns)) if i not in dead)
+-        if fn.insns[last].mnem not in TERMINATORS:
++        if fn.insns[last].mnem not in TERMINATORS and fn.proven_zero_branches.get(last) is not True:
+             t = fn.fallthrough[last] or fn.end
+             if t in fn.index:
+                 labels.add(t)
+@@ -2693,7 +3049,8 @@ class Translator(object):
+             # functions: the byte after it belongs to whatever comes next, so
+             # this body ends here rather than falling through into it.
+             if (not fn.contiguous[i] and ins.mnem not in TERMINATORS
+-                    and ins.mnem != "INT3" and not self.never_returns(ins)):
++                    and ins.mnem != "INT3" and not self.never_returns(ins)
++                    and fn.proven_zero_branches.get(i) is not True):
+                 t = fn.fallthrough[i]
+                 self.stats["_listing_gap"] += 1
+                 self.notes.append(
+@@ -2705,7 +3062,7 @@ class Translator(object):
+         last_i = max(i for i in range(len(fn.insns)) if i not in dead)
+         last = fn.insns[last_i]
+         if (last.mnem not in TERMINATORS and last.mnem != "INT3"
+-                and not self.never_returns(last)):
++                and not self.never_returns(last) and fn.proven_zero_branches.get(last_i) is not True):
+             t = fn.fallthrough[last_i] or fn.end
+             self.stats["_fallthrough_exit"] += 1
+             out.append("    " + " ".join(self.goto_target(fn, t, last)))
+@@ -2833,9 +3190,34 @@ class Translator(object):
+             # Ghidra prints the implicit ES:EDI / ESI operands; they carry no
+             # information the mnemonic does not already imply.
+             return self.emit_string(ins, m)
+-        ops = [parse_operand(o) for o in ins.ops] if ins.ops else []
++        operands = ins.ops
++        if m in JCC and len(operands) == 2 and operands[1] in ("bn", "bt"):
++            # Ghidra spells 2E/3E conditional-branch prediction hints as a
++            # second operand. They do not change the condition or destination.
++            # Only accept the annotation when the original bytes confirm it.
++            expected_prefix = 0x2e if operands[1] == "bn" else 0x3e
++            previous_detail = self.image.md.detail
++            self.image.md.detail = True
++            try:
++                decoded = self.image._decode_recovery_instruction(ins.addr, self.image.data)
++            finally:
++                self.image.md.detail = previous_detail
++            if (self.image.rd8(ins.addr) != expected_prefix or decoded is None
++                    or decoded.error is not None or decoded.fields[1] not in JCC
++                    or JCC[decoded.fields[1]] != JCC[m]
++                    or len(decoded.fields[3]) != 1
++                    or parse_imm(decoded.fields[3][0]) != parse_imm(operands[0])):
++                raise TranslateError("unverified branch prediction annotation")
++            operands = operands[:1]
++        ops = [parse_operand(o) for o in operands] if operands else []
+         L = []
+ 
++        if m == "UD2":
++            if not RESUMABLE_STACKS:
++                raise TranslateError("UD2 fault continuation requires resumable stacks")
++            return ["c->eip = %s; recomp_illegal_instruction(c, %s); return;"
++                    % (hexlit(ins.addr), hexlit(ins.addr))]
++
+         # ---------------------------------------------------------- data --
+         if m == "MOV":
+             size = operand_size(ops)
+@@ -2924,7 +3306,7 @@ class Translator(object):
+             return L
+ 
+         if m == "PUSH":
+-            size = operand_size(ops, hint=32)
++            size = (16 if 0x66 in instruction_prefixes(self.image, ins.addr) else 32) if ops[0].kind == "sreg" else operand_size(ops, hint=32)
+             if size == 16:
+                 L.append("uint32_t v_ = %s;" % read_op(ops[0], 16))
+                 L.append("c->r[4] -= 2; wr16(c->r[4], (uint16_t)v_);")
+@@ -2942,6 +3324,20 @@ class Translator(object):
+             return L
+ 
+         if m == "POP":
++            if ops[0].kind == "sreg":
++                if ins.ops[0] == "CS":
++                    raise TranslateError("POP CS is not a valid 32-bit opcode")
++                # The runtime exposes fixed, flat Win32 selectors. Reloading
++                # that same descriptor is supported; changing descriptors
++                # needs a segmented-memory model and must stop explicitly.
++                # SS's debug/interrupt shadow is not modeled: never accept
++                # single-step mode as if that shadow had been implemented.
++                size = 16 if 0x66 in instruction_prefixes(self.image, ins.addr) else 32
++                unsupported = "rd16(c->r[4]) != %s" % hexlit(ops[0].imm)
++                if ins.ops[0] == "SS":
++                    unsupported += " || (c->eflags_misc & 0x100u)"
++                return ["if (%s) { recomp_unmodelled(c, %s); return; }" % (unsupported, hexlit(ins.addr)),
++                        "c->r[4] += %du;" % (size // 8)]
+             size = operand_size(ops, hint=32)
+             if size == 16:
+                 L.append("uint32_t v_ = rd16(c->r[4]); c->r[4] += 2;")
+@@ -2955,12 +3351,36 @@ class Translator(object):
+                 L.append("c->eip = %s; recomp_seh_frame_leave(c);" % hexlit(ins.addr))
+             return L
+ 
++        if m == "ENTER":
++            if len(ops) != 2 or any(op.kind != "imm" for op in ops):
++                raise TranslateError("ENTER requires two immediate operands")
++            if 0x66 in instruction_prefixes(self.image, ins.addr):
++                raise TranslateError("16-bit ENTER requires a separately verified stack model")
++            width, step = 32, 4
++            allocation, nesting = ops[0].imm & 0xffff, ops[1].imm & 31
++            # SS is a 32-bit stack segment in the flat Win32 context.  The
++            # address-size prefix does not change the stack segment width.
++            L.append("c->r[4] -= %du; wr%d(c->r[4], (uint%d_t)c->r[5]);" % (step, width, width))
++            L.append("uint32_t frame_ = c->r[4];")
++            if nesting > 1:
++                L.append("for (unsigned level_ = 1; level_ < %du; ++level_) {" % nesting)
++                L.append("    c->r[5] -= %du;" % step)
++                L.append("    uint32_t frame_value_ = rd%d(c->r[5]);" % width)
++                L.append("    c->r[4] -= %du; wr%d(c->r[4], (uint%d_t)frame_value_);" % (step, width, width))
++                L.append("}")
++            if nesting:
++                L.append("c->r[4] -= %du; wr%d(c->r[4], (uint%d_t)frame_);" % (step, width, width))
++            L.append("c->r[5] = frame_;")
++            L.append("c->r[4] -= %du;" % allocation)
++            return L
++
+         if m == "PUSHAD":
+             return ["x86_pushad(c);"]
+         if m == "POPAD":
+             return ["x86_popad(c);"]
+         if m == "PUSHFD":
+-            return ["c->r[4] -= 4; wr32(c->r[4], x86_get_eflags(c));"]
++            return ["c->r[4] -= 4; wr32(c->r[4], x86_get_eflags(c) & ~0x30000u);",
++                    "c->eflags_misc &= ~0x10000u;"]
+         if m == "POPFD":
+             return ["x86_set_eflags(c, rd32(c->r[4])); c->r[4] += 4;"]
+         if m == "PUSHF":
+@@ -3163,6 +3583,19 @@ class Translator(object):
+         # ---------------------------------------------------- control flow --
+         if m in JCC:
+             cond = JCC[m][0]
++            if i in getattr(fn, "proven_zero_branches", ()):
++                return self.goto_target(fn, self.branch_target(ins), ins) if fn.proven_zero_branches[i] else [";"]
++            if m.startswith("LOOP"):
++                # Address size, not operand size, selects CX versus ECX.
++                # Preserve ECX's upper half when a 67h prefix selects CX.
++                prefixes = instruction_prefixes(self.image, ins.addr)
++                if 0x67 in prefixes:
++                    decrement = "(c->r[1] = (c->r[1] & 0xffff0000u) | ((c->r[1] - 1u) & 0xffffu))"
++                    cond = "(%s & 0xffffu) != 0u" % decrement
++                    if m in ("LOOPZ", "LOOPE"):
++                        cond = "(%s && c->eflags_zf)" % cond
++                    elif m in ("LOOPNZ", "LOOPNE"):
++                        cond = "(%s && !c->eflags_zf)" % cond
+             t = self.branch_target(ins)
+             if t is None:
+                 raise TranslateError("indirect conditional jump")
+@@ -3178,7 +3611,7 @@ class Translator(object):
+             if ins.ops and ins.ops[0].startswith("0x"):
+                 t = int(ins.ops[0], 16)
+                 L.append("c->r[4] -= 4; wr32(c->r[4], %s);" % hexlit(nxt))
+-                if t == INTRINSIC_SETJMP:
++                if t == INTRINSIC_SETJMP and t in INTRINSIC_BODY:
+                     # The host jmp_buf has to belong to a frame that is still
+                     # live when _longjmp fires, so setjmp is taken here rather
+                     # than inside the runtime (runtime/intrinsics.h).
+@@ -3201,12 +3634,15 @@ class Translator(object):
+                     L.append("c->eip = %s;" % hexlit(ins.addr))
+                     L.append("{ jmp_buf *b_ = recomp_seh_frame_adopt(c); "
+                              "if (b_) { if (setjmp(*b_)) { recomp_seh_land(c); return; } } }")
+-                if t in self.noreturn_callees:
++                if self.never_returns(ins):
+                     # The callee throws or exits; what follows is padding and
+                     # tables, never code.  Reaching this line means it came
+                     # back after all, which the runtime then reports by address.
+                     self.stats["_noreturn_trap"] += 1
+-                    L.append("recomp_unknown_call(c, %s); return;" % hexlit(nxt))
++                    if ins.addr in self.noreturn_sites:
++                        L.append("recomp_unmodelled(c, %s); return;" % hexlit(nxt))
++                    else:
++                        L.append("recomp_unknown_call(c, %s); return;" % hexlit(nxt))
+                 return L
+             L.append("uint32_t t_ = %s;" % read_op(ops[0], 32))
+             L.append("c->r[4] -= 4; wr32(c->r[4], %s);" % hexlit(nxt))
+@@ -3439,9 +3875,11 @@ class Translator(object):
+         if m == "HLT":
+             return ["recomp_hlt(c);"]
+         if m == "INT":
++            if parse_imm(ins.ops[0]) == 3:
++                return ["recomp_breakpoint(c, %s); return;" % hexlit(ins.addr)]
+             return ["recomp_int(c, %s);" % hexlit(parse_imm(ins.ops[0]))]
+         if m == "INT3":
+-            return ["recomp_int(c, 3u);"]
++            return ["recomp_breakpoint(c, %s); return;" % hexlit(ins.addr)]
+         if m == "IN":
+             size = operand_size(ops[:1], hint=32)
+             port = read_op(ops[1], 32) if len(ops) > 1 else "0u"
+@@ -3454,9 +3892,10 @@ class Translator(object):
+             return L
+         if m in ("NOP", "WAIT", "PAUSE"):
+             return [";"]
+-        if m == "EMMS":
++        if m in ("EMMS", "FEMMS"):
+             # Every x87 register empty; TOP and the values are left alone.
+-            # Codecs call a bare `emms; ret` whatever CPUID said.
++            # FEMMS has the same defined tag/flag effects (AMD APM vol. 5).
++            # Its old MMX register contents are architecturally undefined.
+             return ["c->fpu_tag = 0xffffu;"]
+         if m == "STMXCSR":
+             # No translated SSE arithmetic changes MXCSR, so expose its reset value.
+@@ -3497,7 +3936,7 @@ class Translator(object):
+             return  # a translator built without bytes, as the unit tests are
+         if self.image.base <= t < self.image.end:
+             return
+-        if GUEST_SHIM_BASE <= t < GUEST_SHIM_END or t == INTRINSIC_SETJMP:
++        if GUEST_SHIM_BASE <= t < GUEST_SHIM_END or t in INTRINSIC_BODY:
+             return
+         raise TranslateError("call to %08x, which is outside the image" % t)
+ 
+@@ -3962,19 +4401,22 @@ def retarget_withdrawn(body, pruned):
+     if not pruned:
+         return body
+     out = []
+-    for line in body:
+-        def call(m):
+-            target = int(m.group(1), 16)
+-            if target not in pruned:
+-                return m.group(0)
+-            return "recomp_unknown_call(c, 0x%08xu); return;" % target
+ 
+-        def jump(m):
+-            target = int(m.group(1), 16)
+-            if target not in pruned:
+-                return m.group(0)
+-            return "recomp_unknown_call(c, 0x%08xu); return;" % target
+-        out.append(WITHDRAWN_JUMP_RE.sub(jump, WITHDRAWN_CALL_RE.sub(call, line)))
++    def transfer(m):
++        target = int(m.group(1), 16)
++        if target not in pruned:
++            return m.group(0)
++        return "recomp_unknown_call(c, 0x%08xu); return;" % target
++
++    for line in body:
++        # Most emitted lines are arithmetic, memory operations or comments.
++        # Each regex requires its literal prefix: skip the scan when absent,
++        # retaining the same call-then-jump rewrite order when both occur.
++        if "CALL_FN(" in line:
++            line = WITHDRAWN_CALL_RE.sub(transfer, line)
++        if "recomp_jump(" in line:
++            line = WITHDRAWN_JUMP_RE.sub(transfer, line)
++        out.append(line)
+     return out
+ 
+ 
+@@ -4045,6 +4487,21 @@ def main():
+         AUX_MODULE = {"name": args.as_module, "base": cfg["game"]["image_base"],
+                       "size": 0}  # the image's extent, filled in once it is read
+     image = Image(BINARY)
++    if not args.module:
++        inputs = cfg.get("translate", {})
++        regions = list(inputs.get("data_regions", ()))
++        if inputs.get("data_regions_file"):
++            regions.extend(json.loads((Path(cfg["dir"]) / inputs["data_regions_file"]).read_text()))
++        image.declare_data_regions(regions)
++        image.noreturn_sites = frozenset()
++        if inputs.get("no_fallthrough_calls_file"):
++            sites = json.loads((Path(cfg["dir"]) / inputs["no_fallthrough_calls_file"]).read_text())
++            if not RESUMABLE_STACKS or not isinstance(sites, list):
++                raise TranslateError("call-site contracts require resumable_stacks and an address list")
++            for site in sites:
++                if type(site) is not int or not image.is_exec(site) or image.rd8(site) != 0xe8:
++                    raise TranslateError("call-site contract is not a direct CALL in code: %r" % site)
++            image.noreturn_sites = frozenset(sites)
+     discovered = []
+     if args.discovered:
+         global EXTRA_ENTRY_POINTS
+@@ -4072,11 +4529,17 @@ def main():
+ 
+     t0 = time.time()
+     entries = load_functions(set(args.only) if args.only else None)
++    skipped_data_entries = sum(image.is_declared_data(e[0]) for e in entries)
++    entries = [e for e in entries if not image.is_declared_data(e[0])]
++    if skipped_data_entries:
++        print("Excluded %d listings inside audited embedded file data" % skipped_data_entries, flush=True)
+     all_addrs = set()
+     listed_starts = []
+     with open(FUNCS_TSV) as fh:
+         for l in list(fh)[1:]:
+             a = int(l.split("\t")[0], 16)
++            if image.is_declared_data(a):
++                continue
+             listed_starts.append(a)
+             p = os.path.join(LISTINGS, "%08x.asm" % a)
+             if os.path.exists(p) and os.path.getsize(p) > 0:
+@@ -4102,6 +4565,7 @@ def main():
+     for addr, name, nbytes, path in entries:
+         try:
+             insns = parse_listing(path)
++            insns = [i for i in insns if not image.is_declared_data(i.addr)]
+         except TranslateError as e:
+             failures.append((addr, "parse: %s" % e))
+             continue
+@@ -4488,7 +4952,7 @@ def main():
+             return True
+         bounds = None
+         boundaries = set()
+-        recovery_stops = listed - prior.addrs if separate else listed
++        recovery_stops = RecoveryStopsWithout(listed, prior.addrs) if separate else listed
+         if protected and why == "config":
+             # A configured entry states that this address IS a function, but
+             # recovery still needs a ceiling. Unbounded, it runs past the body
+@@ -4543,7 +5007,7 @@ def main():
+                     owned.update(ins.addr for ins in block)
+                     fragments.update((ins.addr, ins) for ins in block)
+             if owned:
+-                recovery_stops = set(recovery_stops) - owned
++                recovery_stops = RecoveryStopsWithout(recovery_stops, owned)
+             lo_index, hi_index = bisect_right(candidate_starts, t), bisect_right(candidate_starts, bounds[1])
+             boundaries = {a for a in candidate_starts[lo_index:hi_index]
+                           if a not in owned and a not in finally_owners}
+@@ -4853,6 +5317,9 @@ def main():
+     seh_stubs = set()
+     converged = False
+     for _round in range(64):
++        if not args.quiet:
++            print("Discovery round %d: %d functions, %d recovered blocks" %
++                  (_round + 1, len(parsed), len(recovered)), flush=True)
+         tr.func_addrs = all_addrs
+         tr.all_insn_addrs = set(owner)
+         tr.jumptables.clear()
+@@ -5276,12 +5743,40 @@ def main():
+     # after mismatched returns have unwound the native call stack.
+     if RESUMABLE_STACKS:
+         starts = {f.addr for f in parsed}
+-        for fn in parsed:
++        existing_entries = defaultdict(set)
++        for t, home in extra.items():
++            existing_entries[home.addr].add(t)
++        work = list(parsed)
++        queued = {fn.addr for fn in work}
++        while work:
++            fn = work.pop()
++            queued.discard(fn.addr)
++            fn.index = {ins.addr: i for i, ins in enumerate(fn.insns)}
++            fn.pushed_continuations = tr.live_continuations(fn)
++            roots = {fn.addr} | existing_entries[fn.addr] | (set(fn.index) & all_addrs)
++            fn.proven_zero_branches = tr.constant_zero_branches(fn, roots)
++            live = tr.reached(fn, roots)
++            fn.proven_zero_branches = {}
++            fn.proven_fixed_jumps = {}
+             for i, ins in enumerate(fn.insns):
+-                if ins.mnem == "CALL" and not tr.never_returns(ins):
+-                    nxt = fn.fallthrough[i]
+-                    if nxt in owner and nxt not in starts:
+-                        extra[nxt] = owner[nxt]
++                if i not in live:
++                    continue
++                if ins.mnem == "UD2":
++                    # A handler may retry this exact instruction after patching
++                    # it. Do not manufacture entries for infeasible fault paths.
++                    target = ins.addr
++                elif ins.mnem == "CALL" and not tr.never_returns(ins):
++                    target = fn.fallthrough[i]
++                else:
++                    continue
++                if target in owner and target not in starts:
++                    home = owner[target]
++                    if extra.get(target) is not home:
++                        extra[target] = home
++                        existing_entries[home.addr].add(target)
++                        if home.addr not in queued:
++                            work.append(home)
++                            queued.add(home.addr)
+ 
+     entries_by_fn = defaultdict(set)
+     for t, fn in extra.items():
+@@ -5589,6 +6084,25 @@ def main():
+               % (at, fn_addr, len(missing), total,
+                  " ".join("%08x" % m for m in missing[:6])), file=sys.stderr)
+     if (table_gaps or undecoded) and not args.allow_table_gaps:
++        # Preserve structured evidence even when the table gate stops before
++        # emission; the normal final report is written only after that gate.
++        if args.report:
++            blockers = Path(args.report).with_suffix(".blockers.json")
++            blockers.parent.mkdir(parents=True, exist_ok=True)
++            blockers.write_text(json.dumps({
++                "translation_complete": False,
++                "gate": "jump_table_coverage",
++                "failed_functions": [{"address": "%08x" % a, "error": why}
++                                     for a, why in failures],
++                "table_gaps": [{"caller": "%08x" % f, "site": "%08x" % a,
++                                "slots": total,
++                                "missing": ["%08x" % t for t in missing]}
++                               for f, a, total, missing in table_gaps],
++                "table_sites_undecoded": [{"caller": "%08x" % f,
++                                           "site": "%08x" % a,
++                                           "base": "%08x" % b}
++                                          for f, a, b in undecoded],
++            }, indent=2), encoding="utf-8")
+         raise TranslateError(
+             "%d jump tables have entries that dispatch nowhere (%d slots in "
+             "total) and %d table sites decoded nothing; pass "
+@@ -5663,6 +6177,29 @@ def main():
+                  % (target, line[:110])))
+         dangling = []
+     if dangling:
++        # Keep all blockers beside the requested report, outside the temporary
++        # generation directory which the build driver removes after failure.
++        if args.report:
++            blockers = Path(args.report).with_suffix(".blockers.json")
++            blockers.parent.mkdir(parents=True, exist_ok=True)
++            blockers.write_text(json.dumps({
++                "translation_complete": False,
++                "failed_functions": [{"address": "%08x" % a, "error": why,
++                                      "alternate_entries": [
++                                          {"address": "%08x" % t,
++                                           "provenance": provenance.get(t),
++                                           "evidence": sorted(hook_evidence.get(t, ()))}
++                                          for t in sorted(entries_by_fn.get(a, ())) ]}
++                                     for a, why in failures],
++                "dangling_dispatch": [{"caller": "%08x" % caller,
++                                       "target": "%08x" % target, "line": line,
++                                       "caller_alternate_entries": [
++                                           {"address": "%08x" % t,
++                                            "provenance": provenance.get(t),
++                                            "evidence": sorted(hook_evidence.get(t, ()))}
++                                           for t in sorted(entries_by_fn.get(caller, ())) ]}
++                                      for caller, target, line in dangling],
++            }, indent=2), encoding="utf-8")
+         # A target that Ghidra listed but that failed to translate is the
+         # usual cause, so name the failures first: they are what to fix.
+         for a, why in failures[:40]:
+@@ -5782,7 +6319,8 @@ def main():
+     # neither another pop nor dispatching the continuation is correct here.
+     call_returns = sorted({
+         fn.fallthrough[i] or (fn.insns[i + 1].addr if i + 1 < len(fn.insns) else fn.end)
+-        for fn in ok for i, ins in enumerate(fn.insns) if ins.mnem == "CALL"
++        for fn in ok for i, ins in enumerate(fn.insns)
++        if ins.mnem == "CALL" and ins.addr not in fn.dead_addrs
+     })
+ 
+     # table.c ---------------------------------------------------------------
+diff --git a/docs/d3d9-fixed-function.md b/docs/d3d9-fixed-function.md
+new file mode 100644
+index 0000000..3dcc4ca
+--- /dev/null
++++ b/docs/d3d9-fixed-function.md
+@@ -0,0 +1,28 @@
++# Bounded Direct3D 9 fixed-function support
++
++`dx/d3d9_ffp.cpp` prepares shader-model-2 bytecode for both existing rendering
++paths. Preparing a draw is transactional: an unsupported state returns a reason
++without changing the device's programmable shader bindings or constants.
++
++The initial supported formats are XYZ or XYZRHW, optional normal (XYZ only),
++packed diffuse/specular colours, and zero to eight float2 texture coordinate
++sets. FVF layout follows Microsoft's [FVF-to-declaration mapping](https://learn.microsoft.com/en-us/windows/win32/direct3d9/mapping-fvf-codes-to-a-directx-9-declaration).
++XYZ uses row-vector world/view/projection multiplication. XYZRHW reconstructs
++clip coordinates from the current viewport and reciprocal W, bypassing those
++matrices and lighting. The GPU renderer applies its existing DX9 pixel-centre
++adjustment after the shader; it must not be applied again inside the synthesized
++shader. See Microsoft's [texel-to-pixel mapping](https://learn.microsoft.com/en-us/windows/win32/direct3d9/directly-mapping-texels-to-pixels).
++
++The pixel stage supports select-argument, modulate (including 2x/4x), add and
++subtract, with independent colour/alpha operations, diffuse/current/texture/
++texture-factor/specular arguments, complement and alpha replication. It honours
++the selected UV set. A null texture with COLORARG1 set to TEXTURE stops the stage
++cascade, following Microsoft's [texture blending rules](https://learn.microsoft.com/en-us/windows/win32/direct3d9/texture-blending).
++
++Lighting, fog, specular addition, vertex blending, automatic texture coordinate
++generation, texture transforms, TEMP stage results, flat shading, point-size
++FVFs and non-float2 UV formats remain unsupported and are explicitly refused.
++The pre-existing CPU rasterizer also lacks clipping and a complete depth/stencil
++implementation; it cannot be represented as a complete software D3D9 device.
++Offscreen pixel tests establish the supported operations, not a game's startup,
++playability or performance.
+diff --git a/dx/d3d9_ffp.cpp b/dx/d3d9_ffp.cpp
+new file mode 100644
+index 0000000..0456f0d
+--- /dev/null
++++ b/dx/d3d9_ffp.cpp
+@@ -0,0 +1,245 @@
++#include "d3d9_ffp.h"
++#include "d3d9_shader.h"
++#include <algorithm>
++#include <cmath>
++#include <cstring>
++#include <initializer_list>
++
++namespace {
++using namespace d9sh;
++struct Code {
++    std::vector<uint8_t> bytes;
++    void word(uint32_t x) {
++        for (unsigned k = 0; k < 4; ++k)
++            bytes.push_back((uint8_t)(x >> (8 * k)));
++    }
++    void op(uint32_t opcode, std::initializer_list<uint32_t> operands) {
++        word(opcode | ((uint32_t)operands.size() << 24));
++        for (uint32_t x : operands)
++            word(x);
++    }
++    D9ShaderBytes finish() {
++        word(OP_END);
++        return {std::make_shared<const std::vector<uint8_t>>(std::move(bytes))};
++    }
++};
++uint32_t reg(uint32_t type, uint32_t index) {
++    return 0x80000000u | ((type & 7) << 28) | ((type & 0x18) << 8) | index;
++}
++uint32_t dst(uint32_t type, uint32_t index, uint32_t mask = 15, bool sat = false) {
++    return reg(type, index) | (mask << 16) | (sat ? 0x00100000u : 0);
++}
++uint32_t src(uint32_t type, uint32_t index, uint32_t swizzle = 0xe4) {
++    return reg(type, index) | (swizzle << 16);
++}
++void declare(Code &c, uint32_t type, uint32_t index, uint32_t usage, uint32_t usage_index = 0) {
++    c.op(OP_DCL, {0x80000000u | usage | (usage_index << 16), dst(type, index)});
++}
++void element(D9FVF &f, uint32_t type, uint32_t usage, uint32_t index, uint32_t size) {
++    auto &d = f.declaration;
++    d.insert(d.end(), {0, 0, (uint8_t)f.stride, (uint8_t)(f.stride >> 8), (uint8_t)type, 0,
++                       (uint8_t)usage, (uint8_t)index});
++    f.stride += size;
++}
++bool fail(std::string &why, const char *message) {
++    why = message;
++    return false;
++}
++void multiply(const float *a, const float *b, float *out) {
++    for (unsigned row = 0; row < 4; ++row)
++        for (unsigned col = 0; col < 4; ++col) {
++            out[4 * row + col] = 0;
++            for (unsigned k = 0; k < 4; ++k)
++                out[4 * row + col] += a[4 * row + k] * b[4 * k + col];
++        }
++}
++// Argument sources are captured before CURRENT is updated. Each operation
++// has its own temporary operands so alpha replication/complement cannot
++// accidentally overwrite the previous stage or the sampled texel.
++bool argument(Code &c, uint32_t value, uint32_t temp, uint32_t &operand, std::string &why) {
++    if (value & ~0x3fu)
++        return fail(why, "unsupported texture argument flags");
++    uint32_t swizzle = value & 0x20 ? 0xff : 0xe4;
++    switch (value & 15) {
++    case 0:
++        operand = src(R_INPUT, 0, swizzle);
++        break;
++    case 1:
++        operand = src(R_TEMP, 0, swizzle);
++        break;
++    case 2:
++        operand = src(R_TEMP, 1, swizzle);
++        break;
++    case 3:
++        operand = src(R_CONST, 0, swizzle);
++        break;
++    case 4:
++        operand = src(R_INPUT, 1, swizzle);
++        break;
++    default:
++        return fail(why, "unsupported texture argument source");
++    }
++    if (value & 0x10) {
++        c.op(OP_SUB, {dst(R_TEMP, temp), src(R_CONST, 1, 0), operand});
++        operand = src(R_TEMP, temp);
++    }
++    return true;
++}
++bool combine(Code &c, uint32_t operation, uint32_t a, uint32_t b, uint32_t mask, std::string &why) {
++    uint32_t d = dst(R_TEMP, 4, mask, true);
++    switch (operation) {
++    case 2:
++        c.op(OP_MOV, {d, a});
++        break;
++    case 3:
++        c.op(OP_MOV, {d, b});
++        break;
++    case 4:
++        c.op(OP_MUL, {d, a, b});
++        break;
++    case 5:
++    case 6:
++        // Scale before saturating: saturating the initial product is wrong
++        // for signed arguments and would change the DX9 stage semantics.
++        c.op(OP_MUL, {dst(R_TEMP, 4, mask), a, b});
++        c.op(OP_MUL, {d, src(R_TEMP, 4), src(R_CONST, 1, operation == 5 ? 0x55 : 0xaa)});
++        break;
++    case 7:
++        c.op(OP_ADD, {d, a, b});
++        break;
++    case 10:
++        c.op(OP_SUB, {d, a, b});
++        break;
++    default:
++        return fail(why, "unsupported texture stage operation");
++    }
++    return true;
++}
++} // namespace
++
++bool d9_fvf_decode(uint32_t fvf, D9FVF &format, std::string &why) {
++    D9FVF f;
++    uint32_t position = fvf & 0x400e, count = (fvf >> 8) & 15;
++    if ((fvf & ~0x0fd6u) || count > 8 || (position != 2 && position != 4))
++        return fail(why, "unsupported FVF position, UV dimensions, or reserved flags");
++    f.transformed = position == 4;
++    if (f.transformed && (fvf & 0x10))
++        return fail(why, "XYZRHW and NORMAL are mutually exclusive");
++    element(f, f.transformed ? 3 : 2, f.transformed ? 9 : 0, 0, f.transformed ? 16 : 12);
++    if (fvf & 0x10)
++        element(f, 2, 3, 0, 12);
++    f.diffuse = (fvf & 0x40) != 0;
++    f.specular = (fvf & 0x80) != 0;
++    if (f.diffuse)
++        element(f, 4, 10, 0, 4);
++    if (f.specular)
++        element(f, 4, 10, 1, 4);
++    f.textures = count;
++    for (uint32_t i = 0; i < count; ++i)
++        element(f, 1, 5, i, 8);
++    f.declaration.insert(f.declaration.end(), {0xff, 0, 0, 0, 17, 0, 0, 0});
++    format = std::move(f);
++    why.clear();
++    return true;
++}
++
++bool d9_ffp_prepare(const D9Pipeline &p, uint32_t fvf, uint32_t width, uint32_t height,
++                    D9FixedFunction &result, std::string &why) {
++    D9FixedFunction out;
++    if (!d9_fvf_decode(fvf, out.format, why))
++        return false;
++    const D9FVF &f = out.format;
++    if (!f.transformed && p.rs[137])
++        return fail(why, "fixed-function lighting is not implemented");
++    if (p.rs[28] || p.rs[29] || p.rs[151] || p.rs[167])
++        return fail(why,
++                    "fixed-function fog, specular addition, or vertex blending is not implemented");
++    if (p.rs[9] != 2)
++        return fail(why, "fixed-function flat shading is not implemented");
++    Code vs, ps;
++    vs.word(0xfffe0200u);
++    ps.word(0xffff0200u);
++    declare(vs, R_INPUT, 0, f.transformed ? 9 : 0);
++    if (f.diffuse)
++        declare(vs, R_INPUT, 1, 10);
++    if (f.specular)
++        declare(vs, R_INPUT, 2, 10, 1);
++    for (uint32_t i = 0; i < f.textures; ++i)
++        declare(vs, R_INPUT, 3 + i, 5, i);
++    // c4 provides colour defaults; all position matrices occupy c0..c3.
++    out.vconst[4][0] = out.vconst[4][1] = out.vconst[4][2] = out.vconst[4][3] = 1;
++    if (!f.transformed) {
++        float wv[16], wvp[16];
++        multiply(p.transform[24], p.transform[2], wv);
++        multiply(wv, p.transform[3], wvp);
++        // D3D matrices multiply row vectors; DP4 needs one column per constant.
++        for (unsigned col = 0; col < 4; ++col) {
++            for (unsigned row = 0; row < 4; ++row)
++                out.vconst[col][row] = wvp[4 * row + col];
++            vs.op(OP_DP4, {dst(R_RASTOUT, 0, 1u << col), src(R_INPUT, 0), src(R_CONST, col)});
++        }
++    } else {
++        float x = p.viewport_set ? (float)p.viewport[0] : 0;
++        float y = p.viewport_set ? (float)p.viewport[1] : 0;
++        float w = p.viewport_set ? (float)p.viewport[2] : (float)width;
++        float h = p.viewport_set ? (float)p.viewport[3] : (float)height;
++        float dz = p.viewport_z[1] - p.viewport_z[0];
++        if (!(w > 0 && h > 0 && dz > 0))
++            return fail(why, "invalid pretransformed viewport");
++        out.vconst[0][0] = 2 / w;
++        out.vconst[0][1] = -2 / h;
++        out.vconst[0][2] = 1 / dz;
++        out.vconst[1][0] = -1 - 2 * x / w;
++        out.vconst[1][1] = 1 + 2 * y / h;
++        out.vconst[1][2] = -p.viewport_z[0] / dz;
++        // Input w is reciprocal clip w. The renderers apply the DX9 pixel
++        // centre correction after this shader, exactly as for ordinary VSs.
++        vs.op(OP_RCP, {dst(R_TEMP, 0, 8), src(R_INPUT, 0, 0xff)});
++        vs.op(OP_MAD, {dst(R_TEMP, 0, 7), src(R_INPUT, 0), src(R_CONST, 0), src(R_CONST, 1)});
++        vs.op(OP_MUL, {dst(R_RASTOUT, 0, 7), src(R_TEMP, 0), src(R_TEMP, 0, 0xff)});
++        vs.op(OP_MOV, {dst(R_RASTOUT, 0, 8), src(R_TEMP, 0, 0xff)});
++    }
++    vs.op(OP_MOV, {dst(R_ATTROUT, 0), f.diffuse ? src(R_INPUT, 1) : src(R_CONST, 4)});
++    vs.op(OP_MOV, {dst(R_ATTROUT, 1), f.specular ? src(R_INPUT, 2) : src(R_CONST, 5)});
++    declare(ps, R_INPUT, 0, 10);
++    declare(ps, R_INPUT, 1, 10, 1);
++    uint32_t one = 0x3f800000, two = 0x40000000, four = 0x40800000;
++    ps.op(OP_DEF, {dst(R_CONST, 1), one, two, four, 0});
++    for (unsigned k = 0; k < 4; ++k)
++        out.pconst[0][k] = ((p.rs[60] >> (k == 3 ? 24 : (2 - k) * 8)) & 255) / 255.0f;
++    ps.op(OP_MOV, {dst(R_TEMP, 0), src(R_INPUT, 0)});
++    for (uint32_t stage = 0; stage < 8; ++stage) {
++        const uint32_t *t = p.tss[stage];
++        if (t[1] == 1 || (t[2] == 2 && !p.sampler_tex[stage]))
++            break;
++        if (t[24] || (t[11] & ~7u) || (t[28] && t[28] != 1))
++            return fail(why, "texture transforms, texgen, or TEMP result are not implemented");
++        bool textured = false;
++        for (uint32_t type : {2u, 3u, 5u, 6u})
++            textured |= (t[type] & 15) == 2;
++        if (textured) {
++            if (!p.sampler_tex[stage] || t[11] >= f.textures)
++                return fail(why, "texture argument has no texture or UV set");
++            vs.op(OP_MOV, {dst(R_TEXCRDOUT, stage), src(R_INPUT, 3 + t[11])});
++            declare(ps, R_ADDR, stage, 5, stage);
++            ps.op(OP_DCL, {0x90000000u, dst(R_SAMPLER, stage)}); // 2D sampler
++            ps.op(OP_TEX, {dst(R_TEMP, 1), src(R_ADDR, stage), src(R_SAMPLER, stage)});
++        }
++        for (unsigned alpha = 0; alpha < 2; ++alpha) {
++            uint32_t a, b;
++            if (!argument(ps, t[alpha ? 5 : 2], 2, a, why) ||
++                !argument(ps, t[alpha ? 6 : 3], 3, b, why) ||
++                !combine(ps, t[alpha ? 4 : 1], a, b, alpha ? 8 : 7, why))
++                return false;
++        }
++        ps.op(OP_MOV, {dst(R_TEMP, 0), src(R_TEMP, 4)});
++    }
++    ps.op(OP_MOV, {dst(R_COLOROUT, 0), src(R_TEMP, 0)});
++    out.vs = vs.finish();
++    out.ps = ps.finish();
++    if (!program_for(out.vs.vec()).ok || !program_for(out.ps.vec()).ok)
++        return fail(why, "generated fixed-function shader failed bytecode validation");
++    result = std::move(out);
++    why.clear();
++    return true;
++}
+diff --git a/dx/d3d9_ffp.h b/dx/d3d9_ffp.h
+new file mode 100644
+index 0000000..f7a4a14
+--- /dev/null
++++ b/dx/d3d9_ffp.h
+@@ -0,0 +1,29 @@
++// A bounded Direct3D 9 fixed-function shader synthesis path. Unsupported state
++// is rejected before either renderer sees a draw; the original device state
++// and its programmable shader constants are never changed by this helper.
++#pragma once
++#include "d3d9_pipeline.h"
++#include <array>
++
++struct D9FVF {
++    std::vector<uint8_t> declaration;
++    uint32_t stride = 0, textures = 0;
++    bool transformed = false, diffuse = false, specular = false;
++};
++
++struct D9FixedFunction {
++    D9FVF format;
++    D9ShaderBytes vs, ps;
++    float vconst[6][4] = {};
++    float pconst[1][4] = {};
++};
++
++// XYZ/XYZRHW, optional normal and packed colours, and 0..8 float2 UV sets.
++// Vertex blending, point size, non-float2 UVs and reserved bits are rejected.
++bool d9_fvf_decode(uint32_t fvf, D9FVF &format, std::string &why);
++
++// Synthesizes SM2 shaders shared by the existing CPU and GPU renderers.
++// Initially supports unlit/prelit colour and select/modulate/add/subtract
++// texture stages. Lighting, fog, texgen and texture transforms are refused.
++bool d9_ffp_prepare(const D9Pipeline &state, uint32_t fvf, uint32_t width, uint32_t height,
++                    D9FixedFunction &result, std::string &why);
+diff --git a/dx/tests/d3d9_ffp_tests.cpp b/dx/tests/d3d9_ffp_tests.cpp
+new file mode 100644
+index 0000000..c8eb72a
+--- /dev/null
++++ b/dx/tests/d3d9_ffp_tests.cpp
+@@ -0,0 +1,292 @@
++// Real SM2 decoder and software rasterizer tests, with owned COM surfaces.
++// No game image, generated code, GPU, window or pretend successful draw.
++#include "../com.h"
++#include "../dx.h"
++#include "../d3d9_ffp.h"
++#include "../d3d9_raster.h"
++#include "../d3d9_shader.h"
++#include "../d3d9_wgsl.h"
++#include "../../runtime/memory.h"
++#include <cstdio>
++#include <cstring>
++#include <initializer_list>
++
++namespace {
++unsigned checks = 0, failures = 0;
++void check(bool condition, const char *description) {
++    ++checks;
++    if (!condition) {
++        ++failures;
++        printf("FAIL: %s\n", description);
++    }
++}
++ComObj *surface(uint32_t width, uint32_t height) {
++    ComObj *s = com_new(K_D3D9SURFACE);
++    s->width = width;
++    s->height = height;
++    s->pitch = width * 4;
++    s->bpp = 32;
++    s->rmask = 21;
++    s->blob.resize((size_t)s->pitch * height);
++    return s;
++}
++uint32_t pixel(ComObj *s, uint32_t x, uint32_t y) {
++    uint32_t p;
++    memcpy(&p, s->blob.data() + y * s->pitch + 4 * x, 4);
++    return p;
++}
++void defaults(D9Pipeline &p) {
++    p = D9Pipeline{};
++    p.rs[137] = 0;
++    p.rs[22] = 1;
++    p.rs_set[22] = true;
++    for (auto &matrix : p.transform) {
++        memset(matrix, 0, sizeof matrix);
++        for (unsigned i = 0; i < 4; ++i)
++            matrix[5 * i] = 1;
++    }
++}
++bool draw(ComObj *dev, ComObj *target, uint32_t fvf, const void *vertices, size_t bytes) {
++    D9Pipeline &p = d9_pipeline(dev->id);
++    D9FixedFunction ff;
++    std::string why;
++    if (!d9_ffp_prepare(p, fvf, target->width, target->height, ff, why)) {
++        printf("prepare failed: %s\n", why.c_str());
++        return false;
++    }
++    check(d9sh::program_for(ff.vs.vec()).ok, "synthesized VS decodes");
++    check(d9sh::program_for(ff.ps.vec()).ok, "synthesized PS decodes");
++    std::string shader_source, shader_error;
++    check(d9wgsl::vertex_source(d9sh::program_for(ff.vs.vec()), &shader_source, &shader_error),
++          "synthesized VS translates through actual WebGPU shader generator");
++    check(d9wgsl::pixel_source(d9sh::program_for(ff.ps.vec()), {}, &shader_source, &shader_error),
++          "synthesized PS translates through actual WebGPU shader generator");
++    p.vs = ff.vs;
++    p.ps = ff.ps;
++    memcpy(p.vconst, ff.vconst, sizeof ff.vconst);
++    memcpy(p.pconst, ff.pconst, sizeof ff.pconst);
++    D9DrawCall call;
++    call.prim = 4;
++    call.prim_count = 1;
++    call.stride = ff.format.stride;
++    call.vertex_data = (const uint8_t *)vertices;
++    call.vertex_bytes = bytes;
++    d9_raster_draw(dev, target, ff.format.declaration, call);
++    return true;
++}
++struct XYZColour {
++    float x, y, z;
++    uint32_t colour;
++};
++struct ScreenColour {
++    float x, y, z, rhw;
++    uint32_t colour;
++};
++struct TwoUV {
++    float x, y, z, nx, ny, nz;
++    uint32_t colour;
++    float u0, v0, u1, v1;
++};
++static_assert(sizeof(TwoUV) == 44, "FVF normal/diffuse/two UV layout");
++void raster_cases() {
++    ComObj *dev = com_new(K_D3D9DEVICE), *target = surface(64, 64);
++    D9Pipeline &p = d9_pipeline(dev->id);
++    defaults(p);
++    const XYZColour triangle[] = {{-.75f, .75f, .5f, 0xffff0000},
++                                  {.75f, .75f, .5f, 0xffff0000},
++                                  {-.75f, -.75f, .5f, 0xffff0000}};
++    check(draw(dev, target, 0x42, triangle, sizeof triangle), "prelit XYZ triangle accepted");
++    check(pixel(target, 12, 12) == 0xffff0000, "prelit vertex colour reaches raster pixels");
++    check(pixel(target, 60, 60) == 0, "outside triangle remains untouched");
++
++    defaults(p);
++    memset(target->blob.data(), 0, target->blob.size());
++    p.transform[24][0] = .5f;
++    p.transform[24][5] = .5f;
++    p.transform[2][12] = .25f;
++    p.transform[3][0] = .5f;
++    check(draw(dev, target, 0x42, triangle, sizeof triangle), "nonidentity WVP accepted");
++    check(pixel(target, 12, 12) == 0, "nonidentity WVP moves the original covered pixel");
++    check(pixel(target, 34, 23) == 0xffff0000, "world/view/projection compose in row-vector order");
++
++    defaults(p);
++    memset(target->blob.data(), 0, target->blob.size());
++    p.viewport_set = true;
++    p.viewport[0] = 16;
++    p.viewport[1] = 8;
++    p.viewport[2] = p.viewport[3] = 32;
++    p.viewport_z[0] = .2f;
++    p.viewport_z[1] = .8f;
++    // RHW != 1 verifies inverse viewport reconstruction and clip w.
++    const ScreenColour screen[] = {{20, 12, .5f, .5f, 0xff00ff00},
++                                   {40, 12, .5f, .5f, 0xff00ff00},
++                                   {20, 32, .5f, .5f, 0xff00ff00}};
++    p.rs[137] = 1; // transformed/lit input bypasses fixed-function lighting
++    check(draw(dev, target, 0x44, screen, sizeof screen), "XYZRHW bypasses lighting and WVP");
++    check(pixel(target, 22, 14) == 0xff00ff00,
++          "XYZRHW preserves screen placement in offset viewport");
++    check(pixel(target, 5, 5) == 0, "offset viewport leaves unrelated pixels untouched");
++
++    defaults(p);
++    memset(target->blob.data(), 0, target->blob.size());
++    ComObj *tex = surface(2, 1);
++    const uint32_t texels[] = {0xffff0000, 0x8000ff00};
++    memcpy(tex->blob.data(), texels, sizeof texels);
++    p.sampler_tex[0] = tex->id;
++    p.sampler_state[0][1] = 3; // clamp, so UV 1 selects the last texel
++    p.tss[0][11] = 1;          // select UV set 1, not UV set 0
++    const TwoUV textured[] = {{-.75f, .75f, .5f, 0, 0, 1, 0xff808080, 0, 0, 1, 0},
++                              {.75f, .75f, .5f, 0, 0, 1, 0xff808080, 0, 0, 1, 0},
++                              {-.75f, -.75f, .5f, 0, 0, 1, 0xff808080, 0, 0, 1, 0}};
++    check(draw(dev, target, 0x252, textured, sizeof textured),
++          "44-byte FVF textured triangle accepted");
++    check(pixel(target, 12, 12) == 0x80008000,
++          "UV set selection, modulate colour and independent alpha work");
++    p.tss[0][1] = 2; // select texture alpha replicated and complemented into RGB
++    p.tss[0][2] = 2 | 0x20 | 0x10;
++    p.tss[0][4] = 2;
++    p.tss[0][5] = 3; // texture factor alpha
++    p.rs[60] = 0x40000000;
++    memset(target->blob.data(), 0, target->blob.size());
++    check(draw(dev, target, 0x252, textured, sizeof textured),
++          "texture argument modifiers accepted");
++    check(pixel(target, 12, 12) == 0x407f7f7f,
++          "complement, alpha replication, factor and saturation reach real pixels");
++}
++void refusal_cases() {
++    D9FVF f;
++    std::string why;
++    check(d9_fvf_decode(0x252, f, why) && f.stride == 44,
++          "FVF stride includes normal/diffuse/two UV sets");
++    check(!d9_fvf_decode(0x14, f, why), "XYZRHW with normal rejected");
++    check(!d9_fvf_decode(0x46, f, why), "blended position rejected");
++    check(!d9_fvf_decode(0x10042, f, why), "unsupported UV dimensions rejected");
++    D9Pipeline p;
++    defaults(p);
++    D9FixedFunction ff;
++    ff.format.stride = 123; // rejected synthesis is transactional
++    p.rs[137] = 1;
++    check(!d9_ffp_prepare(p, 0x42, 64, 64, ff, why), "unimplemented XYZ lighting refused");
++    check(ff.format.stride == 123, "refusal leaves output unchanged");
++    p.rs[137] = 0;
++    p.rs[28] = 1;
++    check(!d9_ffp_prepare(p, 0x42, 64, 64, ff, why), "unimplemented fog refused");
++    p.rs[28] = 0;
++    p.sampler_tex[0] = 1;
++    p.tss[0][11] = 0x10000;
++    check(!d9_ffp_prepare(p, 0x142, 64, 64, ff, why), "automatic texture coordinates refused");
++    p.tss[0][11] = 0;
++    p.tss[0][1] = 26;
++    check(!d9_ffp_prepare(p, 0x142, 64, 64, ff, why), "unsupported texture operation refused");
++}
++
++uint32_t device_call(uint32_t view, uint32_t slot, std::initializer_list<uint32_t> args) {
++    X86 c = {};
++    c.r[R_ESP] = 0x0effff00;
++    uint32_t before = c.r[R_ESP];
++    c.r[R_ESP] -= 4 * ((uint32_t)args.size() + 2);
++    wr32(c.r[R_ESP], 0x12345678);
++    wr32(c.r[R_ESP] + 4, view);
++    uint32_t index = 0;
++    for (uint32_t value : args)
++        wr32(c.r[R_ESP] + 8 + 4 * index++, value);
++    uint32_t entry = rd32(rd32(view) + 4 * slot);
++    check(imports_dispatch(&c, entry), "real COM vtable dispatches the device method");
++    check(c.r[R_ESP] == before && c.eip == 0x12345678,
++          "device stdcall restores stack and return PC");
++    return c.r[R_EAX];
++}
++void device_cases() {
++    ComObj *dev = com_new(K_D3D9DEVICE), *target = surface(64, 64);
++    dev->width = dev->height = 64;
++    dev->render_target = target->id;
++    uint32_t view = com_view(dev, IF_D3DDEVICE9);
++    D9Pipeline &p = d9_pipeline(dev->id);
++    defaults(p);
++    uint32_t out = heap_alloc(4, true, 4);
++    check(device_call(view, 89, {0x42}) == 0, "real SetFVF installs supported declaration");
++    uint32_t declaration = p.declaration;
++    check(com_get(declaration) && !com_get(declaration)->blob.empty(),
++          "SetFVF owns actual declaration bytes");
++    check(device_call(view, 90, {out}) == 0 && rd32(out) == 0x42,
++          "real GetFVF returns installed format");
++    check(device_call(view, 89, {0x46}) == 0x8876086c, "real SetFVF rejects unsupported position");
++    check(p.fvf == 0x42 && p.declaration == declaration,
++          "failed SetFVF preserves previous binding");
++    check(device_call(view, 89, {0x42}) == 0 && p.declaration == declaration,
++          "identical SetFVF reuses declaration");
++    uint32_t vertices = heap_alloc(3 * sizeof(XYZColour), false, 4);
++    const XYZColour triangle[] = {{-.75f, .75f, .5f, 0xff0000ff},
++                                  {.75f, .75f, .5f, 0xff0000ff},
++                                  {-.75f, -.75f, .5f, 0xff0000ff}};
++    memcpy(gm_ptr(vertices), triangle, sizeof triangle);
++    p.vconst[0][0] = 123;
++    p.pconst[0][0] = 456;
++    check(device_call(view, 83, {4, 1, vertices, sizeof(XYZColour)}) == 0,
++          "real DrawPrimitiveUP executes fixed function");
++    check(pixel(target, 12, 12) == 0xff0000ff, "COM fixed-function draw writes actual blue pixels");
++    check(p.vs.empty() && p.ps.empty() && p.vconst[0][0] == 123 && p.pconst[0][0] == 456,
++          "synthesized draw restores shader bindings and application constants");
++    memset(target->blob.data(), 0, target->blob.size());
++    p.rs[137] = 1;
++    check(device_call(view, 83, {4, 1, vertices, sizeof(XYZColour)}) == 0x8876086c,
++          "COM draw refuses lighting instead of reporting fake success");
++    check(pixel(target, 12, 12) == 0, "refused draw does not modify framebuffer");
++    p.vs.bytes = std::make_shared<const std::vector<uint8_t>>(4, 1);
++    p.ps.bytes = std::make_shared<const std::vector<uint8_t>>(4, 2);
++    check(device_call(view, 92, {0}) == 0 && p.vs.empty(),
++          "NULL vertex shader really unbinds programmable state");
++    check(device_call(view, 107, {0}) == 0 && p.ps.empty(),
++          "NULL pixel shader really unbinds programmable state");
++    check(device_call(view, 92, {1}) == 0x8876086c,
++          "unsupported shader object rejected instead of fake success");
++}
++
++// Independent handwritten passthrough shader bytes cover the global DX9
++// pixel-centre correction for existing programmable draws, not just FFP.
++void programmable_pixel_centres() {
++    const uint32_t vertex[] = {0xfffe0200, 0x0200001f, 0x80000000, 0x900f0000, 0x0200001f,
++                               0x8000000a, 0x900f0001, 0x02000001, 0xc00f0000, 0x90e40000,
++                               0x02000001, 0xd00f0000, 0x90e40001, 0x0000ffff};
++    const uint32_t pixel_shader[] = {0xffff0200, 0x0200001f, 0x8000000a, 0x900f0000,
++                                     0x02000001, 0x800f0800, 0x90e40000, 0x0000ffff};
++    auto bytes = [](const void *data, size_t size) {
++        const uint8_t *begin = (const uint8_t *)data;
++        return D9ShaderBytes{std::make_shared<const std::vector<uint8_t>>(begin, begin + size)};
++    };
++    ComObj *dev = com_new(K_D3D9DEVICE), *target = surface(64, 64);
++    D9Pipeline &p = d9_pipeline(dev->id);
++    defaults(p);
++    p.vs = bytes(vertex, sizeof vertex);
++    p.ps = bytes(pixel_shader, sizeof pixel_shader);
++    D9FVF f;
++    std::string why;
++    check(d9_fvf_decode(0x42, f, why), "programmable fixture has valid vertex declaration");
++    check(d9sh::program_for(p.vs.vec()).ok && d9sh::program_for(p.ps.vec()).ok,
++          "independent programmable passthrough shaders decode");
++    const XYZColour triangle[] = {{-.7375f, .7375f, .5f, 0xffff0000},
++                                  {-.2375f, .7375f, .5f, 0xffff0000},
++                                  {-.7375f, .2375f, .5f, 0xffff0000}};
++    D9DrawCall call;
++    call.prim = 4;
++    call.prim_count = 1;
++    call.stride = sizeof(XYZColour);
++    call.vertex_data = (const uint8_t *)triangle;
++    call.vertex_bytes = sizeof triangle;
++    d9_raster_draw(dev, target, f.declaration, call);
++    check(pixel(target, 8, 10) == 0, "programmable triangle honours DX9 integer pixel centres");
++    check(pixel(target, 9, 10) == 0xffff0000, "programmable triangle retains next interior pixel");
++}
++} // namespace
++
++int main() {
++    mem_init();
++    imports_init();
++    dx_register_shims();
++    raster_cases();
++    refusal_cases();
++    device_cases();
++    programmable_pixel_centres();
++    printf("d3d9 fixed function: %u checks, %u failures\n", checks, failures);
++    return failures ? 1 : 0;
++}
+diff --git a/runtime/tests/game_boot_probe.cpp b/runtime/tests/game_boot_probe.cpp
+new file mode 100644
+index 0000000..0d9506b
+--- /dev/null
++++ b/runtime/tests/game_boot_probe.cpp
+@@ -0,0 +1,87 @@
++// A real PE startup probe: same verified loader, imports, scheduler and generated
++// CPU code as the player, with a null graphics/audio host. No gameplay proof.
++#include "loader.h"
++#include "imports.h"
++#include "win32.h"
++#include "../dx/dx.h"
++#include "../platform/os.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string>
++
++namespace {
++bool write_region(const std::string &path, uint32_t base, uint32_t size) {
++    if (base >= GUEST_SIZE || size > GUEST_SIZE - base)
++        return false;
++    FILE *out = fopen(path.c_str(), "wb");
++    if (!out) {
++        fprintf(stderr, "[boot-probe] cannot open dump %s\n", path.c_str());
++        return false;
++    }
++    bool ok = fwrite(g_mem + base, 1, size, out) == size;
++    ok = fclose(out) == 0 && ok;
++    return ok;
++}
++} // namespace
++
++// Runs before strict abort while the guest baton holder owns these bytes. A
++// supplied prefix enables snapshots; absence leaves no diagnostic files. Each
++// binary starts at its reported guest base, not a host address or file offset.
++extern "C" void recomp_unknown_diagnostic(X86 *c, uint32_t target) {
++    const char *prefix = recomp_env("PROBE_DUMP");
++    if (!prefix || !*prefix)
++        return;
++    std::string root(prefix);
++    FILE *out = fopen((root + ".json").c_str(), "wb");
++    if (!out) {
++        fprintf(stderr, "[boot-probe] cannot open dump manifest\n");
++        return;
++    }
++    fprintf(out, "{\"target\":%u,\"eip\":%u,\"registers\":[", target, c->eip);
++    for (unsigned i = 0; i < 8; ++i)
++        fprintf(out, "%s%u", i ? "," : "", c->r[i]);
++    fprintf(out, "],\"eflags\":%u,\"fs_base\":%u,\"exe_sha256\":\"%s\",\"regions\":[",
++            x86_get_eflags(c), c->fs_base, loader_exe_sha256());
++    auto region = [&](const std::string &suffix, uint32_t base, uint32_t size, bool first) {
++        bool ok = write_region(root + suffix, base, size);
++        fprintf(out, "%s{\"suffix\":\"%s\",\"base\":%u,\"size\":%u,\"written\":%s}",
++                first ? "" : ",", suffix.c_str(), base, size, ok ? "true" : "false");
++    };
++    region(".image.bin", loader_image_base(), loader_image_size(), true);
++    region(".stack.bin", STACK_LIMIT, STACK_SIZE, false);
++    region(".teb.bin", TEB_BASE, TEB_SIZE, false);
++    for (uint32_t i = 0; i < loader_module_count(); ++i) {
++        const LoaderModule *m = loader_module(i);
++        if (m)
++            region(".aux" + std::to_string(i) + ".bin", m->base, m->size, false);
++    }
++    fprintf(out, "]}\n");
++    fclose(out);
++    fprintf(stderr, "[boot-probe] guest snapshots written with prefix %s\n", prefix);
++}
++
++int main(int argc, char **argv) {
++    // Strict policies prevent a missing routine or signature from fabricating a
++    // zero result and displacing later returns. They are probe-only defaults.
++    if (argc > 2) {
++        fprintf(stderr, "usage: game_boot_probe [verified-executable]\n");
++        return 2;
++    }
++    if (os_setenv("RECOMP_STRICT_UNKNOWN", "1") || os_setenv("RECOMP_STRICT_IMPORTS", "1"))
++        return 2;
++    const char *exe = argc == 2 ? argv[1] : recomp_env("EXE");
++    if (!loader_load(exe)) {
++        fprintf(stderr, "[boot-probe] loader: %s\n", loader_error());
++        return 2;
++    }
++    dx_register_shims();
++    fprintf(stderr, "[boot-probe] verified PE %s, entry=%08x, SHA-256=%s\n",
++            loader_exe_path().c_str(), loader_entry_point(), loader_exe_sha256());
++    fprintf(stderr, "[boot-probe] original entry begins; null graphics/audio host\n");
++    fflush(stderr);
++    run_entry();
++    fprintf(stderr, "[boot-probe] original entry returned, eip=%08x esp=%08x exit=%u\n",
++            loader_context()->eip, loader_context()->r[R_ESP], process_exit_code());
++    return process_exited() ? (int)process_exit_code() : 0;
++}
+diff --git a/runtime/tests/startup_win32_tests.cpp b/runtime/tests/startup_win32_tests.cpp
+new file mode 100644
+index 0000000..1081f9f
+--- /dev/null
++++ b/runtime/tests/startup_win32_tests.cpp
+@@ -0,0 +1,122 @@
++// Exercise CRT startup imports through the real registry and dispatcher.
++// No image, renderer, generated game code or window is needed.
++#include "../imports.h"
++#include "../memory.h"
++#include "../intrinsics.h"
++#include "../../platform/os.h"
++#include <cstdio>
++#include <cstring>
++#include <initializer_list>
++
++static unsigned checks = 0, failures = 0;
++static void check(bool condition, const char *message) {
++    ++checks;
++    if (!condition) {
++        ++failures;
++        printf("FAIL: %s\n", message);
++    }
++}
++
++static uint32_t call(X86 *c, const char *name, std::initializer_list<uint32_t> args) {
++    uint32_t target = imports_resolve("kernel32.dll", name);
++    check(target != 0, "registered export resolves");
++    check(imports_argc(target) == args.size(), "export has the correct stdcall signature");
++    uint32_t before = c->r[R_ESP];
++    c->r[R_ESP] -= 4 * (args.size() + 1);
++    wr32(c->r[R_ESP], 0x12345678);
++    unsigned index = 0;
++    for (uint32_t value : args)
++        wr32(c->r[R_ESP] + 4 + 4 * index++, value);
++    check(imports_dispatch(c, target), "real import dispatcher handles the call");
++    check(c->r[R_ESP] == before, "stdcall restores the caller stack");
++    check(c->eip == 0x12345678, "stdcall resumes at the caller return address");
++    return c->r[R_EAX];
++}
++
++// This must never execute when its calling convention is unknown. A marker
++// distinguishes rejecting the signature from accidentally calling the shim.
++static void unknown_signature_import(X86 *) {
++    fprintf(stderr, "unexpected strict import implementation\n");
++    fflush(stderr);
++}
++
++int main(int argc, char **argv) {
++    mem_init();
++    imports_init();
++    X86 c = {};
++    c.r[R_ESP] = 0x0effff00;
++    if (argc == 2 && strcmp(argv[1], "--strict-unknown") == 0) {
++        os_setenv("RECOMP_STRICT_UNKNOWN", "1");
++        wr32(c.r[R_ESP], 0x12345678);
++        wr16(0x01000000, 0x0b0f); // No interpreted UD2 support: a deliberate unknown body.
++        recomp_unknown_call(&c, 0x01000000);
++        printf("unexpected strict return\n");
++        return 1;
++    }
++    if (argc == 2 && (strcmp(argv[1], "--strict-import") == 0 ||
++                      strcmp(argv[1], "--strict-import-signature") == 0)) {
++        os_setenv("RECOMP_STRICT_IMPORTS", "1");
++        bool signature = strcmp(argv[1], "--strict-import-signature") == 0;
++        uint32_t target = imports_alloc_trampoline(
++            "strict-import-test.dll", signature ? "UnknownConvention" : "MissingImplementation",
++            signature ? unknown_signature_import : nullptr, signature ? ARGC_UNKNOWN : 0);
++        if (!target) {
++            fprintf(stderr, "strict import fixture could not allocate trampoline\n");
++            return 2;
++        }
++        wr32(c.r[R_ESP], 0x12345678);
++        imports_dispatch(&c, target);
++        fprintf(stderr, "unexpected strict import return\n");
++        return 1;
++    }
++    const uint32_t strings = 0x0ee00000, cs = strings + 256;
++    strcpy(reinterpret_cast<char *>(g_mem + strings), "kernel32.dll");
++    uint32_t module = call(&c, "LoadLibraryA", {strings});
++    check(module != 0, "kernel32 has a module handle");
++    strcpy(reinterpret_cast<char *>(g_mem + strings + 32), "InitializeCriticalSectionAndSpinCount");
++    uint32_t resolved = call(&c, "GetProcAddress", {module, strings + 32});
++    check(resolved == imports_resolve("kernel32.dll", "InitializeCriticalSectionAndSpinCount"),
++          "GetProcAddress resolves the same callable spin-count export");
++    call(&c, "GetSystemInfo", {strings + 128});
++    check(rd32(strings + 148) == 1, "the guest exposes one processor");
++    for (uint32_t spin : {0u, 4000u, 0xffffffffu}) {
++        memset(g_mem + cs, 0xa5, 24);
++        wr32(cs - 4, 0x11223344);
++        wr32(cs + 24, 0x55667788);
++        call(&c, "SetLastError", {0x13579});
++        check(call(&c, "InitializeCriticalSectionAndSpinCount", {cs, spin}) == 1,
++              "spin-count initialization returns BOOL success");
++        check(call(&c, "GetLastError", {}) == 0x13579, "initialization preserves last error");
++        check(rd32(cs + 4) == 0xffffffffu && rd32(cs + 8) == 0 && rd32(cs + 12) == 0,
++              "new section is unowned and nonrecursive");
++        check(rd32(cs + 20) == 0, "a single processor ignores the spin count");
++        check(rd32(cs - 4) == 0x11223344 && rd32(cs + 24) == 0x55667788,
++              "initialization stays inside the 24-byte guest object");
++        call(&c, "EnterCriticalSection", {cs});
++        call(&c, "EnterCriticalSection", {cs});
++        check(rd32(cs + 8) == 2 && rd32(cs + 12) != 0, "section ownership permits recursion");
++        call(&c, "LeaveCriticalSection", {cs});
++        call(&c, "LeaveCriticalSection", {cs});
++        check(rd32(cs + 8) == 0 && rd32(cs + 12) == 0, "both leaves release ownership");
++        check(call(&c, "TryEnterCriticalSection", {cs}) == 1, "released section can be reacquired");
++        call(&c, "LeaveCriticalSection", {cs});
++        call(&c, "DeleteCriticalSection", {cs});
++    }
++    strcpy(reinterpret_cast<char *>(g_mem + strings + 32), "IsProcessorFeaturePresent");
++    resolved = call(&c, "GetProcAddress", {module, strings + 32});
++    check(resolved == imports_resolve("kernel32.dll", "IsProcessorFeaturePresent"),
++          "GetProcAddress resolves the same processor-feature export");
++    X86 cpu = {};
++    cpu.r[R_EAX] = 1;
++    recomp_cpuid(&cpu);
++    check((cpu.r[R_EDX] & 0x10) != 0, "CPUID advertises TSC");
++    for (uint32_t feature : {0u, 1u, 2u, 3u, 6u, 8u, 9u, 10u, 12u, 13u, 17u, 0xffffffffu}) {
++        call(&c, "SetLastError", {0x13579});
++        check(call(&c, "IsProcessorFeaturePresent", {feature}) == (feature == 8 ? 1u : 0u),
++              "processor feature agrees with the guest CPU contract");
++        check(call(&c, "GetLastError", {}) == 0x13579, "feature query preserves last error");
++    }
++    printf("%u checks, %u failures\n", checks, failures);
++    mem_shutdown();
++    return failures ? 1 : 0;
++}

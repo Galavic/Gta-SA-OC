@@ -1,0 +1,14 @@
+--- a/tools/recomp/translate.py
++++ b/tools/recomp/translate.py
+@@ -1554,5 +1554,11 @@ class Image(object):
+                 if (va in seen and not revisit_condition) or claimed or va in boundary_set or not (lo <= va < hi):
+                     break
++                # Audited non-code bytes are never translated: entry, branch
++                # and fall-through paths all stop here, bounded or not. The
++                # pointer scan and entry loading already refuse these ranges;
++                # recovery must not decode through them either.
++                if self.is_declared_data(va):
++                    break
+                 ci = self._decode_recovery_instruction(va, self.data)
+                 if ci is None or ci.address + ci.size > hi:
+                     if bounds is not None:

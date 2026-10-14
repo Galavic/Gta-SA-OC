@@ -1,0 +1,96 @@
+# Preliminary recomp-kit identity. No guessed game hooks or symbols.
+# This configuration does not establish GTA compatibility or playability.
+[game]
+id = "gtasa"
+name = "Grand Theft Auto: San Andreas"
+app_name = "GTASARecomp"
+bundle_id = "local.gtasa.recomp"
+executable = "gta_sa.exe"
+sha256 = "cd885d84bcbdacddc27bdbd6676e376557f118f090e71e0db7c746e72c949064"
+image_base = 0x00400000
+entry_point = 0x00825330
+# Keep the guest allocator above the last mapped PE section (0x024e0000).
+heap_base = 0x02500000
+guest_root = 'C:\GTASA'
+developer_exe = "prepared/gta_sa.exe"
+guest_size = 0x20000000
+windows_version = "5.1"
+
+[translate]
+listings = "analysis/curated-core-q10-dispatcher"
+globals = "analysis/curated-core-q10-dispatcher/globals.toml"
+entry_points = [0x00825330, 0x014deef0, 0x014cd7f0, 0x00572b80]
+# Disable visual clock substitutions until an actual GTA counter is audited.
+# The kit requires this key; no reads are marked volatile.
+animation_counter = 0
+volatile_reads = []
+# Original stack trampolines resume through computed RET/indirect JMP targets.
+resumable_stacks = true
+# The kit's fixed setjmp/longjmp addresses describe another executable.
+legacy_address_intrinsics = false
+no_fallthrough_calls_file = "analysis/curated-core-q10-dispatcher/nonreturning-calls.json"
+data_regions_file = "analysis/curated-core-q10-dispatcher/inline-data.json"
+# Embedded PE file buffers, validated by their DOS/PE headers and stored
+# section extents. Keep bytes intact; they have their own preferred bases.
+# See analysis/embedded-images.json. The main entry point is unaffected.
+data_regions = [
+    [0x01348484, 0x01375484],
+    [0x013754b4, 0x01376dd4],
+    [0x013784ac, 0x013904ac],
+    [0x0139467c, 0x013c367c],
+    [0x0140ae24, 0x01415e24],
+]
+
+[setup]
+required_dirs = ["models", "data", "audio", "anim"]
+
+[controls]
+default_layout = "hidden"
+pad = "off"
+
+# Game-specific runtime hooks (audited in analysis/ddraw-hooks-audit.json).
+# GTA SA delay-loads DirectDrawCreateEx once for display-mode enumeration;
+# it keeps no 32x32 cursor surfaces in globals, so the list is honestly empty
+# and cursor_surface_now() reports HOST_SURFACE_NONE by design.
+[hooks]
+cursor_surface_ptrs = []
+
+[modules.aux.eax]
+name = "eax.dll"
+path = "prepared/eax.dll"
+sha256 = "f1f749d9d0ea95d91a02126e2fd6d8d38cbb2aea9a49f2f9d2285427026c478f"
+base = 0x10000000
+size = 0x30000
+listings = "analysis/eax.dll"
+function_alignment = 4
+
+[modules.aux.ogg]
+name = "ogg.dll"
+path = "prepared/ogg.dll"
+sha256 = "66897e5e00e510abcd9b8a49c1f397f74af4d6da3c74da701675164159acd8e6"
+base = 0x11000000
+size = 0x9000
+listings = "analysis/ogg.dll"
+function_alignment = 4
+
+[modules.aux.vorbis]
+name = "vorbis.dll"
+path = "prepared/vorbis.dll"
+sha256 = "042c21ee8b8c0af4499072747ca44db5e4f291ca157e18539cd18f3e8471cac7"
+base = 0x12000000
+size = 0x108000
+listings = "analysis/vorbis.dll"
+function_alignment = 4
+
+[modules.aux.vorbisfile]
+name = "vorbisFile.dll"
+path = "prepared/vorbisFile.dll"
+sha256 = "64263d3ee8098a895505251f8cab852040a235612e88cb0899170287367d6e19"
+base = 0x13000000
+size = 0x11000
+listings = "analysis/vorbisFile.dll"
+function_alignment = 4
+
+# This game does not use the kit's Populous native replacements.
+[mods]
+builtin = "none"

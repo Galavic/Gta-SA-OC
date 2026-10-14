@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="es">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GTA San Andreas · Introducción original</title>
+<style>
+  :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #080808; color: #eee; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100dvh; display: grid; place-items: center; padding: 24px; }
+  main { width: min(900px, 100%); }
+  header { display: flex; gap: 20px; align-items: baseline; justify-content: space-between; margin-bottom: 16px; }
+  h1 { font-size: 19px; font-weight: 600; margin: 0; }
+  #port { color: #aaa; font-size: 13px; }
+  video { display: block; width: 100%; max-height: 70dvh; aspect-ratio: 4/3; object-fit: contain; background: #000; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0; }
+  button { font: inherit; padding: 11px 17px; border: 1px solid #555; border-radius: 4px; cursor: pointer; background: #202020; color: #eee; }
+  #start { background: #eee; color: #111; border-color: #eee; }
+  button:hover { filter: brightness(1.15); }
+  button:focus-visible { outline: 2px solid #eee; outline-offset: 3px; }
+  button:disabled { opacity: .4; cursor: default; }
+  p { color: #aaa; font-size: 14px; line-height: 1.5; }
+  #message { color: #eee; }
+  @media(max-width: 600px) { body { padding: 14px; } header { display: block; } #port { display: block; margin-top: 7px; } }
+</style>
+<main>
+  <header><h1>GTA San Andreas · Introducción original</h1><span id="port">Port todavía no jugable</span></header>
+  <video id="movie" controls playsinline preload="metadata" src="/media/logo.mp4" aria-label="Vídeos originales de inicio de GTA San Andreas"></video>
+  <div class="actions">
+    <button id="start">Ver inicio original</button>
+    <button id="next" disabled>Siguiente vídeo</button>
+    <button id="fullscreen">Pantalla completa</button>
+  </div>
+  <p id="message" role="status">Pulsa «Ver inicio original» para reproducir los vídeos con sonido.</p>
+  <p>Vídeos de tu instalación original de PC. Esta vista reproduce la introducción; el motor y el menú del juego todavía no se ejecutan aquí.</p>
+</main>
+<script>
+  const movie = document.querySelector('#movie');
+  const start = document.querySelector('#start');
+  const next = document.querySelector('#next');
+  const message = document.querySelector('#message');
+  const clips = ['/media/logo.mp4', '/media/titles.mp4'];
+  let current = 0;
+  async function play(index) {
+    current = index;
+    movie.src = clips[index];
+    next.disabled = index === clips.length - 1;
+    start.textContent = 'Volver a ver desde el inicio';
+    message.textContent = index === 0 ? 'Logotipos originales' : 'Introducción original';
+    try { await movie.play(); }
+    catch { message.textContent = 'Pulsa reproducir en el vídeo para continuar.'; }
+  }
+  start.addEventListener('click', () => play(0));
+  next.addEventListener('click', () => play(current + 1));
+  movie.addEventListener('ended', () => {
+    if (current + 1 < clips.length) play(current + 1);
+    else { next.disabled = true; message.textContent = 'Introducción terminada. El port del motor aún está en desarrollo.'; }
+  });
+  movie.addEventListener('error', () => { message.textContent = 'No se pudo cargar el vídeo. Comprueba que la vista local siga abierta.'; });
+  document.querySelector('#fullscreen').addEventListener('click', async () => {
+    try { await movie.requestFullscreen(); }
+    catch { message.textContent = 'Usa el control de pantalla completa del vídeo.'; }
+  });
+  async function refresh() {
+    try {
+      const state = await (await fetch('/api/status', {cache: 'no-store'})).json();
+      document.querySelector('#port').textContent = state.building ? 'Traducción del motor en marcha' : 'Port todavía no jugable';
+    } catch { document.querySelector('#port').textContent = 'Vista local sin conexión'; }
+  }
+  refresh(); setInterval(refresh, 8000);
+</script>
+</html>

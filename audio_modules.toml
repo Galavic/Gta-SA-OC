@@ -1,0 +1,20 @@
+# Identity of the user's supplied original DLLs; assets are not distributed.
+[[modules]]
+name = "eax.dll"
+sha256 = "b2da4f1e47ef8054c8390ead0b97d1fbb0c547245b79b8861cfa92ce9ef153fb"
+load_base = 0x10000000
+
+[[modules]]
+name = "ogg.dll"
+sha256 = "4a4f65427e016b3c5ae0d2517a69db5f1cdc7a43d2c0a7957e8da5d6f378f063"
+load_base = 0x11000000
+
+[[modules]]
+name = "vorbis.dll"
+sha256 = "fefda850b69e007fceba644483c7616bc07e9f177fc634fb74e114f0d15b0db0"
+load_base = 0x12000000
+
+[[modules]]
+name = "vorbisFile.dll"
+sha256 = "a08923479000cec366967fb8259e0920b7aa18859722c7dda1415726bed4774f"
+load_base = 0x13000000
