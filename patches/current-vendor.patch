@@ -1,11 +1,14 @@
 diff --git a/CHANGELOG.md b/CHANGELOG.md
-index 20fdc15..1856633 100644
+index 20fdc15..4b1e51a 100644
 --- a/CHANGELOG.md
 +++ b/CHANGELOG.md
-@@ -2,6 +2,86 @@
+@@ -2,6 +2,89 @@
  
  ## Unreleased
  
++- Refuse incomplete web imports before entering the engine and retain a bounded
++  on-screen boot log, including JavaScript, WebGPU and runtime startup failures.
++
 +- Preserve guest state in diagnostics when interpreting an unknown jump fails
 +  decoding, and stop partial interpreter faults in STRICT_UNKNOWN mode before
 +  fabricating a zero result or restoring the caller stack.
@@ -193,8 +196,29 @@ index a16dd2f..a95c864 100644
  # host_api.h is a C header too. The C11 consumer is an object the DX tests
  # link; the header is also parsed as C++17 on its own.
  add_library(host_api_header_test OBJECT tests/host_api_header_test.c)
+diff --git a/dx/com.h b/dx/com.h
+index 0a87829..aef54b9 100644
+--- a/dx/com.h
++++ b/dx/com.h
+@@ -47,6 +47,7 @@ enum ComIface : uint16_t {
+     IF_DIRECTDRAW,
+     IF_DIRECTDRAW2,
+     IF_DIRECTDRAW4,
++    IF_DIRECTDRAW7,
+     IF_DDSURFACE,
+     IF_DDSURFACE2,
+     IF_DDSURFACE3,
+@@ -70,6 +71,8 @@ enum ComIface : uint16_t {
+     IF_DS3DBUFFER,
+     IF_DS3DLISTENER,
+     IF_DSNOTIFY,
++    IF_DSOUND8,   // IDirectSound8: same vtable as IDirectSound
++    IF_DSBUFFER8, // IDirectSoundBuffer8: same vtable as IDirectSoundBuffer
+     IF_DINPUT,
+     IF_DINPUTDEVICE,
+     // DirectShow multimedia streaming (dshow.cpp)
 diff --git a/dx/d3d9.cpp b/dx/d3d9.cpp
-index 1973efb..a865505 100644
+index 1973efb..e033db8 100644
 --- a/dx/d3d9.cpp
 +++ b/dx/d3d9.cpp
 @@ -21,6 +21,7 @@
@@ -205,7 +229,79 @@ index 1973efb..a865505 100644
  #include "d3d9_raster.h"
  #include "d3d9_shader.h"
  #include "host_d9.h"
-@@ -401,10 +402,7 @@ D9_STUB(SetNPatchMode, 2)
+@@ -132,25 +133,44 @@ void D9_GetAdapterIdentifier(X86 *c) {
+     com_ret(c, D3D_OK9);
+ }
+ 
+-void D9_GetAdapterModeCount(X86 *c) {
+-    set_eax(c, 1);
+-}
+-
+ // D3DDISPLAYMODE: width, height, refresh rate, format. X8R8G8B8 is 22.
+-static void put_display_mode(uint32_t p) {
++// The game's first boot looks for its 800x600x32 default in this list, so
++// the table carries the era-standard modes, not just the desktop one.
++struct DisplayMode {
++    uint32_t w, h, refresh, format;
++};
++static const DisplayMode kDisplayModes[] = {
++    {640, 480, 60, 22},   {800, 600, 60, 22},   {1024, 768, 60, 22},
++    {1152, 864, 60, 22},  {1280, 720, 60, 22},  {1280, 960, 60, 22},
++    {1600, 1200, 60, 22}, {1920, 1080, 60, 22},
++};
++static void put_display_mode(uint32_t p, const DisplayMode &m) {
+     if (!p)
+         return;
+-    wr32(p + 0, 1280);
+-    wr32(p + 4, 960);
+-    wr32(p + 8, 60);
+-    wr32(p + 12, 22);
++    wr32(p + 0, m.w);
++    wr32(p + 4, m.h);
++    wr32(p + 8, m.refresh);
++    wr32(p + 12, m.format);
+ }
++// (this, Adapter, Format)
++void D9_GetAdapterModeCount(X86 *c) {
++    uint32_t format = arg(c, 2);
++    set_eax(c, format >= 21 && format <= 23 ? (uint32_t)std::size(kDisplayModes) : 0);
++}
++// (this, Adapter, Format, Mode, pMode)
+ void D9_EnumAdapterModes(X86 *c) {
+-    put_display_mode(arg(c, 4));
++    uint32_t format = arg(c, 2), mode = arg(c, 3), out = arg(c, 4);
++    if (format < 21 || format > 23 || mode >= std::size(kDisplayModes)) {
++        com_ret(c, D3DERR_INVALIDCALL);
++        return;
++    }
++    DisplayMode m = kDisplayModes[mode];
++    m.format = format;
++    put_display_mode(out, m);
+     com_ret(c, D3D_OK9);
+ }
+ void D9_GetAdapterDisplayMode(X86 *c) {
+-    put_display_mode(arg(c, 2));
++    put_display_mode(arg(c, 2), kDisplayModes[5]);
+     com_ret(c, D3D_OK9);
+ }
+ void D9_CheckDeviceType(X86 *c) {
+@@ -174,6 +194,7 @@ void D9_CheckDeviceMultiSampleType(X86 *c) {
+     uint32_t type = arg(c, 5), quality = arg(c, 6);
+     uint32_t levels = type == 0 ? 1 : type == 1 ? 2 : (type == 2 || type == 4) ? 1 : 0;
+     if (!levels) {
++        LOGW("d3d9: CheckDeviceMultiSampleType(type=%u) unsupported here", type);
+         com_ret(c, 0x8876086au); // D3DERR_NOTAVAILABLE
+         return;
+     }
+@@ -369,7 +390,6 @@ D9_STUB(UpdateTexture, 3)
+ D9_STUB(GetRenderTargetData, 3)
+ D9_STUB(GetFrontBufferData, 3)
+ D9_STUB(ColorFill, 4)
+-D9_STUB(GetRenderTarget, 3)
+ D9_STUB(GetTransform, 3)
+ D9_STUB(MultiplyTransform, 3)
+ D9_STUB(SetMaterial, 2)
+@@ -401,10 +421,7 @@ D9_STUB(SetNPatchMode, 2)
  D9_STUB(GetNPatchMode, 1)
  D9_STUB(ProcessVertices, 6)
  D9_STUB(GetVertexDeclaration, 2)
@@ -216,7 +312,7 @@ index 1973efb..a865505 100644
  D9_STUB(GetVertexShader, 2)
  D9_STUB(GetVertexShaderConstantF, 4)
  D9_STUB(SetVertexShaderConstantI, 4)
-@@ -416,7 +414,6 @@ D9_STUB(SetStreamSourceFreq, 3)
+@@ -416,7 +433,6 @@ D9_STUB(SetStreamSourceFreq, 3)
  D9_STUB(GetStreamSourceFreq, 3)
  D9_STUB(GetIndices, 2)
  D9_STUB(CreatePixelShader, 3)
@@ -224,7 +320,43 @@ index 1973efb..a865505 100644
  D9_STUB(GetPixelShader, 2)
  D9_STUB(GetPixelShaderConstantF, 4)
  D9_STUB(SetPixelShaderConstantI, 4)
-@@ -1402,10 +1399,79 @@ void Dev_SetVertexDeclaration(X86 *c) {
+@@ -1328,6 +1344,35 @@ void Dev_GetDepthStencilSurface(X86 *c) {
+     com_ret(c, D3D_OK9);
+ }
+ 
++// (this, RenderTargetIndex, ppRenderTarget): the current target, which is
++// the back buffer unless the game set another. The stub used to report OK
++// while leaving the out-pointer untouched, so the game called through null
++// and faulted; returning the real target keeps it on real surfaces.
++void Dev_GetRenderTarget(X86 *c) {
++    ComObj *dev = this_device9(c);
++    uint32_t index = arg(c, 1), out = arg(c, 2);
++    if (!dev || !out || index > 3) {
++        com_ret(c, D3DERR_INVALIDCALL);
++        return;
++    }
++    ComObj *s = com_get(dev->render_target);
++    if (!s)
++        s = device_backbuffer(dev);
++    if (!s) {
++        com_ret(c, D3DERR_INVALIDCALL);
++        return;
++    }
++    com_addref(s);
++    uint32_t view_ = com_view(s, IF_D3DSURFACE9);
++    if (!view_) {
++        com_release(s);
++        com_ret(c, E_OUTOFMEMORY);
++        return;
++    }
++    com_out_ptr(out, view_);
++    com_ret(c, D3D_OK9);
++}
++
+ void Dev_SetRenderTarget(X86 *c) {
+     ComObj *dev = this_device9(c);
+     ComObj *s = com_this(arg(c, 2));
+@@ -1402,10 +1447,79 @@ void Dev_SetVertexDeclaration(X86 *c) {
      if (dev) {
          dev->current_viewport = (d && d->kind == K_D3D9DECL) ? d->id : 0;
          d9_pipeline(dev->id).declaration = dev->current_viewport;
@@ -304,7 +436,7 @@ index 1973efb..a865505 100644
  // (this, Type, ppQuery). A query with no GPU behind it answers immediately.
  void Dev_CreateQuery(X86 *c) {
      ComObj *dev = this_device9(c);
-@@ -1580,15 +1646,61 @@ static void target_viewport(ComObj *dev, const HostD9Target &t, int32_t vp[4]) {
+@@ -1580,15 +1694,61 @@ static void target_viewport(ComObj *dev, const HostD9Target &t, int32_t vp[4]) {
      vp[3] = rt ? (int32_t)rt->height : (int32_t)dev->height;
  }
  
@@ -374,7 +506,7 @@ index 1973efb..a865505 100644
      d.target = gpu_target(dev);
      target_viewport(dev, d.target, d.viewport);
      d.depth_range[0] = pl.viewport_z[0];
-@@ -1614,7 +1726,7 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
+@@ -1614,7 +1774,7 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
      ComObj *decl = com_get(pl.declaration);
      if (!decl || decl->kind != K_D3D9DECL) {
          log_once("d3d9.gpu.nodecl", "d3d9: a draw with no vertex declaration is skipped");
@@ -383,7 +515,7 @@ index 1973efb..a865505 100644
      }
      d.decl = decl->blob.data();
      d.decl_size = (uint32_t)decl->blob.size();
-@@ -1649,19 +1761,26 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
+@@ -1649,19 +1809,26 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
      bool color_write = !pl.rs_set[168] || (pl.rs[168] & 0xf) != 0;
      bool z_write = (!pl.rs_set[14] || pl.rs[14]) && (!pl.rs_set[7] || pl.rs[7]);
      gpu_target_drawn(dev, color_write, z_write);
@@ -412,7 +544,7 @@ index 1973efb..a865505 100644
  }
  
  // (this, PrimitiveType, StartVertex, PrimitiveCount)
-@@ -1675,8 +1794,7 @@ void Dev_DrawPrimitive(X86 *c) {
+@@ -1675,8 +1842,7 @@ void Dev_DrawPrimitive(X86 *c) {
          d.primitive = arg(c, 1);
          d.primitive_count = arg(c, 3);
          d.start = arg(c, 2);
@@ -422,7 +554,7 @@ index 1973efb..a865505 100644
          return;
      }
      ComObj *vb = dev ? com_get(dev->back_obj) : nullptr;
-@@ -1688,7 +1806,10 @@ void Dev_DrawPrimitive(X86 *c) {
+@@ -1688,7 +1854,10 @@ void Dev_DrawPrimitive(X86 *c) {
          call.vertex_bytes = vb->blob.size() - dev->lock_off;
          call.stride = dev->rate;
          call.first = arg(c, 2);
@@ -434,7 +566,7 @@ index 1973efb..a865505 100644
      }
      com_ret(c, D3D_OK9);
  }
-@@ -1701,6 +1822,7 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
+@@ -1701,6 +1870,7 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
      ComObj *dev = this_device9(c);
      if (dev && gpu_on()) {
          ComObj *ibo = com_get(d9_pipeline(dev->id).index_buffer);
@@ -442,7 +574,7 @@ index 1973efb..a865505 100644
          if (ibo) {
              gpu_sync_buffer(ibo);
              HostD9Draw d{};
-@@ -1710,9 +1832,9 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
+@@ -1710,9 +1880,9 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
              d.base_vertex = (int32_t)arg(c, 2);
              d.index_buffer = ibo->id;
              d.index_size = ibo->rmask ? ibo->rmask : 2;
@@ -454,7 +586,7 @@ index 1973efb..a865505 100644
          return;
      }
      ComObj *vb = dev ? com_get(dev->back_obj) : nullptr;
-@@ -1729,7 +1851,10 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
+@@ -1729,7 +1899,10 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
          call.index_size = ib->rmask ? ib->rmask : 2;
          call.base_vertex = (int32_t)arg(c, 2);
          call.first = arg(c, 5);
@@ -466,7 +598,7 @@ index 1973efb..a865505 100644
      }
      com_ret(c, D3D_OK9);
  }
-@@ -1801,6 +1926,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
+@@ -1801,6 +1974,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
              describe_draw_inputs(c, arg(c, 3), arg(c, 4), arg(c, 2) + 2);
      }
      if (ComObj *dev = this_device9(c); dev && gpu_on()) {
@@ -474,7 +606,7 @@ index 1973efb..a865505 100644
          HostD9Draw d{};
          d.primitive = arg(c, 1);
          d.primitive_count = arg(c, 2);
-@@ -1809,9 +1935,9 @@ void Dev_DrawPrimitiveUP(X86 *c) {
+@@ -1809,9 +1983,9 @@ void Dev_DrawPrimitiveUP(X86 *c) {
              d.stream[0].stride = arg(c, 4);
              d.inline_vertices = gm_ptr(arg(c, 3));
              d.inline_bytes = bytes;
@@ -486,7 +618,7 @@ index 1973efb..a865505 100644
          return;
      }
      D9DrawCall call;
-@@ -1819,8 +1945,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
+@@ -1819,8 +1993,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
      call.prim_count = arg(c, 2);
      call.vertices = arg(c, 3);
      call.stride = arg(c, 4);
@@ -496,7 +628,7 @@ index 1973efb..a865505 100644
  }
  
  // (this, PrimitiveType, MinVertexIndex, NumVertices, PrimitiveCount,
-@@ -1831,6 +1956,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
+@@ -1831,6 +2004,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
               "indices at %08x",
               g_draws, prim_name(arg(c, 1)), arg(c, 4), arg(c, 3), arg(c, 8), arg(c, 7), arg(c, 5));
      if (ComObj *dev = this_device9(c); dev && gpu_on()) {
@@ -504,7 +636,7 @@ index 1973efb..a865505 100644
          HostD9Draw d{};
          d.primitive = arg(c, 1);
          d.primitive_count = arg(c, 4);
-@@ -1844,9 +1970,9 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
+@@ -1844,9 +2018,9 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
              d.inline_indices = gm_ptr(arg(c, 5));
              d.inline_index_bytes = ibytes;
              d.index_size = isize;
@@ -516,7 +648,7 @@ index 1973efb..a865505 100644
          return;
      }
      D9DrawCall call;
-@@ -1856,8 +1982,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
+@@ -1856,8 +2030,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
      call.stride = arg(c, 8);
      call.indices = arg(c, 5);
      call.index_size = arg(c, 6) == 102 ? 4 : 2;
@@ -616,6 +748,197 @@ index 00e088b..6b59ed6 100644
          }
          float area = (sx[1] - sx[0]) * (sy[2] - sy[0]) - (sx[2] - sx[0]) * (sy[1] - sy[0]);
          if (std::fabs(area) < 1e-8f)
+diff --git a/dx/ddraw.cpp b/dx/ddraw.cpp
+index 0b42f52..759935f 100644
+--- a/dx/ddraw.cpp
++++ b/dx/ddraw.cpp
+@@ -4699,6 +4699,11 @@ void DD_GetDeviceIdentifier(X86 *c) {
+     com_ret(c, DD_OK);
+ }
+ 
++// IDirectDraw7-only mode-test pair. No caller in the corpus reaches them
++// yet; named stubs say exactly what was invoked if one ever does.
++DX_STUB(DD_StartModeTest, DDERR_UNSUPPORTED)
++DX_STUB(DD_EvaluateMode, DDERR_UNSUPPORTED)
++
+ // ---------------------------------------------------------------------------
+ // DirectDraw vtables
+ // ---------------------------------------------------------------------------
+@@ -4750,6 +4755,25 @@ const ComMethod g_ddraw4[] = {
+     {"GetDeviceIdentifier", 3, DD_GetDeviceIdentifier},
+ };
+ 
++// IDirectDraw7 is the v4 shape plus the mode-test pair at the end. Every
++// shared slot keeps its v4 implementation: the signatures match (CreateSurface
++// already takes DDSURFACEDESC2, EnumDisplayModes keeps its argument count),
++// so only the two new slots need named stubs that say what was called.
++const ComMethod g_ddraw7[] = {
++    DD_COMMON_SLOTS_HEAD,
++    {"CreateSurface", 4, DD_CreateSurface4}, // DDSURFACEDESC2
++    DD_COMMON_SLOTS_TAIL,
++    {"SetDisplayMode", 6, DD_SetDisplayMode2},
++    {"WaitForVerticalBlank", 3, DD_WaitForVerticalBlank},
++    {"GetAvailableVidMem", 4, DD_GetAvailableVidMem},
++    {"GetSurfaceFromDC", 3, DD_GetSurfaceFromDC},
++    {"RestoreAllSurfaces", 1, DD_RestoreAllSurfaces},
++    {"TestCooperativeLevel", 1, DD_TestCooperativeLevel},
++    {"GetDeviceIdentifier", 3, DD_GetDeviceIdentifier},
++    {"StartModeTest", 5, DD_StartModeTest},
++    {"EvaluateMode", 4, DD_EvaluateMode},
++};
++
+ // ===========================================================================
+ // DDRAW.dll exports
+ // ===========================================================================
+@@ -4787,9 +4811,9 @@ void DirectDrawCreate(X86 *c) {
+     com_ret(c, DD_OK);
+ }
+ 
+-// The version 7 factory is discoverable so callers can take their legacy
+-// DirectDrawCreate/QueryInterface fallback. Do not return an older vtable for
+-// IID_IDirectDraw7: its callers would invoke incompatible method signatures.
++// The version 7 factory. Same object as DirectDrawCreate, with the v7 view:
++// the signatures the game uses through it (CreateSurface with DDSURFACEDESC2
++// and friends) are the ones the v4 table already implements.
+ void DirectDrawCreateEx(X86 *c) {
+     const uint32_t out = arg(c, 1), iid = arg(c, 2), outer = arg(c, 3);
+     if (!out || !gm_valid(out, 4)) {
+@@ -4805,7 +4829,21 @@ void DirectDrawCreateEx(X86 *c) {
+         com_ret(c, CLASS_E_NOAGGREGATION);
+         return;
+     }
+-    com_ret(c, DDERR_UNSUPPORTED);
++    ComObj *dd = com_new(K_DDRAW);
++    dd->mode_w = 640;
++    dd->mode_h = 480;
++    dd->mode_bpp = 8;
++    uint32_t view = com_view(dd, IF_DIRECTDRAW7);
++    if (!view) {
++        com_release(dd);
++        com_ret(c, E_OUTOFMEMORY);
++        return;
++    }
++    if (!g_primary_dd)
++        g_primary_dd = dd->id;
++    wr32(out, view);
++    LOGV("ddraw: DirectDrawCreateEx() -> %08x", view);
++    com_ret(c, DD_OK);
+ }
+ 
+ void enumerate_devices(X86 *c, bool wide, bool extended) {
+@@ -4909,6 +4947,7 @@ void ddraw_register() {
+     com_define(IF_DIRECTDRAW, "DDRAW.dll", "IDirectDraw", g_ddraw1, std::size(g_ddraw1));
+     com_define(IF_DIRECTDRAW2, "DDRAW.dll", "IDirectDraw2", g_ddraw2, std::size(g_ddraw2));
+     com_define(IF_DIRECTDRAW4, "DDRAW.dll", "IDirectDraw4", g_ddraw4, std::size(g_ddraw4));
++    com_define(IF_DIRECTDRAW7, "DDRAW.dll", "IDirectDraw7", g_ddraw7, std::size(g_ddraw7));
+     com_define(IF_DDSURFACE, "DDRAW.dll", "IDirectDrawSurface", g_surface1, std::size(g_surface1));
+     com_define(IF_DDSURFACE2, "DDRAW.dll", "IDirectDrawSurface2", g_surface2,
+                std::size(g_surface2));
+@@ -4924,6 +4963,14 @@ void ddraw_register() {
+     com_bind(IF_DIRECTDRAW, K_DDRAW);
+     com_bind(IF_DIRECTDRAW2, K_DDRAW);
+     com_bind(IF_DIRECTDRAW4, K_DDRAW);
++    com_bind(IF_DIRECTDRAW7, K_DDRAW);
++    // The DirectX version ladder loads these only to see them exist (then
++    // frees them): d3d8.dll for the 0x700 step, dpnhpast.dll for 0x800. No
++    // export from either is resolved anywhere in the image, so presence is
++    // the whole shim; a GetProcAddress against one fails loudly, which is
++    // the signal to implement whatever the guest actually wanted.
++    imports_register_presence_only("d3d8.dll");
++    imports_register_presence_only("dpnhpast.dll");
+     com_bind(IF_DDSURFACE, K_SURFACE);
+     com_bind(IF_DDSURFACE2, K_SURFACE);
+     com_bind(IF_DDSURFACE3, K_SURFACE);
+@@ -4935,6 +4982,7 @@ void ddraw_register() {
+     com_register_iid(IF_DIRECTDRAW, IID_IDirectDraw_);
+     com_register_iid(IF_DIRECTDRAW2, IID_IDirectDraw2_);
+     com_register_iid(IF_DIRECTDRAW4, IID_IDirectDraw4_);
++    com_register_iid(IF_DIRECTDRAW7, IID_IDirectDraw7_);
+     com_register_iid(IF_DDSURFACE, IID_IDirectDrawSurface_);
+     com_register_iid(IF_DDSURFACE2, IID_IDirectDrawSurface2_);
+     com_register_iid(IF_DDSURFACE3, IID_IDirectDrawSurface3_);
+diff --git a/dx/dsound.cpp b/dx/dsound.cpp
+index d23446d..441065b 100644
+--- a/dx/dsound.cpp
++++ b/dx/dsound.cpp
+@@ -51,6 +51,10 @@ static const uint8_t IID_IDirectSound3DBuffer_[16] =
+     IID_BYTES(0x279AFA86, 0x4981, 0x11CE, 0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60);
+ static const uint8_t IID_IDirectSoundNotify_[16] =
+     IID_BYTES(0xB0210783, 0x89CD, 0x11D0, 0xAF, 0x08, 0x00, 0xA0, 0xC9, 0x25, 0xCD, 0x16);
++static const uint8_t IID_IDirectSound8_[16] =
++    IID_BYTES(0x390145A1, 0x90A6, 0x11D2, 0xAA, 0x1C, 0x00, 0xA0, 0xC9, 0xA4, 0xF9, 0xAC);
++static const uint8_t IID_IDirectSoundBuffer8_[16] =
++    IID_BYTES(0xB0210781, 0x89CD, 0x11D0, 0xAF, 0x08, 0x00, 0xA0, 0xC9, 0x25, 0xCD, 0x16);
+ 
+ namespace {
+ 
+@@ -1674,9 +1678,37 @@ static ComObj *dsound_create() {
+     return com_new(K_DSOUND);
+ }
+ 
++// DirectSoundCreate8(lpGuid, ppDS, pUnkOuter): the game resolves it by
++// ordinal 11. IDirectSound8 extends IDirectSound without new slots, so it
++// shares the v1 method table and the same host object.
++void DirectSoundCreate8(X86 *c) {
++    uint32_t out = arg(c, 1), outer = arg(c, 2);
++    if (!out || !gm_valid(out, 4)) {
++        com_ret(c, DSERR_INVALIDPARAM);
++        return;
++    }
++    wr32(out, 0);
++    if (outer) {
++        com_ret(c, CLASS_E_NOAGGREGATION);
++        return;
++    }
++    ComObj *ds = com_new(K_DSOUND);
++    uint32_t view = com_view(ds, IF_DSOUND8);
++    if (!view) {
++        com_release(ds);
++        com_ret(c, E_OUTOFMEMORY);
++        return;
++    }
++    wr32(out, view);
++    LOGV("dsound: DirectSoundCreate8 -> %08x", view);
++    com_ret(c, DS_OK);
++}
++
+ const ImportShim g_dsound_exports[] = {
+     {"DSOUND.dll", "ord1", 3, DirectSoundCreate},
+     {"DSOUND.dll", "DirectSoundCreate", 3, DirectSoundCreate},
++    {"DSOUND.dll", "ord11", 3, DirectSoundCreate8},
++    {"DSOUND.dll", "DirectSoundCreate8", 3, DirectSoundCreate8},
+ };
+ 
+ // A DirectSound object also answers to IDirectSound3DListener, and a buffer to
+@@ -1751,7 +1783,10 @@ void dsound_register() {
+     done = true;
+ 
+     com_define(IF_DSOUND, "DSOUND.dll", "IDirectSound", g_dsound, std::size(g_dsound));
++    com_define(IF_DSOUND8, "DSOUND.dll", "IDirectSound8", g_dsound, std::size(g_dsound));
+     com_define(IF_DSBUFFER, "DSOUND.dll", "IDirectSoundBuffer", g_dsbuffer, std::size(g_dsbuffer));
++    com_define(IF_DSBUFFER8, "DSOUND.dll", "IDirectSoundBuffer8", g_dsbuffer,
++               std::size(g_dsbuffer));
+     com_define(IF_DS3DBUFFER, "DSOUND.dll", "IDirectSound3DBuffer", g_ds3dbuffer,
+                std::size(g_ds3dbuffer));
+     com_define(IF_DS3DLISTENER, "DSOUND.dll", "IDirectSound3DListener", g_ds3dlistener,
+@@ -1759,13 +1794,17 @@ void dsound_register() {
+     com_define(IF_DSNOTIFY, "DSOUND.dll", "IDirectSoundNotify", g_dsnotify, std::size(g_dsnotify));
+ 
+     com_bind(IF_DSOUND, K_DSOUND);
++    com_bind(IF_DSOUND8, K_DSOUND);
+     com_bind(IF_DS3DLISTENER, K_DSOUND);
+     com_bind(IF_DSBUFFER, K_DSBUFFER);
++    com_bind(IF_DSBUFFER8, K_DSBUFFER);
+     com_bind(IF_DS3DBUFFER, K_DSBUFFER);
+     com_bind(IF_DSNOTIFY, K_DSBUFFER);
+ 
+     com_register_iid(IF_DSOUND, IID_IDirectSound_);
++    com_register_iid(IF_DSOUND8, IID_IDirectSound8_);
+     com_register_iid(IF_DSBUFFER, IID_IDirectSoundBuffer_);
++    com_register_iid(IF_DSBUFFER8, IID_IDirectSoundBuffer8_);
+     com_register_iid(IF_DS3DBUFFER, IID_IDirectSound3DBuffer_);
+     com_register_iid(IF_DS3DLISTENER, IID_IDirectSound3DListener_);
+     com_register_iid(IF_DSNOTIFY, IID_IDirectSoundNotify_);
 diff --git a/host/input_gate.cpp b/host/input_gate.cpp
 index 2dd011b..49f466a 100644
 --- a/host/input_gate.cpp
@@ -962,7 +1285,7 @@ index 06d5e2b..c57d587 100644
  // _setjmp / _longjmp intrinsics. See intrinsics.h for the two substitution
  // forms and why the two-call one is correct.
 diff --git a/runtime/imports.cpp b/runtime/imports.cpp
-index ec1d2b1..4d1b701 100644
+index ec1d2b1..d82c211 100644
 --- a/runtime/imports.cpp
 +++ b/runtime/imports.cpp
 @@ -1,4 +1,5 @@
@@ -971,7 +1294,19 @@ index ec1d2b1..4d1b701 100644
  #include "gdi32_internal.h"
  #include "user32_internal.h"
  #include "kernel32_internal.h"
-@@ -413,11 +414,18 @@ bool imports_dispatch(X86 *c, uint32_t target) {
+@@ -129,6 +130,11 @@ bool imports_has_dll(const char *dll_lower) {
+     return registered_dlls().count(lower_dll(dll_lower)) != 0;
+ }
+ 
++void imports_register_presence_only(const char *dll) {
++    if (dll && *dll)
++        registered_dlls().insert(lower_dll(dll));
++}
++
+ uint32_t imports_alloc_trampoline(const char *dll, const char *name, void (*fn)(X86 *),
+                                   uint8_t argc_stdcall) {
+     std::string k = key_of(dll, name);
+@@ -413,11 +419,18 @@ bool imports_dispatch(X86 *c, uint32_t target) {
      uint32_t idx = (target - TRAMP_BASE) / TRAMP_STRIDE;
      if (idx >= tramps().size() || !tramps()[idx].atomic)
          sched_checkpoint();
@@ -990,7 +1325,7 @@ index ec1d2b1..4d1b701 100644
          c->eip = rd32(c->r[R_ESP]);
          c->r[R_ESP] += 4;
          set_eax(c, 0);
-@@ -432,6 +440,13 @@ bool imports_dispatch(X86 *c, uint32_t target) {
+@@ -432,6 +445,13 @@ bool imports_dispatch(X86 *c, uint32_t target) {
      // across that call, and do not retain a pointer into the movable vector.
      char desc[512];
      snprintf(desc, sizeof desc, "%s", tramps()[idx].desc.c_str());
@@ -1005,10 +1340,23 @@ index ec1d2b1..4d1b701 100644
      ++g_import_calls;
  
 diff --git a/runtime/imports.h b/runtime/imports.h
-index d01eb0a..f11465e 100644
+index d01eb0a..1e8b7dc 100644
 --- a/runtime/imports.h
 +++ b/runtime/imports.h
-@@ -157,3 +157,7 @@ void imports_dump_report(FILE *out);
+@@ -30,6 +30,12 @@ struct ImportShim {
+ void imports_register(const ImportShim *shims, size_t count);
+ // True if a shim table registered an entry for this DLL (case-insensitive).
+ bool imports_has_dll(const char *dll_lower);
++// Marks a DLL as present for LoadLibrary without any exports: the guest's
++// version probes (DirectX ladder: d3d8.dll, dpnhpast.dll) only load and free
++// these, never resolving imports from them. A GetProcAddress against one
++// fails loudly through the normal missing-export path, which is the honest
++// signal to implement the export the guest actually wanted.
++void imports_register_presence_only(const char *dll);
+ 
+ // ---------------------------------------------------------------------------
+ // Return observer. Called after every dispatched shim with the trampoline's
+@@ -157,3 +163,7 @@ void imports_dump_report(FILE *out);
  void imports_coverage(uint32_t *implemented, uint32_t *logging_only, uint32_t *unknown_argc);
  uint32_t imports_call_count(const char *dll, const char *name);
  uint32_t imports_count();
@@ -1017,7 +1365,7 @@ index d01eb0a..f11465e 100644
 +// Called synchronously on the guest baton holder; it must not mutate guest state.
 +extern "C" void recomp_unknown_diagnostic(X86 *c, uint32_t target);
 diff --git a/runtime/interp.cpp b/runtime/interp.cpp
-index b210e66..b00c5d3 100644
+index b210e66..2398fee 100644
 --- a/runtime/interp.cpp
 +++ b/runtime/interp.cpp
 @@ -1,9 +1,13 @@
@@ -1046,7 +1394,27 @@ index b210e66..b00c5d3 100644
      CALL, // direct: target; indirect: src
      RET,
      JMP,
-@@ -59,6 +68,8 @@ struct Ins {
+@@ -35,6 +44,8 @@ enum Op : uint8_t {
+     // A JMP whose target is a translated entry: a tail call out of this
+     // routine, which the address table places rather than this interpreter.
+     JMPOUT,
++    CLD, // DF = 0
++    STD, // DF = 1
+ };
+ 
+ // A register or memory operand. kind 0: none, 1: register, 2: memory,
+@@ -52,6 +63,10 @@ struct Ins {
+     uint8_t len = 0;
+     Op op = NOP;
+     uint8_t cond = 0;
++    // Operand width in bytes: 4, or 1 for the byte ALU/MOV forms. Memory and
++    // register accesses below honor it; flags are computed on the narrowed
++    // result, matching what the silicon and the static translator produce.
++    uint8_t width = 4;
+     Operand dst, src;
+     int32_t imm3 = 0; // IMUL r, r/m, imm
+     bool has_imm3 = false;
+@@ -59,6 +74,8 @@ struct Ins {
      uint32_t target_index = 0; // JMP, Jcc: `target`'s index in Routine::code
      bool indirect = false;
      uint16_t ret_pop = 0;
@@ -1055,10 +1423,16 @@ index b210e66..b00c5d3 100644
  };
  
  // How far the decoder reads before it gives up looking for the last RET.
-@@ -159,6 +170,38 @@ bool decode(uint32_t a, Ins &in) {
+@@ -159,6 +176,44 @@ bool decode(uint32_t a, Ins &in) {
      case 0x90:
          in.op = NOP;
          break;
++    case 0xfc:
++        in.op = CLD;
++        break;
++    case 0xfd:
++        in.op = STD;
++        break;
 +    case 0x9c:
 +        in.op = PUSHFD;
 +        break;
@@ -1094,7 +1468,247 @@ index b210e66..b00c5d3 100644
      case 0x01:
      case 0x09:
      case 0x21:
-@@ -788,11 +831,73 @@ void run(X86 *c, const Routine &r) {
+@@ -192,6 +247,45 @@ bool decode(uint32_t a, Ins &in) {
+         in.src = to_reg ? rm : reg_operand(reg);
+         break;
+     }
++    case 0x00:
++    case 0x02:
++    case 0x08:
++    case 0x0a:
++    case 0x20:
++    case 0x22:
++    case 0x28:
++    case 0x2a:
++    case 0x30:
++    case 0x32:
++    case 0x38:
++    case 0x3a:
++    case 0x84:
++    case 0x88:
++    case 0x8a: {
++        // The byte ALU/MOV/TEST forms (e.g. the CRT's CMP byte ptr [ESI],BL
++        // and SEH prologues' register shuffles). Same shape as the dword
++        // block above, narrowed: registers are the low/high bytes, memory is
++        // one byte, and flags come from the 8-bit result. ADC/SBB immediates
++        // stay unsupported, as do the 16-bit forms (0x66 prefix).
++        Operand rm;
++        if (!(n = modrm(p, rm, reg)))
++            return false;
++        p += n;
++        const uint8_t kind = b & 0xf8;
++        in.op = b == 0x84                ? TEST
++                : b == 0x88 || b == 0x8a ? MOV
++                : kind == 0x00           ? ADD
++                : kind == 0x08           ? OR
++                : kind == 0x20           ? AND
++                : kind == 0x28           ? SUB
++                : kind == 0x30           ? XOR
++                                          : CMP;
++        bool to_reg = (b & 2) && b != 0x84;
++        in.dst = to_reg ? reg_operand(reg) : rm;
++        in.src = to_reg ? rm : reg_operand(reg);
++        in.width = 1;
++        break;
++    }
+     case 0x05:
+     case 0x0d:
+     case 0x25:
+@@ -522,6 +616,40 @@ void store_mem(X86 *c, const Operand &o, uint32_t v) {
+     wr32(a, v);
+ }
+ 
++// Byte-register access: indices 0-3 are AL/CL/DL/BL, 4-7 are AH/CH/DH/BH.
++inline uint32_t load_reg8(const X86 *c, uint8_t r) {
++    return r < 4 ? c->r[r] & 0xffu : (c->r[r - 4] >> 8) & 0xffu;
++}
++
++inline uint32_t load8(const X86 *c, const Operand &o) {
++    if (o.kind == 1)
++        return load_reg8(c, o.reg);
++    if (o.kind == 3)
++        return (uint32_t)o.disp & 0xffu;
++    uint32_t a = address_of(c, o);
++    if (!readable(a, 1)) {
++        snprintf(g_error, sizeof g_error, "read of %08x outside guest memory", a);
++        throw Fault{};
++    }
++    return rd8(a);
++}
++
++inline void store8(X86 *c, const Operand &o, uint32_t v) {
++    if (o.kind == 1) {
++        if (o.reg < 4)
++            c->r[o.reg] = (c->r[o.reg] & 0xffffff00u) | (v & 0xffu);
++        else
++            c->r[o.reg - 4] = (c->r[o.reg - 4] & 0xffff00ffu) | ((v & 0xffu) << 8);
++        return;
++    }
++    uint32_t a = address_of(c, o);
++    if (!readable(a, 1)) {
++        snprintf(g_error, sizeof g_error, "write of %08x outside guest memory", a);
++        throw Fault{};
++    }
++    wr8(a, (uint8_t)v);
++}
++
+ void push(X86 *c, uint32_t v) {
+     c->r[R_ESP] -= 4;
+     if (!readable(c->r[R_ESP], 4)) {
+@@ -561,13 +689,14 @@ struct Flags {
+     Op op = NOP; // NOP: nothing pending, c->eflags_* are current
+     uint32_t a = 0, b = 0, res = 0;
+     uint8_t cf = 0, of = 0; // IMUL computes these itself
++    uint8_t w = 4;          // operand width: 4, or 1 for byte ALU forms
+ };
+ 
+ uint32_t flag_zf(const Flags &f) {
+     return f.res == 0;
+ }
+ uint32_t flag_sf(const Flags &f) {
+-    return f.res >> 31;
++    return f.w == 1 ? (f.res >> 7) & 1u : (f.res >> 31) & 1u;
+ }
+ uint32_t flag_pf(const Flags &f) {
+     return parity(f.res);
+@@ -589,18 +718,19 @@ uint32_t flag_cf(const X86 *c, const Flags &f) {
+     }
+ }
+ uint32_t flag_of(const X86 *c, const Flags &f) {
++    const unsigned top = f.w == 1 ? 7 : 31;
+     switch (f.op) {
+     case ADD:
+-        return ((f.a ^ f.res) & (f.b ^ f.res)) >> 31;
++        return ((f.a ^ f.res) & (f.b ^ f.res)) >> top;
+     case SUB:
+     case CMP:
+-        return ((f.a ^ f.b) & (f.a ^ f.res)) >> 31;
++        return ((f.a ^ f.b) & (f.a ^ f.res)) >> top;
+     case IMUL:
+         return f.of;
+     case INC:
+-        return f.res == 0x80000000u;
++        return f.res == (f.w == 1 ? 0x80u : 0x80000000u);
+     case DEC:
+-        return f.res == 0x7fffffffu;
++        return f.res == (f.w == 1 ? 0x7fu : 0x7fffffffu);
+     default:
+         (void)c;
+         return 0;
+@@ -702,8 +832,17 @@ void run(X86 *c, const Routine &r) {
+         switch (in.op) {
+         case NOP:
+             break;
++        case CLD:
++            c->eflags_df = 0;
++            break;
++        case STD:
++            c->eflags_df = 1;
++            break;
+         case MOV:
+-            store(c, in.dst, load(c, in.src));
++            if (in.width == 1)
++                store8(c, in.dst, load8(c, in.src));
++            else
++                store(c, in.dst, load(c, in.src));
+             break;
+         case MOV8: {
+             uint32_t a = address_of(c, in.dst);
+@@ -719,44 +858,74 @@ void run(X86 *c, const Routine &r) {
+             break;
+         // One case per operation: the shape is decided when the routine is
+         // decoded, so running an instruction is one dispatch, not two.
++        // Byte forms narrow both operands and the flag computation to 8 bits.
+         case ADD: {
+-            uint32_t a = load(c, in.dst), b = load(c, in.src), res = a + b;
+-            f = Flags{ADD, a, b, res, 0, 0};
+-            store(c, in.dst, res);
++            uint32_t a = in.width == 1 ? load8(c, in.dst) : load(c, in.dst);
++            uint32_t b = in.width == 1 ? load8(c, in.src) : load(c, in.src);
++            uint32_t res = in.width == 1 ? (a + b) & 0xffu : a + b;
++            f = Flags{ADD, a, b, res, 0, 0, in.width};
++            if (in.width == 1)
++                store8(c, in.dst, res);
++            else
++                store(c, in.dst, res);
+             break;
+         }
+         case OR: {
+-            uint32_t a = load(c, in.dst), b = load(c, in.src), res = a | b;
+-            f = Flags{OR, a, b, res, 0, 0};
+-            store(c, in.dst, res);
++            uint32_t a = in.width == 1 ? load8(c, in.dst) : load(c, in.dst);
++            uint32_t b = in.width == 1 ? load8(c, in.src) : load(c, in.src);
++            uint32_t res = in.width == 1 ? (a | b) & 0xffu : a | b;
++            f = Flags{OR, a, b, res, 0, 0, in.width};
++            if (in.width == 1)
++                store8(c, in.dst, res);
++            else
++                store(c, in.dst, res);
+             break;
+         }
+         case AND: {
+-            uint32_t a = load(c, in.dst), b = load(c, in.src), res = a & b;
+-            f = Flags{AND, a, b, res, 0, 0};
+-            store(c, in.dst, res);
++            uint32_t a = in.width == 1 ? load8(c, in.dst) : load(c, in.dst);
++            uint32_t b = in.width == 1 ? load8(c, in.src) : load(c, in.src);
++            uint32_t res = in.width == 1 ? (a & b) & 0xffu : a & b;
++            f = Flags{AND, a, b, res, 0, 0, in.width};
++            if (in.width == 1)
++                store8(c, in.dst, res);
++            else
++                store(c, in.dst, res);
+             break;
+         }
+         case SUB: {
+-            uint32_t a = load(c, in.dst), b = load(c, in.src), res = a - b;
+-            f = Flags{SUB, a, b, res, 0, 0};
+-            store(c, in.dst, res);
++            uint32_t a = in.width == 1 ? load8(c, in.dst) : load(c, in.dst);
++            uint32_t b = in.width == 1 ? load8(c, in.src) : load(c, in.src);
++            uint32_t res = in.width == 1 ? (a - b) & 0xffu : a - b;
++            f = Flags{SUB, a, b, res, 0, 0, in.width};
++            if (in.width == 1)
++                store8(c, in.dst, res);
++            else
++                store(c, in.dst, res);
+             break;
+         }
+         case XOR: {
+-            uint32_t a = load(c, in.dst), b = load(c, in.src), res = a ^ b;
+-            f = Flags{XOR, a, b, res, 0, 0};
+-            store(c, in.dst, res);
++            uint32_t a = in.width == 1 ? load8(c, in.dst) : load(c, in.dst);
++            uint32_t b = in.width == 1 ? load8(c, in.src) : load(c, in.src);
++            uint32_t res = in.width == 1 ? (a ^ b) & 0xffu : a ^ b;
++            f = Flags{XOR, a, b, res, 0, 0, in.width};
++            if (in.width == 1)
++                store8(c, in.dst, res);
++            else
++                store(c, in.dst, res);
+             break;
+         }
+         case CMP: { // SUB without the store
+-            uint32_t a = load(c, in.dst), b = load(c, in.src);
+-            f = Flags{CMP, a, b, a - b, 0, 0};
++            uint32_t a = in.width == 1 ? load8(c, in.dst) : load(c, in.dst);
++            uint32_t b = in.width == 1 ? load8(c, in.src) : load(c, in.src);
++            uint32_t res = in.width == 1 ? (a - b) & 0xffu : a - b;
++            f = Flags{CMP, a, b, res, 0, 0, in.width};
+             break;
+         }
+         case TEST: { // AND without the store
+-            uint32_t a = load(c, in.dst), b = load(c, in.src);
+-            f = Flags{AND, a, b, a & b, 0, 0};
++            uint32_t a = in.width == 1 ? load8(c, in.dst) : load(c, in.dst);
++            uint32_t b = in.width == 1 ? load8(c, in.src) : load(c, in.src);
++            uint32_t res = in.width == 1 ? (a & b) & 0xffu : a & b;
++            f = Flags{AND, a, b, res, 0, 0, in.width};
+             break;
+         }
+         case IMUL: {
+@@ -788,11 +957,73 @@ void run(X86 *c, const Routine &r) {
              store(c, in.dst, v);
              break;
          }
@@ -1168,7 +1782,7 @@ index b210e66..b00c5d3 100644
              break;
          }
          case RET:
-@@ -821,8 +926,12 @@ void run(X86 *c, const Routine &r) {
+@@ -821,8 +1052,12 @@ void run(X86 *c, const Routine &r) {
  extern "C" int interp_call(X86 *c, uint32_t target) {
      g_error[0] = 0;
      std::shared_ptr<Routine> r = routine_at(target);
@@ -1182,7 +1796,7 @@ index b210e66..b00c5d3 100644
      const uint32_t entry_esp = c->r[R_ESP];
      if (g_depth++ == 0)
          g_steps_left = kMaxSteps;
-@@ -834,6 +943,17 @@ extern "C" int interp_call(X86 *c, uint32_t target) {
+@@ -834,6 +1069,17 @@ extern "C" int interp_call(X86 *c, uint32_t target) {
      try {
          run(c, *r);
      } catch (const Fault &) {
@@ -1216,7 +1830,7 @@ index 0cefcbe..ca18d07 100644
  //
  // Execution is bounded: a routine that never reaches its RET - code that
 diff --git a/runtime/kernel32.cpp b/runtime/kernel32.cpp
-index 529d27d..8f9b37d 100644
+index 529d27d..3af0581 100644
 --- a/runtime/kernel32.cpp
 +++ b/runtime/kernel32.cpp
 @@ -98,8 +98,9 @@ struct HObj {
@@ -1365,7 +1979,23 @@ index 529d27d..8f9b37d 100644
  void k_WriteFile(X86 *c) {
      uint32_t h = arg(c, 0), buf = arg(c, 1), want = arg(c, 2), pwrote = arg(c, 3);
      HObj *o = handle_any(h);
-@@ -1501,6 +1602,10 @@ void k_GetDriveTypeA(X86 *c) {
+@@ -1245,7 +1346,14 @@ void k_GetProcAddress(X86 *c) {
+             dll = kv.first;
+             break;
+         }
+-    uint32_t a = dll.empty() ? 0 : imports_resolve(dll.c_str(), proc.c_str());
++    // The loader names ordinal imports "ordN"; a GetProcAddress by ordinal
++    // arrives as "#N", so translate it to the same key before resolving.
++    uint32_t a = 0;
++    if (!dll.empty()) {
++        a = imports_resolve(dll.c_str(), proc.c_str());
++        if (!a && ordinal)
++            a = imports_resolve(dll.c_str(), ("ord" + std::to_string(name)).c_str());
++    }
+     if (!a) {
+         log_once(("gpa:" + dll + "!" + proc).c_str(),
+                  "GetProcAddress(%s, \"%s\") -> 0 (no shim registered)",
+@@ -1501,6 +1609,10 @@ void k_GetDriveTypeA(X86 *c) {
  // drives simulation: 004a5590 uses 005cd92c/005cd930 and the real clock.
  // Return the draw deadline to retire after reading the real host time.
  static uint32_t native_frame_clock(X86 *c) {
@@ -1376,7 +2006,7 @@ index 529d27d..8f9b37d 100644
      using Clock = std::chrono::steady_clock;
      static FrameDeadline deadline;
      static int active = 0;
-@@ -1537,6 +1642,12 @@ static uint32_t native_frame_clock(X86 *c) {
+@@ -1537,6 +1649,12 @@ static uint32_t native_frame_clock(X86 *c) {
          return RECOMP_HOOK_FRAME_CLOCK_WAIT_DEADLINE;
      }
      return 0;
@@ -1389,7 +2019,7 @@ index 529d27d..8f9b37d 100644
  }
  void k_GetTickCount(X86 *c) {
      const uint32_t draw_deadline = native_frame_clock(c);
-@@ -1728,6 +1839,26 @@ void k_InitializeCriticalSection(X86 *c) {
+@@ -1728,6 +1846,26 @@ void k_InitializeCriticalSection(X86 *c) {
      }
      set_eax(c, 0);
  }
@@ -1416,7 +2046,7 @@ index 529d27d..8f9b37d 100644
  void k_EnterCriticalSection(X86 *c) {
      imports_call_leaves_surfaces();
      sched_enter_critsec(arg(c, 0));
-@@ -4218,6 +4349,7 @@ void create_file_named(X86 *c, const std::string &name) {
+@@ -4218,6 +4356,7 @@ void create_file_named(X86 *c, const std::string &name) {
      uint32_t h = handle_new(H_FILE);
      handles()[h].fd = fd;
      handles()[h].path = host;
@@ -1424,7 +2054,7 @@ index 529d27d..8f9b37d 100644
      if (deferred) {
          handles()[h].write_pending = true;
          handles()[h].write_flags = wanted;
-@@ -4849,7 +4981,7 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4849,7 +4988,7 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "GetTimeFormatA", 6, nullptr},
      {"KERNEL32.dll", "GetDiskFreeSpaceExA", 4, nullptr},
      {"KERNEL32.dll", "GetLongPathNameA", 3, nullptr},
@@ -1433,7 +2063,7 @@ index 529d27d..8f9b37d 100644
      {"KERNEL32.dll", "HeapValidate", 3, nullptr},
      {"KERNEL32.dll", "QueueUserAPC", 3, nullptr},
      {"KERNEL32.dll", "SetConsoleCtrlHandler", 2, nullptr},
-@@ -4864,6 +4996,9 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4864,6 +5003,9 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "InterlockedDecrement", 1, k_InterlockedDecrement},
      {"KERNEL32.dll", "InterlockedExchange", 2, k_InterlockedExchange},
      {"KERNEL32.dll", "InitializeCriticalSection", 1, k_InitializeCriticalSection},
@@ -1598,7 +2228,7 @@ index b457d2f..936e056 100644
                         uint32_t retval);
  
 diff --git a/runtime/tests/interp_tests.cpp b/runtime/tests/interp_tests.cpp
-index d20c50b..3a38d57 100644
+index d20c50b..0514456 100644
 --- a/runtime/tests/interp_tests.cpp
 +++ b/runtime/tests/interp_tests.cpp
 @@ -24,7 +24,22 @@ uint8_t *g_mem;
@@ -1649,7 +2279,7 @@ index d20c50b..3a38d57 100644
      if (target == NATIVE) {
          ++g_native_calls;
          g_native_arg = rd32(c->r[R_ESP] + 4);
-@@ -92,6 +120,166 @@ static X86 fresh() {
+@@ -92,6 +120,222 @@ static X86 fresh() {
      return c;
  }
  
@@ -1813,10 +2443,66 @@ index d20c50b..3a38d57 100644
 +    CHECK(memcmp(&c, &before, sizeof c) == 0);
 +}
 +
++// The byte ALU/MOV forms and the direction flag: the CRT's CMP byte ptr
++// [ESI],BL and SEH prologues' CLD run through the interpreter when no
++// translated entry covers them. Flags come from the 8-bit result, and the
++// untouched high bytes of registers and neighbors stay intact.
++static void test_byte_alu_and_direction() {
++    // CMP [ESI],BL with [ESI]=0x09, BL=0x09 -> ZF; then JZ taken.
++    // MOV AL,[ESI]; ADD AL,BL with carry out of bit 7 -> CF/ZF/AF/SF/OF/PF.
++    // CLD clears DF; STD sets it back.
++    put(CODE, {0x38, 0x1e,             // cmp byte ptr [esi], bl
++               0x74, 0x02,             // jz +2
++               0xb0, 0xff,             // mov al, 0xff (skipped)
++               0x8a, 0x06,             // mov al, [esi]
++               0x00, 0xd8,             // add al, bl
++               0x88, 0x07,             // mov [edi], al
++               0xfc,                   // cld
++               0xfd,                   // std
++               0xc3});                // ret
++    X86 c = fresh();
++    c.r[R_ESI] = DATA + 0x40;
++    c.r[R_EDI] = DATA + 0x50;
++    c.r[R_EBX] = 0x12340900u; // BL=0x09, high bytes must survive
++    c.r[R_EAX] = 0xdeadbe00u;
++    wr8(DATA + 0x40, 0x09);
++    wr32(c.r[R_ESP], RETURN);
++    CHECK(interp_call(&c, CODE) == 1);
++    // 0x09+0x09=0x12: no carry, ZF=0, SF=0, PF=1 (two bits), AF=1 (nibble carry).
++    CHECK(c.r[R_EAX] == 0xdeadbe12u);
++    CHECK(rd8(DATA + 0x50) == 0x12);
++    CHECK(rd8(DATA + 0x51) == 0); // one byte only
++    CHECK(c.eflags_cf == 0 && c.eflags_zf == 0 && c.eflags_sf == 0);
++    CHECK(c.eflags_pf == 1 && c.eflags_af == 1 && c.eflags_of == 0);
++    CHECK(c.eflags_df == 1); // STD last
++    CHECK(c.r[R_EBX] == 0x12340900u);
++    CHECK(c.eip == RETURN);
++
++    // Carry out of the byte: 0xf7+0x09=0x00 with CF/ZF/AF/PF, SF=0, OF=0.
++    // AH (high byte) load/store round-trips without touching AL.
++    put(CODE, {0x8a, 0x26,             // mov ah, [esi]
++               0x00, 0xdc,             // add ah, bl
++               0x88, 0x27,             // mov [edi], ah
++               0xc3});                // ret
++    c = fresh();
++    c.r[R_ESI] = DATA + 0x40;
++    c.r[R_EDI] = DATA + 0x50;
++    c.r[R_EBX] = 0x00000900u; // BL=0x09
++    c.r[R_EAX] = 0x000000f7u; // AL=0xf7 must survive AH writes
++    wr8(DATA + 0x40, 0xf7);
++    wr32(c.r[R_ESP], RETURN);
++    CHECK(interp_call(&c, CODE) == 1);
++    CHECK(c.r[R_EAX] == 0x000000f7u); // AL intact, AH back to 0x00
++    CHECK(rd8(DATA + 0x50) == 0x00);
++    CHECK(c.eflags_cf == 1 && c.eflags_zf == 1 && c.eflags_af == 1);
++    CHECK(c.eflags_sf == 0 && c.eflags_of == 0 && c.eflags_pf == 1);
++    CHECK(c.eip == RETURN);
++}
++
  static void test_bank_routine() {
      // The shape of an audio bank routine: fetch values through helpers and
      // store them into the parameter block the caller passes.
-@@ -180,10 +368,14 @@ static void test_tail_call_out() {
+@@ -180,10 +424,14 @@ static void test_tail_call_out() {
  
  static void test_refusals() {
      // An instruction outside the set: nothing runs.
@@ -1832,7 +2518,7 @@ index d20c50b..3a38d57 100644
      CHECK(memcmp(&c, &before, sizeof c) == 0);
      CHECK(strstr(interp_last_error(), "unsupported") != nullptr);
      // A branch into the middle of an instruction.
-@@ -310,6 +502,15 @@ int main(int argc, char **argv) {
+@@ -310,6 +558,15 @@ int main(int argc, char **argv) {
          return 1;
      if (argc == 3 && !strcmp(argv[1], "--run"))
          return run_hex(argv[2]);
@@ -1848,10 +2534,11 @@ index d20c50b..3a38d57 100644
      // Without the interpreter's step budget the checks in test_step_budget do
      // not fail, they never come back; the watchdog turns that into a failure.
      // The whole suite inside the budget is a fraction of a second.
-@@ -318,6 +519,9 @@ int main(int argc, char **argv) {
+@@ -318,6 +575,10 @@ int main(int argc, char **argv) {
      alarm(30);
  #endif
      test_bank_routine();
++    test_byte_alu_and_direction();
 +    test_call_redirected_state();
 +    test_stack_flags_thunk();
 +    test_x87_memory();
@@ -1971,6 +2658,67 @@ index 81654b4..7abbd88 100644
      flags = ["-i"] if args.write else ["--dry-run", "--Werror"]
      for offset in range(0, len(files), 50):
          subprocess.run([str(binary), *flags, *map(str, files[offset:offset + 50])],
+diff --git a/tools/recomp/tests/test_translate_config.py b/tools/recomp/tests/test_translate_config.py
+index 0dbb471..9105dc3 100644
+--- a/tools/recomp/tests/test_translate_config.py
++++ b/tools/recomp/tests/test_translate_config.py
+@@ -83,5 +83,56 @@ class ConfigureTests(unittest.TestCase):
+         self.assertEqual(out, ["c->r[0] = ((uint32_t)recomp_visual_animation_tick(rd32(0x1234u)));"])
+ 
+ 
++class ForgetBodiesStubImage(object):
++    base, end = 0x400000, 0x401000
++
++    def is_exec(self, va):
++        return self.base <= va < self.end
++
++
++class ForgetBodiesTests(unittest.TestCase):
++    def write_list(self, tmp, values):
++        path = Path(tmp) / "forget-bodies.json"
++        import json
++        path.write_text(json.dumps(values), encoding="utf-8")
++        return path
++
++    def load(self, tmp, values, listed=(), entries=()):
++        import tempfile
++        path = self.write_list(tmp, values)
++        cfg = {"dir": Path(tmp),
++               "translate": {"forget_bodies_file": path.name,
++                             "entry_points": list(entries)}}
++        return translate.load_forget_bodies(cfg, ForgetBodiesStubImage(), listed)
++
++    def test_absent_file_means_empty(self):
++        cfg = {"dir": Path("/nonexistent"), "translate": {}}
++        self.assertEqual(translate.load_forget_bodies(cfg, ForgetBodiesStubImage(), []),
++                         frozenset())
++
++    def test_accepts_audited_orphans(self):
++        import tempfile
++        with tempfile.TemporaryDirectory() as tmp:
++            out = self.load(tmp, [0x400100, 0x400200], listed=[0x400000],
++                            entries=[0x400000])
++            self.assertEqual(out, frozenset({0x400100, 0x400200}))
++
++    def test_rejects_listed_starts_entries_and_outside(self):
++        import tempfile
++        for bad in ([0x400000],):
++            with tempfile.TemporaryDirectory() as tmp:
++                with self.assertRaises(translate.TranslateError):
++                    self.load(tmp, bad, listed=[0x400000])
++        with tempfile.TemporaryDirectory() as tmp:
++            with self.assertRaises(translate.TranslateError):
++                self.load(tmp, [0x400010], entries=[0x400010])
++        with tempfile.TemporaryDirectory() as tmp:
++            with self.assertRaises(translate.TranslateError):
++                self.load(tmp, [0x500000])
++        with tempfile.TemporaryDirectory() as tmp:
++            with self.assertRaises(translate.TranslateError):
++                self.load(tmp, ["0x400100"])
++
++
+ if __name__ == "__main__":
+     unittest.main()
 diff --git a/tools/recomp/tests/test_translate_driver.py b/tools/recomp/tests/test_translate_driver.py
 index 71465b7..567fee9 100644
 --- a/tools/recomp/tests/test_translate_driver.py
@@ -2016,6 +2764,317 @@ index 71465b7..567fee9 100644
  
  
  @pytest.mark.parametrize("relocated", [False, True])
+diff --git a/tools/recomp/tests/test_translate_insns.py b/tools/recomp/tests/test_translate_insns.py
+index 0aa877b..530744e 100644
+--- a/tools/recomp/tests/test_translate_insns.py
++++ b/tools/recomp/tests/test_translate_insns.py
+@@ -176,6 +176,13 @@ def seg_store_setup(rng):
+     return {"regs": rand_regs(rng, ECX=SCRATCH + 0x40)}
+ 
+ 
++def lds_setup(rng):
++    """A far pointer in scratch: the dword loads, the selector is dropped."""
++    return {"regs": rand_regs(rng, ECX=SCRATCH + 0x40),
++            "mem": [(SCRATCH + 0x40, struct.pack("<IH", rng.getrandbits(32),
++                                                rng.getrandbits(16)))]}
++
++
+ def check_seg_store(native, emu):
+     # Unicorn has no GDT, so its CS is not Windows's; the translator stores
+     # the selector a 32-bit Windows process sees, which is what a CONTEXT
+@@ -436,6 +443,64 @@ CASES = [
+     Case("STC and CLC set and clear the carry", 0x0D012000,
+          [(0x0, "STC"), (0x1, "SETC AL"), (0x4, "CLC"), (0x5, "SETC BL"), (0x8, "RET")],
+          "F9  0F 92 C0  F8  0F 92 C3  C3", lambda rng: {"regs": rand_regs(rng)}),
++    Case("AAD with base 10 adjusts AX and reports the AL flags", 0x0D027000,
++         [(0x0, "AAD 0xa"), (0x2, "SETC BL"), (0x5, "SETZ BH"),
++          (0x8, "SETS CL"), (0xb, "SETP CH"), (0xe, "RET")],
++         "D5 0A  0F 92 C3  0F 94 C7  0F 99 C1  0F 9A C5  C3",
++         lambda rng: {"regs": rand_regs(rng)}),
++    Case("AAD with base 0 keeps AL and clears AH", 0x0D027100,
++         [(0x0, "AAD 0x0"), (0x2, "SETC BL"), (0x5, "SETZ BH"),
++          (0x8, "SETS CL"), (0xb, "SETP CH"), (0xe, "RET")],
++         "D5 00  0F 92 C3  0F 94 C7  0F 99 C1  0F 9A C5  C3",
++         lambda rng: {"regs": rand_regs(rng)}),
++    Case("AAD with base 0xc7 folds AH into AL", 0x0D027200,
++         [(0x0, "AAD 0xc7"), (0x2, "SETC BL"), (0x5, "SETZ BH"),
++          (0x8, "SETS CL"), (0xb, "SETP CH"), (0xe, "RET")],
++         "D5 C7  0F 92 C3  0F 94 C7  0F 99 C1  0F 9A C5  C3",
++         lambda rng: {"regs": rand_regs(rng)}),
++    Case("AAD with base 0xc8 folds AH into AL", 0x0D027300,
++         [(0x0, "AAD 0xc8"), (0x2, "SETC BL"), (0x5, "SETZ BH"),
++          (0x8, "SETS CL"), (0xb, "SETP CH"), (0xe, "RET")],
++         "D5 C8  0F 92 C3  0F 94 C7  0F 99 C1  0F 9A C5  C3",
++         lambda rng: {"regs": rand_regs(rng)}),
++    Case("AAA leaves AX alone when the nibble is decimal and AF is clear", 0x0D027400,
++         [(0x0, "MOV EAX,0x9"), (0x5, "ADD AL,0x0"), (0x7, "AAA"),
++          (0x8, "PUSHF"), (0xa, "POP BX"), (0xc, "RET")],
++         "B8 09 00 00 00  04 00  37  66 9C  66 5B  C3",
++         lambda rng: {"regs": rand_regs(rng, EAX=0x9)}),
++    Case("AAA adjusts AX when the nibble exceeds 9", 0x0D027500,
++         [(0x0, "MOV EAX,0xa"), (0x5, "ADD AL,0x0"), (0x7, "AAA"),
++          (0x8, "PUSHF"), (0xa, "POP BX"), (0xc, "RET")],
++         "B8 0A 00 00 00  04 00  37  66 9C  66 5B  C3",
++         lambda rng: {"regs": rand_regs(rng, EAX=0xa)}),
++    Case("AAA adjusts AX when AF arrives set even for a decimal nibble", 0x0D027600,
++         [(0x0, "MOV EAX,0x9"), (0x5, "ADD AL,0x9"), (0x7, "AAA"),
++          (0x8, "PUSHF"), (0xa, "POP BX"), (0xc, "RET")],
++         "B8 09 00 00 00  04 09  37  66 9C  66 5B  C3",
++         lambda rng: {"regs": rand_regs(rng, EAX=0x9)}),
++    Case("AAS leaves AX alone when the nibble is decimal and AF is clear", 0x0D027700,
++         [(0x0, "MOV EAX,0x9"), (0x5, "SUB AL,0x0"), (0x7, "AAS"),
++          (0x8, "PUSHF"), (0xa, "POP BX"), (0xc, "RET")],
++         "B8 09 00 00 00  2C 00  3F  66 9C  66 5B  C3",
++         lambda rng: {"regs": rand_regs(rng, EAX=0x9)}),
++    Case("AAS borrows across AX when the nibble exceeds 9", 0x0D027800,
++         [(0x0, "MOV EAX,0xa"), (0x5, "SUB AL,0x0"), (0x7, "AAS"),
++          (0x8, "PUSHF"), (0xa, "POP BX"), (0xc, "RET")],
++         "B8 0A 00 00 00  2C 00  3F  66 9C  66 5B  C3",
++         lambda rng: {"regs": rand_regs(rng, EAX=0xa)}),
++    Case("AAS borrows when AF arrives set even for a decimal nibble", 0x0D027900,
++         [(0x0, "MOV EAX,0x20"), (0x5, "SUB AL,0x10"), (0x7, "AAS"),
++          (0x8, "PUSHF"), (0xa, "POP BX"), (0xc, "RET")],
++         "B8 20 00 00 00  2C 10  3F  66 9C  66 5B  C3",
++         lambda rng: {"regs": rand_regs(rng, EAX=0x20)}),
++    Case("FFREEP leaves the x87 stack alone as Unicorn computes it", 0x0D028000,
++         [(0x0, "FLD1"), (0x2, "FLD1"), (0x4, "FFREEP ST1"),
++          (0x6, "FNSTSW AX"), (0x8, "RET")],
++         "D9 E8  D9 E8  DF C9  DF E0  C3",
++         lambda rng: {"args": []}),
++    Case("LDS loads the register and drops the segment", 0x0D028100,
++         [(0x0, "LDS EDX,[ECX]"), (0x2, "RET")],
++         "C5 11  C3", lds_setup),
+     Case("REPE CMPSD compares dwords until they differ", 0x0D013000,
+          [(0x0, "CMPSD.REPE ES:EDI,ESI"), (0x2, "RET")],
+          "F3 A7  C3", cmps_setup),
+diff --git a/tools/recomp/tests/test_translate_noreturn.py b/tools/recomp/tests/test_translate_noreturn.py
+index f569db1..abf04aa 100644
+--- a/tools/recomp/tests/test_translate_noreturn.py
++++ b/tools/recomp/tests/test_translate_noreturn.py
+@@ -5,6 +5,8 @@
+ import os
+ import sys
+ 
++import capstone
++
+ HERE = os.path.dirname(os.path.abspath(__file__))
+ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
+ sys.path.insert(0, os.path.join(ROOT, "tools/recomp"))
+@@ -70,3 +72,214 @@ def test_a_popped_jump_goes_only_to_pushed_continuations():
+     text = translate(listing)
+     assert "L_0040110e:" in text
+     assert "00401117" not in text
++
++
++class BytesImage(object):
++    """Synthetic bytes with a real decoder, so the XOR/JZ proof can fire.
++
++    NoImage deliberately exposes no decoder; this stub exposes just enough
++    original bytes for measure() and constant_zero_branches() to run the
++    same checks they run on game listings."""
++
++    def __init__(self, base, code):
++        self.base = base
++        self.data = code
++        self.end = base + len(code)
++        self.md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
++        self.withdrawn_entries = frozenset()
++
++    def insn_end(self, addr, mnem):
++        got = list(self.md.disasm(self.data[addr - self.base:addr - self.base + 16],
++                                  addr, count=1))
++        return got[0].address + got[0].size if got else None
++
++    def is_exec(self, va):
++        return self.base <= va < self.end
++
++
++DEAD_CALL_FN, DEAD_CALL, AFTER_DEAD_CALL, TAIL_JUMP = (
++    0x00401000, 0x00401004, 0x00401009, 0x0040100b)
++DEAD_CALL_LISTING = (
++    "00401000  XOR EAX,EAX\n"
++    "00401002  JZ 0x00401009\n"
++    "00401004  CALL 0x00ffffff\n"
++    "00401009  NOP\n"
++    "0040100a  RET\n"
++    "0040100b  JMP EDI\n")
++DEAD_CALL_CODE = bytes.fromhex("31C0 7405 E8F6EFFFFF 90 C3 FFE7")
++
++
++def translate_withdrawn(listing, entries, withdrawn):
++    image = BytesImage(DEAD_CALL_FN, DEAD_CALL_CODE)
++    image.withdrawn_entries = frozenset(withdrawn)
++    tr = T.Translator(image, {DEAD_CALL_FN}, Opts())
++    fn = T.Function(DEAD_CALL_FN, "f", len(DEAD_CALL_CODE),
++                    T.parse_listing_text(listing))
++    fn.measure(image)
++    tr.prepare(fn)
++    return "\n".join(tr.translate(fn, entries)), tr
++
++
++def translate_withdrawn_inner_start(listing, entries, withdrawn):
++    """Same, but a recovered function also starts at the computed jump, so
++    the address reaches roots through func_addrs as well as entries."""
++    image = BytesImage(DEAD_CALL_FN, DEAD_CALL_CODE)
++    image.withdrawn_entries = frozenset(withdrawn)
++    tr = T.Translator(image, {DEAD_CALL_FN, TAIL_JUMP}, Opts())
++    fn = T.Function(DEAD_CALL_FN, "f", len(DEAD_CALL_CODE),
++                    T.parse_listing_text(listing))
++    fn.measure(image)
++    tr.prepare(fn)
++    return "\n".join(tr.translate(fn, entries)), tr
++
++
++def test_a_guess_entry_keeps_a_proven_dead_call_alive():
++    """A computed jump reached only through a guess entry voids the XOR/JZ
++    proof, so the dead off-image call is still emitted."""
++    text, _ = translate_withdrawn(DEAD_CALL_LISTING, [TAIL_JUMP], [])
++    assert "00ffffff" in text
++
++
++def test_a_withdrawn_entry_lets_the_proof_drop_the_dead_call():
++    """Withdrawing that guess entry leaves the computed jump unreachable,
++    the proof fires, and the dead call is never emitted."""
++    text, tr = translate_withdrawn(DEAD_CALL_LISTING, [TAIL_JUMP], [TAIL_JUMP])
++    assert "00ffffff" not in text
++    assert tr.stats["_withdrawn_entries"] == 1
++
++
++def test_a_withdrawn_inner_start_does_not_keep_the_proof_voided():
++    """Even when a recovered function starts at the computed jump, a
++    withdrawn address is no root through either term, so the dead call
++    still drops."""
++    text, _ = translate_withdrawn_inner_start(DEAD_CALL_LISTING, [TAIL_JUMP],
++                                              [TAIL_JUMP])
++    assert "00ffffff" not in text
++
++
++def test_an_inner_start_without_withdrawal_keeps_the_dead_call():
++    """Without the withdrawal, the inner function start reaches the computed
++    jump and voids the proof, so the dead call is still emitted."""
++    text, _ = translate_withdrawn_inner_start(DEAD_CALL_LISTING, [], [])
++    assert "00ffffff" in text
++
++
++def test_a_jump_into_dropped_code_gets_a_trap_label():
++    """An unreachable jump to an address the passes dropped would otherwise
++    emit a goto with no label and fail the C build. The plant names the
++    address loudly instead so a wrong deadness proof stops there."""
++    listing = ("00401000  CALL 0x00002000\n"
++               "00401005  INT3\n"
++               "00401006  NOP\n"
++               "00401007  RET\n"
++               "00401008  JMP 0x00401005\n")
++    tr = T.Translator(NoImage(), {0x00401000}, Opts())
++    tr.noreturn_callees = {0x00002000}
++    fn = T.Function(0x00401000, "f", 15, T.parse_listing_text(listing))
++    fn.measure(NoImage())
++    tr.prepare(fn)
++    text = "\n".join(tr.translate(fn, [0x00401006]))
++    assert "goto L_00401005;" in text
++    assert "L_00401005: recomp_unmodelled(c, 0x401005u); return;" in text
++
++
++def test_an_audited_indirect_noreturn_call_traps_without_fallthrough():
++    """An indirect call through the IAT that the audit declares noreturn
++    ends the path with a trap: no fallthrough exit is emitted past it."""
++    listing = ("00401100  PUSH EAX\n"
++               "00401101  CALL dword ptr [0x00402000]\n"
++               "00401107  INT3\n")
++    tr = T.Translator(NoImage(), {0x00401100}, Opts())
++    tr.noreturn_sites = {0x00401101}
++    fn = T.Function(0x00401100, "f", 8, T.parse_listing_text(listing))
++    fn.measure(NoImage())
++    tr.prepare(fn)
++    text = "\n".join(tr.translate(fn, []))
++    assert "recomp_unmodelled(c, 0x401107u); return;" in text
++    assert "00401107 INT3" not in text
++
++
++def test_an_off_image_direct_call_ends_the_path():
++    """A direct CALL whose constant target is outside the image can never
++    return - there is no code there - so its fallthrough is dropped with a
++    trap, exactly like an audited noreturn site."""
++    listing = ("00401000  PUSH EAX\n"
++               "00401001  CALL 0x00ffffff\n"
++               "00401006  INT3\n")
++    image = BytesImage(DEAD_CALL_FN, bytes.fromhex("50 E8F9EFFFFF CC"))
++    tr = T.Translator(image, {DEAD_CALL_FN}, Opts())
++    fn = T.Function(DEAD_CALL_FN, "f", 7, T.parse_listing_text(listing))
++    fn.measure(image)
++    tr.prepare(fn)
++    text = "\n".join(tr.translate(fn, []))
++    assert "recomp_unknown_call(c, 0x401006u); return;" in text
++    assert "00401006 INT3" not in text
++
++
++def make_noreturn_fn(addr, listing):
++    return T.Function(addr, "f", 0x40, T.parse_listing_text(listing))
++
++
++def test_a_jump_terminated_listing_without_returns_still_returns():
++    """A listing with no RET that ends in a direct jump may be cut short by
++    Ghidra (FUN_00826590 ends JMP 00826605, a tail call into live code whose
++    caller fallthrough the first strict browser boot proved live). The shape
++    alone never proves noreturn; return-mangling thunks are audited per call
++    site instead."""
++    tailed = make_noreturn_fn(0x00402000,
++                              "00402000  PUSH EDI\n"
++                              "00402001  MOV EDI,dword ptr [ESP + 0x8]\n"
++                              "00402005  JMP 0x00402010\n")
++    out = T.noreturn_callees_from([tailed], {}, None)
++    assert 0x00402000 not in out
++
++
++def test_a_computed_jump_keeps_its_function_returning():
++    """An indirect jump could conceivably resume the caller, so it stays
++    out of the no-return rule even with no RET in the listing."""
++    ind = make_noreturn_fn(0x00402000,
++                           "00402000  ADD dword ptr [ESP],0x35\n"
++                           "00402007  JMP EDI\n")
++    out = T.noreturn_callees_from([ind], {}, None)
++    assert 0x00402000 not in out
++
++
++def test_a_truncated_listing_without_a_terminal_jump_returns():
++    """A listing that merely stops mid-stream (no terminal jump) is not
++    evidence: Ghidra may have cut it short."""
++    cut = make_noreturn_fn(0x00402000,
++                           "00402000  ADD dword ptr [ESP],0x35\n"
++                           "00402007  PUSH dword ptr [ESP]\n")
++    out = T.noreturn_callees_from([cut], {}, None)
++    assert 0x00402000 not in out
++
++
++def test_a_complete_listing_without_returns_still_returns():
++    """Even a listing that ends exactly at its size with no RET/IRET and no
++    indirect jump may fall off its end into code that returns normally, so
++    size alone proves nothing either."""
++    image = BytesImage(0x00402000, bytes.fromhex("81042435000000"))
++    whole = T.Function(0x00402000, "f", 7, T.parse_listing_text(
++        "00402000  ADD dword ptr [ESP],0x35\n"))
++    out = T.noreturn_callees_from([whole], {}, image)
++    assert 0x00402000 not in out
++
++
++def test_a_truncated_sizeless_tail_without_returns_still_returns():
++    """The same bytes with a larger declared size may continue past the
++    listing with a RET, so short size alone proves nothing."""
++    image = BytesImage(0x00402000, bytes.fromhex("81042435000000"))
++    cut = T.Function(0x00402000, "f", 0x40, T.parse_listing_text(
++        "00402000  ADD dword ptr [ESP],0x35\n"))
++    out = T.noreturn_callees_from([cut], {}, image)
++    assert 0x00402000 not in out
++
++
++def test_a_call_terminated_complete_listing_still_returns():
++    """A listing that ends in a CALL decides through the call: the
++    noreturn-call machinery owns that path, not the shape rule."""
++    image = BytesImage(0x00402000, bytes.fromhex("E800000000"))
++    fn = T.Function(0x00402000, "f", 5, T.parse_listing_text(
++        "00402000  CALL 0x00402005\n"))
++    out = T.noreturn_callees_from([fn], {}, image)
++    assert 0x00402000 not in out
 diff --git a/tools/recomp/tests/test_translate_seh.py b/tools/recomp/tests/test_translate_seh.py
 index e31c835..7c0fbff 100644
 --- a/tools/recomp/tests/test_translate_seh.py
@@ -2144,10 +3203,17 @@ index e31c835..7c0fbff 100644
                                                   ("ESP", True, False)])
  def test_frame_establishment_through_edx_needs_a_zero_base(reg, zeroed, checkpoint):
 diff --git a/tools/recomp/translate.py b/tools/recomp/translate.py
-index 944f2ca..17c24c3 100644
+index 944f2ca..25e8a9d 100644
 --- a/tools/recomp/translate.py
 +++ b/tools/recomp/translate.py
-@@ -24,7 +24,8 @@ import re
+@@ -18,13 +18,15 @@ are enabled by the native host, never by the baseline/differential build.
+ """
+ 
+ import argparse
++import glob
+ import json
+ import os
+ import re
  import struct
  import sys
  import time
@@ -2157,7 +3223,7 @@ index 944f2ca..17c24c3 100644
  from pathlib import Path
  from bisect import bisect_right
  
-@@ -83,6 +84,7 @@ def configure_module(cfg, key):
+@@ -83,6 +85,7 @@ def configure_module(cfg, key):
      global EXTRA_ENTRY_POINTS, FUNCTION_ALIGNMENT, SYMBOL_PREFIX, AUX_MODULE
      global RESUMABLE_STACKS
      RESUMABLE_STACKS = cfg["translate"].get("resumable_stacks", False)
@@ -2165,7 +3231,7 @@ index 944f2ca..17c24c3 100644
      mods = {m["key"]: m for m in cfg.get("aux_modules", [])}
      if key not in mods:
          raise SystemExit("game.toml has no [modules.aux.%s]" % key)
-@@ -130,6 +132,7 @@ def configure(cfg):
+@@ -130,6 +133,7 @@ def configure(cfg):
      global EXTRA_ENTRY_POINTS, FUNCTION_ALIGNMENT
      global RESUMABLE_STACKS
      RESUMABLE_STACKS = cfg["translate"].get("resumable_stacks", False)
@@ -2173,7 +3239,7 @@ index 944f2ca..17c24c3 100644
      EXTRA_ENTRY_POINTS = frozenset(int(a) for a in cfg["translate"].get("entry_points", ()))
      FUNCTION_ALIGNMENT = cfg["translate"].get("function_alignment", 16)
      global OPERAND_REDIRECTS, INSTRUCTION_PATCHES, DATA_SEEDS
-@@ -301,6 +304,16 @@ INTRINSIC_BODY = {
+@@ -301,6 +305,16 @@ INTRINSIC_BODY = {
      INTRINSIC_LONGJMP: "recomp_longjmp(c);",
      INTRINSIC_SETJMP:  "recomp_setjmp(c);",   # single-call fallback, indirect only
  }
@@ -2190,7 +3256,7 @@ index 944f2ca..17c24c3 100644
  
  # --------------------------------------------------------------- registers --
  
-@@ -433,6 +446,18 @@ IMM_RE = re.compile(r"^-?0x[0-9a-fA-F]+$|^-?[0-9]+$")
+@@ -433,6 +447,18 @@ IMM_RE = re.compile(r"^-?0x[0-9a-fA-F]+$|^-?[0-9]+$")
  #: and data selectors, FS for the TEB.  Read-only here; the game never
  #: reloads a segment register.
  SEGMENT_SELECTOR = {"CS": 0x1b, "DS": 0x23, "ES": 0x23, "SS": 0x23, "FS": 0x3b, "GS": 0x00}
@@ -2209,7 +3275,7 @@ index 944f2ca..17c24c3 100644
  ST_RE = re.compile(r"^ST([0-7])$")
  MM_RE = re.compile(r"^MM([0-7])$")
  
-@@ -456,12 +481,12 @@ VECTOR_MNEM = frozenset((
+@@ -456,12 +482,12 @@ VECTOR_MNEM = frozenset((
  def is_vector_insn(mnem, ops):
      """True for an MMX/SSE/SSE2 instruction (see VECTOR_REG_RE).
  
@@ -2224,7 +3290,7 @@ index 944f2ca..17c24c3 100644
          return False
      return mnem in VECTOR_MNEM or any(VECTOR_REG_RE.search(o) for o in ops)
  
-@@ -668,6 +693,8 @@ def parse_listing_text(text):
+@@ -668,6 +694,8 @@ def parse_listing_text(text):
                  raise TranslateError("bad listing line %r" % line)
              addr = int(m.group(1), 16)
              mnem = m.group(2)
@@ -2233,7 +3299,7 @@ index 944f2ca..17c24c3 100644
              rep = None
              if "." in mnem:
                  mnem, rep = mnem.split(".", 1)
-@@ -708,9 +735,14 @@ for _dst, _src in (("E", "Z"), ("NE", "NZ"), ("NAE", "C"), ("NB", "NC"),
+@@ -708,9 +736,14 @@ for _dst, _src in (("E", "Z"), ("NE", "NZ"), ("NAE", "C"), ("NB", "NC"),
  
  JCC = {"J" + k: v for k, v in COND.items()}
  JCC["JECXZ"] = ("c->r[1] == 0", ())
@@ -2248,15 +3314,35 @@ index 944f2ca..17c24c3 100644
  SETCC = {"SET" + k: v for k, v in COND.items()}
  CMOVCC = {"CMOV" + k: v for k, v in COND.items()}
  
-@@ -765,6 +797,7 @@ FLAG_EFFECT = {
+@@ -765,6 +798,9 @@ FLAG_EFFECT = {
      "SAHF": (frozenset(("cf", "pf", "af", "zf", "sf")), NO_FLAGS),
      "POPFD": (ALL_FLAGS, NO_FLAGS),
      "PUSHFD": (NO_FLAGS, ALL_FLAGS),
++    # IRETD restores the full EFLAGS image from the stack, like POPFD.
++    "IRETD": (ALL_FLAGS, NO_FLAGS),
 +    "UD2": (NO_FLAGS, ALL_FLAGS),
      "POPF": (ALL_FLAGS, NO_FLAGS),
      "PUSHF": (NO_FLAGS, ALL_FLAGS),
      "SCASB": (ARITH_ALL, NO_FLAGS),
-@@ -818,6 +851,9 @@ def flag_effect(insn):
+@@ -776,6 +812,17 @@ FLAG_EFFECT = {
+     "CLC": (frozenset(("cf",)), NO_FLAGS),
+     "STC": (frozenset(("cf",)), NO_FLAGS),
+     "NOT": (NO_FLAGS, NO_FLAGS),
++    # AAD sets SF/ZF/PF from the AL result; CF/OF/AF are architecturally
++    # undefined and treated as killed, matching the MUL/LOGIC convention.
++    # The emitter clears CF/OF as Unicorn computes them; AF stays stale.
++    "AAD": (ALL_FLAGS, NO_FLAGS),
++    # AAA adjusts AX when the low nibble of AL exceeds 9 or AF is set,
++    # writing AF/CF and reading AF; every other flag is preserved.
++    "AAA": (frozenset(("af", "cf")), frozenset(("af",))),
++    # AAS is AAA's subtraction twin: same condition, AX shrinks by 0x106
++    # with the same unconditional AL nibble mask; AF/CF written, AF read,
++    # everything else preserved, as Unicorn computes it.
++    "AAS": (frozenset(("af", "cf")), frozenset(("af",))),
+ }
+ 
+ 
+@@ -818,6 +865,9 @@ def flag_effect(insn):
  
  # ------------------------------------------------------------------- image --
  
@@ -2266,7 +3352,7 @@ index 944f2ca..17c24c3 100644
  class Image(object):
      def __init__(self, path):
          import pefile
-@@ -917,8 +953,61 @@ class Image(object):
+@@ -917,8 +967,61 @@ class Image(object):
          return out
  
      def is_exec(self, va):
@@ -2328,7 +3414,7 @@ index 944f2ca..17c24c3 100644
      def seh_landings(self, stub):
          """Classify a Delphi handler stub by structure, never by its target's name.
  
-@@ -1266,12 +1355,23 @@ class Image(object):
+@@ -1266,12 +1369,23 @@ class Image(object):
          looks at every byte offset.
          """
          starts, interior = set(), set()
@@ -2355,7 +3441,7 @@ index 944f2ca..17c24c3 100644
              blob = self.data[lo - self.base:hi - self.base]
              # len(blob) - 3 so the section's final dword is examined too.
              for off in range(len(blob) - 3):
-@@ -1335,7 +1435,7 @@ class Image(object):
+@@ -1335,7 +1449,7 @@ class Image(object):
      REP_PREFIX = {"rep": "REP", "repe": "REPE", "repz": "REPE",
                    "repne": "REPNE", "repnz": "REPNE"}
      #: Mnemonics capstone spells differently from the listing grammar.
@@ -2364,7 +3450,7 @@ index 944f2ca..17c24c3 100644
                    "POPFL": "POPFD", "PUSHFL": "PUSHFD",
                    "CWTL": "CWDE", "CLTD": "CDQ", "CBTW": "CBW",
                    "IRETD": "IRET"}
-@@ -1381,7 +1481,17 @@ class Image(object):
+@@ -1381,7 +1495,17 @@ class Image(object):
              words = words[1:]
          mnem = words[-1].upper()
          mnem = self.MNEM_ALIAS.get(mnem, mnem)
@@ -2383,7 +3469,7 @@ index 944f2ca..17c24c3 100644
          if rep or mnem in Translator.STRING_MNEM:
              ops = []            # implicit ES:EDI / ESI operands carry nothing
          text = "%08x  %s%s%s" % (ci.address, mnem, "." + rep if rep else "",
-@@ -1400,6 +1510,27 @@ class Image(object):
+@@ -1400,6 +1524,27 @@ class Image(object):
      #: 00430ad2 was reaching back 60 KB to 0041fc70.
      RECOVER_WINDOW = 0x8000
  
@@ -2411,7 +3497,7 @@ index 944f2ca..17c24c3 100644
      def recover(self, start, listed, limit=None, bounds=None, boundaries=(),
                  may_pass=None):
          """Decode the block at `start`, following its branches.
-@@ -1432,22 +1563,33 @@ class Image(object):
+@@ -1432,22 +1577,33 @@ class Image(object):
          boundary_set = set(boundaries)
          self.md.detail = True
          seen = {}
@@ -2430,16 +3516,16 @@ index 944f2ca..17c24c3 100644
 +                revisit_condition = (va in seen and not previous_zero
 +                                     and unknown_condition_seen.get(va) is False)
 +                if (va in seen and not revisit_condition) or claimed or va in boundary_set or not (lo <= va < hi):
-                     break
--                got = list(self.md.disasm(self.data[va - self.base:va - self.base + 16],
--                                          va, count=1))
--                if not got or got[0].address + got[0].size > hi:
++                    break
 +                # Audited non-code bytes are never translated: entry, branch
 +                # and fall-through paths all stop here, bounded or not. The
 +                # pointer scan and entry loading already refuse these ranges;
 +                # recovery must not decode through them either.
 +                if self.is_declared_data(va):
-+                    break
+                     break
+-                got = list(self.md.disasm(self.data[va - self.base:va - self.base + 16],
+-                                          va, count=1))
+-                if not got or got[0].address + got[0].size > hi:
 +                ci = self._decode_recovery_instruction(va, self.data)
 +                if ci is None or ci.address + ci.size > hi:
                      if bounds is not None:
@@ -2450,7 +3536,7 @@ index 944f2ca..17c24c3 100644
                  index = bisect_right(boundaries, va)
                  if index < len(boundaries) and ci.address + ci.size > boundaries[index]:
                      break  # Do not consume another candidate's first opcode byte.
-@@ -1456,25 +1598,35 @@ class Image(object):
+@@ -1456,25 +1612,35 @@ class Image(object):
                          self.md.detail = False
                          return []
                      break
@@ -2494,7 +3580,7 @@ index 944f2ca..17c24c3 100644
                  va = nxt
              else:
                  truncated = True
-@@ -1495,8 +1647,13 @@ class Image(object):
+@@ -1495,8 +1661,13 @@ class Image(object):
          """
          if self.md is None or not (self.base <= va and va + 16 <= self.end):
              return None
@@ -2510,7 +3596,7 @@ index 944f2ca..17c24c3 100644
          if not got:
              return None
          if (got[0].mnemonic in ("wait", "fwait") and mnem != "WAIT"
-@@ -1520,6 +1677,23 @@ class Image(object):
+@@ -1520,6 +1691,23 @@ class Image(object):
  
  # -------------------------------------------------------------- translator --
  
@@ -2534,7 +3620,7 @@ index 944f2ca..17c24c3 100644
  class Function(object):
      def __init__(self, addr, name, size, insns):
          self.addr = addr
-@@ -1544,7 +1718,7 @@ class Function(object):
+@@ -1544,7 +1732,7 @@ class Function(object):
                  self.contiguous[i] = False
  
  
@@ -2543,7 +3629,7 @@ index 944f2ca..17c24c3 100644
  
  
  def seh_chain_operand(op, zero_base=0):
-@@ -1553,14 +1727,15 @@ def seh_chain_operand(op, zero_base=0):
+@@ -1553,14 +1741,15 @@ def seh_chain_operand(op, zero_base=0):
              and op.base in (None, zero_base) and op.index is None and op.disp == 0)
  
  
@@ -2562,7 +3648,7 @@ index 944f2ca..17c24c3 100644
      for j in range(i - 1, max(-1, i - 16), -1):
          if not fn.contiguous[j] or fn.insns[j + 1].addr in targets:
              return False
-@@ -1579,11 +1754,17 @@ def seh_zero_base(fn, i, reg):
+@@ -1579,11 +1768,17 @@ def seh_zero_base(fn, i, reg):
  def seh_restore_sites(fn):
      """Recognize unlink-only helpers as well as restores in establishing bodies."""
      result = set()
@@ -2582,7 +3668,7 @@ index 944f2ca..17c24c3 100644
              continue
          if ins.mnem == "POP":
              result.add(i)
-@@ -1594,9 +1775,10 @@ def seh_restore_sites(fn):
+@@ -1594,9 +1789,10 @@ def seh_restore_sites(fn):
      return result
  
  
@@ -2594,7 +3680,7 @@ index 944f2ca..17c24c3 100644
      helper = getattr(image, "seh_constructor_helper", None)
      if helper is not None:
          stub = helper(fn.addr)
-@@ -1605,7 +1787,7 @@ def seh_frame_sites(fn, image=None):
+@@ -1605,7 +1801,7 @@ def seh_frame_sites(fn, image=None):
              # through ECX. Keep its checkpoint live until its return, then
              # let the caller adopt it; never leave setjmp in a dead helper.
              for i, ins in enumerate(fn.insns):
@@ -2603,7 +3689,7 @@ index 944f2ca..17c24c3 100644
                      dst, src = [parse_operand(op) for op in ins.ops]
                      if (seh_chain_operand(dst, 2) and dst.base == 2
                              and src.kind == "reg" and src.reg == 1):
-@@ -1624,16 +1806,50 @@ def seh_frame_sites(fn, image=None):
+@@ -1624,16 +1820,50 @@ def seh_frame_sites(fn, image=None):
              stub = helper(target)
              if stub is not None:
                  sites[i] = stub
@@ -2656,7 +3742,23 @@ index 944f2ca..17c24c3 100644
              if (not seh_chain_operand(dst, zero_base) or src.kind != "reg" or src.reg != 4
                      or src.size != 32 or not seh_chain_operand(parse_operand(push.ops[0]), zero_base)
                      or not fn.contiguous[i - 1]):
-@@ -1734,6 +1950,9 @@ class Translator(object):
+@@ -1684,6 +1914,15 @@ def noreturn_callees_from(parsed, iat_names, image=None):
+         # A loop that cannot fall out of itself never returns either.
+         if Translator.closed_noreturn_loop(fn):
+             out.add(fn.addr)
++        # NOTE (2026-10-15): a broader rule lived here - any listing without
++        # RET/IRET ending in a direct JMP, or ending exactly at its size -
++        # and the first strict browser boot proved it unsound: FUN_00826590
++        # ends in JMP 00826605 only because Ghidra cut the listing there (a
++        # tail call into live code), and treating its caller fallthrough as
++        # dead aborted the boot. Return-mangling thunks (ADD [ESP],X first,
++        # JMP into a RET-n firewall) are audited per call site instead, in
++        # no-fallthrough-calls.json, where a wrong site announces itself as
++        # a strict stop naming the site rather than corrupting the build.
+         last = fn.insns[-1]
+         if last.mnem == "CALL":
+             target = Translator.branch_target(last)
+@@ -1734,6 +1973,9 @@ class Translator(object):
          #: A CALL to one ends its block: the emitter leaves a trap in place of
          #: the fall-through instead of a jump onto the padding that follows.
          self.noreturn_callees = set()
@@ -2666,16 +3768,49 @@ index 944f2ca..17c24c3 100644
          self.seh_helpers = set()
          #: Does a pointer to this address name data rather than code? The
          #: driver installs its judgement before the first translation pass
-@@ -1796,7 +2015,7 @@ class Translator(object):
+@@ -1796,7 +2038,21 @@ class Translator(object):
          if ins.mnem != "CALL":
              return False
          t = self.branch_target(ins)
 -        return t is not None and t in self.noreturn_callees
-+        return ins.addr in self.noreturn_sites or (t is not None and t in self.noreturn_callees)
++        if ins.addr in self.noreturn_sites or (t is not None and t in self.noreturn_callees):
++            return True
++        # A direct CALL whose constant target is not in the image at all can
++        # never return: there is no code there to come back from (imports go
++        # through the IAT, shims have their own range, both excluded below).
++        # The bytes were decoded out of step with the stream. Reaching one at
++        # run time still faults loudly at the call itself; only the fallthrough
++        # behind it - padding, tables, more misdecoded bytes - is dropped.
++        # Unit tests build a translator without bytes; the rule needs an image.
++        if self.image is None or self.image.end <= self.image.base:
++            return False
++        return (t is not None
++                and not (self.image.base <= t < self.image.end)
++                and not (GUEST_SHIM_BASE <= t < GUEST_SHIM_END)
++                and t not in INTRINSIC_BODY)
  
      @staticmethod
      def closed_noreturn_loop(fn):
-@@ -1956,7 +2175,9 @@ class Translator(object):
+@@ -1918,7 +2174,7 @@ class Translator(object):
+             writes = set()
+             # Read-only instructions and calls do not explicitly redefine a
+             # saved return register. All unmodelled forms invalidate the proof.
+-            readonly = {"CMP", "TEST", "PUSH", "CALL", "JMP", "RET", "NOP", "WAIT",
++            readonly = {"CMP", "TEST", "PUSH", "CALL", "JMP", "RET", "IRETD", "NOP", "WAIT",
+                         "PAUSE", "CLC", "STC", "CMC", "CLD", "STD", "SAHF", "CLI", "STI"}
+             dest_write = {"MOV", "MOVZX", "MOVSX", "LEA", "POP", "ADD", "ADC", "SUB",
+                           "SBB", "AND", "OR", "XOR", "INC", "DEC", "NEG", "NOT", "SHL",
+@@ -1944,6 +2200,9 @@ class Translator(object):
+                 writes.add(R_EDX)
+             elif m in ("CBW", "CWDE", "LAHF", "XLAT"):
+                 writes.add(R_EAX)
++            elif m in ("AAD", "AAA", "AAS"):
++                # Byte adjustments of AX: AL/AH are rewritten, nothing else.
++                writes.add(R_EAX)
+             else:
+                 return unknown
+             if m == "IMUL" and len(ops) == 1:
+@@ -1956,12 +2215,16 @@ class Translator(object):
                  result.add(ops[0].reg)
              adjustment = None
              if m in ("PUSH", "POP"):
@@ -2686,7 +3821,14 @@ index 944f2ca..17c24c3 100644
              elif m in ("PUSHAD", "PUSHFD", "PUSHF", "POPFD", "POPF"):
                  adjustment = {"PUSHAD": -32, "PUSHFD": -4, "PUSHF": -2,
                                "POPFD": 4, "POPF": 2}[m]
-@@ -2011,6 +2232,8 @@ class Translator(object):
+             elif m == "RET":
+                 adjustment = 4 + (parse_imm(ins.ops[0]) if ins.ops else 0)
++            elif m == "IRETD":
++                adjustment = 12
+             elif (m in ("ADD", "SUB") and ops[0].kind == "reg"
+                   and ops[0].reg == R_ESP and ops[0].size == 32 and ops[1].kind == "imm"):
+                 immediate = ops[1].imm & 0xffffffff
+@@ -2011,6 +2274,8 @@ class Translator(object):
          if t is not None and t not in fn.pushed_continuations:
              return [fn.index[t]] if t in fn.index else []
          nxt = i + 1 if (i + 1 < len(fn.insns) and fn.contiguous[i]) else None
@@ -2695,9 +3837,19 @@ index 944f2ca..17c24c3 100644
          if m == "INT3":
              # MSVC pads between functions with INT3, and a listing cut at a
              # call that never returns runs that padding into the next
-@@ -2021,6 +2244,11 @@ class Translator(object):
+@@ -2020,7 +2285,21 @@ class Translator(object):
+             return []
          if m == "RET":
              return [fn.index[t] for t in sorted(fn.pushed_continuations)]
++        if m == "IRETD":
++            # Like RET, an interrupt return never falls through to the next
++            # instruction; control leaves through the popped EIP.
++            return [fn.index[t] for t in sorted(fn.pushed_continuations)]
++        if m in ("RETF", "JMPF"):
++            # A far return or far jump never falls through either. Their
++            # emission is a trap (see _emit), so there is no flat target to
++            # follow; like RET, only pushed continuations stay reachable.
++            return [fn.index[t] for t in sorted(fn.pushed_continuations)]
          if m in JCC:
 +            if i in getattr(fn, "proven_zero_branches", ()):
 +                t = self.branch_target(ins)
@@ -2707,7 +3859,7 @@ index 944f2ca..17c24c3 100644
              out = [nxt] if nxt is not None else []
              t = self.branch_target(ins)
              if t is not None and t in fn.index:
-@@ -2072,10 +2300,6 @@ class Translator(object):
+@@ -2072,10 +2351,6 @@ class Translator(object):
          """Indices control flow reaches from `roots` and the pushed
          continuations; every index if the body has a computed jump that is
          not POP reg; JMP reg. A call that never returns ends a path."""
@@ -2718,7 +3870,7 @@ index 944f2ca..17c24c3 100644
          roots = set(roots) | set(fn.pushed_continuations)
          work = [fn.index[a] for a in roots if a in fn.index]
          live = set()
-@@ -2086,18 +2310,123 @@ class Translator(object):
+@@ -2086,18 +2361,123 @@ class Translator(object):
              live.add(i)
              if self.never_returns(fn.insns[i]):
                  continue
@@ -2844,7 +3996,7 @@ index 944f2ca..17c24c3 100644
      @staticmethod
      def branch_target(ins):
          if ins.ops and ins.ops[0].startswith("0x"):
-@@ -2547,9 +2876,11 @@ class Translator(object):
+@@ -2547,9 +2927,11 @@ class Translator(object):
  
      @staticmethod
      def writes_reg32(ins, reg):
@@ -2857,7 +4009,7 @@ index 944f2ca..17c24c3 100644
              return reg == 1                # ECX
          if ins.mnem in ("CMP", "TEST", "PUSH", "JMP") or ins.mnem in JCC:
              return False
-@@ -2571,8 +2902,10 @@ class Translator(object):
+@@ -2571,8 +2953,10 @@ class Translator(object):
          is strict and a target that is still not an instruction boundary is an
          error."""
          fn.index = {ins.addr: k for k, ins in enumerate(fn.insns)}
@@ -2869,22 +4021,32 @@ index 944f2ca..17c24c3 100644
          fn.seh_restores = seh_restore_sites(fn)
          self.strict = strict
          for i, ins in enumerate(fn.insns):
-@@ -2595,6 +2928,8 @@ class Translator(object):
+@@ -2595,6 +2979,17 @@ class Translator(object):
          preceded by a dispatch switch, and every entry is a three-line wrapper,
          so no code is duplicated."""
          entries = sorted(set(entries))
++        # Audited withdrawals win over discovery: an extra entry the game
++        # audit withdrew never becomes a root, wrapper or label here, so a
++        # guess entry cannot keep provably dead code alive. Live code that
++        # genuinely needs the address re-seeds it through the main loop.
++        withdrawn_here = [e for e in entries
++                          if e in getattr(self.image, "withdrawn_entries", ())]
++        if withdrawn_here:
++            self.stats["_withdrawn_entries"] += len(withdrawn_here)
++            entries = [e for e in entries if e not in withdrawn_here]
 +        fn.proven_zero_branches = {}
 +        fn.proven_fixed_jumps = {}
          # An alternate entry must be an instruction in THIS body.  A block can
          # be re-recovered between the discovery rounds and the final pass -
          # recursive descent makes them grow - so an entry registered against
-@@ -2612,9 +2947,29 @@ class Translator(object):
+@@ -2612,9 +3007,30 @@ class Translator(object):
              live_out = [ALL_FLAGS] * len(fn.insns)
          else:
              live_out = self.liveness(fn)
 +        # Compare against the ordinary conservative CFG, dropping only paths
 +        # made impossible by an original-byte, single-entry XOR/JE proof.
 +        roots = {fn.addr} | set(entries) | (set(fn.index) & self.func_addrs)
++        roots -= set(getattr(self.image, "withdrawn_entries", ()))
 +        roots.update(t for ins in fn.insns if ins.mnem == "CALL"
 +                     and (t := self.branch_target(ins)) in fn.index)
 +        fn.proven_zero_branches = {}
@@ -2909,7 +4071,7 @@ index 944f2ca..17c24c3 100644
  
          labels = set(fn.pushed_continuations)
          # RTL fill/move routines compute addresses within unrolled code rather
-@@ -2637,12 +2992,13 @@ class Translator(object):
+@@ -2637,12 +3053,13 @@ class Translator(object):
                      labels.add(t)
              # A listing gap or an end-of-block fall-through emits a transfer
              # too, and its target needs a label just as much as a branch's.
@@ -2925,7 +4087,25 @@ index 944f2ca..17c24c3 100644
              t = fn.fallthrough[last] or fn.end
              if t in fn.index:
                  labels.add(t)
-@@ -2693,7 +3049,8 @@ class Translator(object):
+@@ -2683,6 +3100,17 @@ class Translator(object):
+         prologue = len(out)          # everything emitted so far is dispatch
+         for i, ins in enumerate(fn.insns):
+             if i in dead:
++                # A jump from emitted-but-unreachable code to an address the
++                # passes dropped would otherwise emit a goto with no label
++                # and fail the C build. Plant a loud trap instead: reaching
++                # it means the deadness proof was wrong, and that must stop
++                # with the address rather than falling into whatever the C
++                # compiler lays out next. Unreferenced dead code still emits
++                # nothing at all.
++                if ins.addr in labels:
++                    self.stats["_dead_jump_target_trapped"] += 1
++                    out.append("L_%08x: recomp_unmodelled(c, %s); return;"
++                               % (ins.addr, hexlit(ins.addr)))
+                 continue
+             if ins.addr in labels:
+                 out.append("L_%08x: ;" % ins.addr)
+@@ -2693,7 +3121,8 @@ class Translator(object):
              # functions: the byte after it belongs to whatever comes next, so
              # this body ends here rather than falling through into it.
              if (not fn.contiguous[i] and ins.mnem not in TERMINATORS
@@ -2935,7 +4115,7 @@ index 944f2ca..17c24c3 100644
                  t = fn.fallthrough[i]
                  self.stats["_listing_gap"] += 1
                  self.notes.append(
-@@ -2705,7 +3062,7 @@ class Translator(object):
+@@ -2705,7 +3134,7 @@ class Translator(object):
          last_i = max(i for i in range(len(fn.insns)) if i not in dead)
          last = fn.insns[last_i]
          if (last.mnem not in TERMINATORS and last.mnem != "INT3"
@@ -2944,7 +4124,23 @@ index 944f2ca..17c24c3 100644
              t = fn.fallthrough[last_i] or fn.end
              self.stats["_fallthrough_exit"] += 1
              out.append("    " + " ".join(self.goto_target(fn, t, last)))
-@@ -2833,9 +3190,34 @@ class Translator(object):
+@@ -2829,13 +3258,50 @@ class Translator(object):
+             # before parsing refuses the whole function over a path CPUID
+             # keeps the guest from taking.
+             return ["recomp_unmodelled(c, %s); return;" % hexlit(ins.addr)]
++        if m in ("CALLF", "JMPF", "RETF"):
++            # Far control transfers have no meaning in the flat model: there
++            # is no GDT/LDT to resolve a selector against, and their operands
++            # do not even parse as flat addresses. Every game site uses a
++            # wild selector (CALLF 0x81d9:.., RETF to a garbage CS), so
++            # hardware would raise #GP if one were ever reached. Trap loudly
++            # with the address, as above, rather than emitting an
++            # execution-shaped lie; a future overlap audit may prove the tail
++            # dead instead. Three sibling sites (RETF in 00d51020/01207840,
++            # LES in 01297ff5) are already dropped as dead by the noreturn
++            # machinery; these are the ones local reasoning cannot place.
++            return ["recomp_unmodelled(c, %s); return;" % hexlit(ins.addr)]
+         if m in self.STRING_MNEM and not names_an_xmm(ins):
              # Ghidra prints the implicit ES:EDI / ESI operands; they carry no
              # information the mnemonic does not already imply.
              return self.emit_string(ins, m)
@@ -2980,7 +4176,7 @@ index 944f2ca..17c24c3 100644
          # ---------------------------------------------------------- data --
          if m == "MOV":
              size = operand_size(ops)
-@@ -2924,7 +3306,7 @@ class Translator(object):
+@@ -2924,7 +3390,7 @@ class Translator(object):
              return L
  
          if m == "PUSH":
@@ -2989,7 +4185,7 @@ index 944f2ca..17c24c3 100644
              if size == 16:
                  L.append("uint32_t v_ = %s;" % read_op(ops[0], 16))
                  L.append("c->r[4] -= 2; wr16(c->r[4], (uint16_t)v_);")
-@@ -2942,6 +3324,20 @@ class Translator(object):
+@@ -2942,6 +3408,20 @@ class Translator(object):
              return L
  
          if m == "POP":
@@ -3010,7 +4206,7 @@ index 944f2ca..17c24c3 100644
              size = operand_size(ops, hint=32)
              if size == 16:
                  L.append("uint32_t v_ = rd16(c->r[4]); c->r[4] += 2;")
-@@ -2955,12 +3351,36 @@ class Translator(object):
+@@ -2955,12 +3435,36 @@ class Translator(object):
                  L.append("c->eip = %s; recomp_seh_frame_leave(c);" % hexlit(ins.addr))
              return L
  
@@ -3048,7 +4244,58 @@ index 944f2ca..17c24c3 100644
          if m == "POPFD":
              return ["x86_set_eflags(c, rd32(c->r[4])); c->r[4] += 4;"]
          if m == "PUSHF":
-@@ -3163,6 +3583,19 @@ class Translator(object):
+@@ -2991,6 +3495,50 @@ class Translator(object):
+                     "((uint32_t)(int32_t)(int8_t)c->r[0] & 0xffffu);"]
+         if m == "CWDE":
+             return ["c->r[0] = (uint32_t)(int32_t)(int16_t)c->r[0];"]
++        if m == "AAD":
++            # ASCII adjust AX before division: AL = AH*base + AL (wrapped to
++            # a byte), AH = 0. SF/ZF/PF follow the AL result; CF/OF read as
++            # cleared under Unicorn (architecturally undefined, and no game
++            # code can rely on them); AF is left stale and killed above.
++            base = parse_imm(ins.ops[0]) & 0xff
++            L.append("uint32_t ax_ = c->r[0] & 0xffffu;")
++            L.append("uint32_t r_ = (((ax_ >> 8) * %du) + (ax_ & 0xffu)) & 0xffu;" % base)
++            L.append("c->r[0] = (c->r[0] & 0xffff0000u) | r_;")
++            L += self.flags_logic(8, live - {"af"})
++            return L
++        if m == "AAA":
++            # ASCII adjust AL after addition. When the low nibble exceeds 9
++            # or AF arrived set, AX grows by 0x106 (the 16-bit carry reaches
++            # AH, unlike the SDM's separate byte adds) and AF/CF are set;
++            # otherwise AX is unchanged and AF/CF are cleared. Either way the
++            # AL high nibble is then masked off, and every other flag is
++            # preserved. This is what Unicorn computes, verified exhaustively
++            # below, so the 16-bit carry and both masks are load-bearing.
++            L.append("uint32_t ax_ = c->r[0] & 0xffffu;")
++            L.append("uint32_t adj_ = (((ax_ & 0x0fu) > 9u) || c->eflags_af);")
++            L.append("uint32_t nu_ = (ax_ + (adj_ ? 0x106u : 0u)) & 0xff0fu;")
++            L.append("c->r[0] = (c->r[0] & 0xffff0000u) | nu_;")
++            if "af" in live:
++                L.append("c->eflags_af = adj_;")
++            if "cf" in live:
++                L.append("c->eflags_cf = adj_;")
++            return L
++        if m == "AAS":
++            # ASCII adjust AL after subtraction: the mirror of AAA with a
++            # 16-bit borrow. When the low nibble exceeds 9 or AF arrived
++            # set, AX shrinks by 0x106 (the borrow reaches AH) and AF/CF
++            # are set; otherwise AX is unchanged and AF/CF are cleared. The
++            # AL high nibble is masked off either way and every other flag
++            # is preserved, exactly as Unicorn computes it.
++            L.append("uint32_t ax_ = c->r[0] & 0xffffu;")
++            L.append("uint32_t adj_ = (((ax_ & 0x0fu) > 9u) || c->eflags_af);")
++            L.append("uint32_t nu_ = (ax_ - (adj_ ? 0x106u : 0u)) & 0xff0fu;")
++            L.append("c->r[0] = (c->r[0] & 0xffff0000u) | nu_;")
++            if "af" in live:
++                L.append("c->eflags_af = adj_;")
++            if "cf" in live:
++                L.append("c->eflags_cf = adj_;")
++            return L
+         if m in ("LDMXCSR", "STMXCSR"):
+             # The SSE control word. This kit models one rounding mode and
+             # masks every exception, which is what a guest sets it to; a store
+@@ -3163,6 +3711,19 @@ class Translator(object):
          # ---------------------------------------------------- control flow --
          if m in JCC:
              cond = JCC[m][0]
@@ -3068,7 +4315,7 @@ index 944f2ca..17c24c3 100644
              t = self.branch_target(ins)
              if t is None:
                  raise TranslateError("indirect conditional jump")
-@@ -3178,7 +3611,7 @@ class Translator(object):
+@@ -3178,7 +3739,7 @@ class Translator(object):
              if ins.ops and ins.ops[0].startswith("0x"):
                  t = int(ins.ops[0], 16)
                  L.append("c->r[4] -= 4; wr32(c->r[4], %s);" % hexlit(nxt))
@@ -3077,25 +4324,69 @@ index 944f2ca..17c24c3 100644
                      # The host jmp_buf has to belong to a frame that is still
                      # live when _longjmp fires, so setjmp is taken here rather
                      # than inside the runtime (runtime/intrinsics.h).
-@@ -3201,12 +3634,15 @@ class Translator(object):
+@@ -3201,19 +3762,24 @@ class Translator(object):
                      L.append("c->eip = %s;" % hexlit(ins.addr))
                      L.append("{ jmp_buf *b_ = recomp_seh_frame_adopt(c); "
                               "if (b_) { if (setjmp(*b_)) { recomp_seh_land(c); return; } } }")
 -                if t in self.noreturn_callees:
-+                if self.never_returns(ins):
-                     # The callee throws or exits; what follows is padding and
-                     # tables, never code.  Reaching this line means it came
-                     # back after all, which the runtime then reports by address.
-                     self.stats["_noreturn_trap"] += 1
--                    L.append("recomp_unknown_call(c, %s); return;" % hexlit(nxt))
-+                    if ins.addr in self.noreturn_sites:
-+                        L.append("recomp_unmodelled(c, %s); return;" % hexlit(nxt))
-+                    else:
-+                        L.append("recomp_unknown_call(c, %s); return;" % hexlit(nxt))
+-                    # The callee throws or exits; what follows is padding and
+-                    # tables, never code.  Reaching this line means it came
+-                    # back after all, which the runtime then reports by address.
+-                    self.stats["_noreturn_trap"] += 1
++            else:
++                L.append("uint32_t t_ = %s;" % read_op(ops[0], 32))
++                L.append("c->r[4] -= 4; wr32(c->r[4], %s);" % hexlit(nxt))
++                L.append("recomp_call(c, t_);")
++                if RESUMABLE_STACKS:
++                    L.append("if (c->eip != %s) return;" % hexlit(nxt))
++                self.stats["_call_indirect"] += 1
++            if self.never_returns(ins):
++                # The callee throws or exits; what follows is padding and
++                # tables, never code.  Reaching this line means it came
++                # back after all, which the runtime then reports by address.
++                # Direct and indirect calls share it: an audited IAT site
++                # (ExitProcess and kin) ends its path exactly the same way.
++                self.stats["_noreturn_trap"] += 1
++                if ins.addr in self.noreturn_sites:
++                    L.append("recomp_unmodelled(c, %s); return;" % hexlit(nxt))
++                else:
+                     L.append("recomp_unknown_call(c, %s); return;" % hexlit(nxt))
+-                return L
+-            L.append("uint32_t t_ = %s;" % read_op(ops[0], 32))
+-            L.append("c->r[4] -= 4; wr32(c->r[4], %s);" % hexlit(nxt))
+-            L.append("recomp_call(c, t_);")
+-            if RESUMABLE_STACKS:
+-                L.append("if (c->eip != %s) return;" % hexlit(nxt))
+-            self.stats["_call_indirect"] += 1
+             return L
+ 
+         if m == "RET":
+@@ -3231,6 +3797,24 @@ class Translator(object):
                  return L
-             L.append("uint32_t t_ = %s;" % read_op(ops[0], 32))
-             L.append("c->r[4] -= 4; wr32(c->r[4], %s);" % hexlit(nxt))
-@@ -3439,9 +3875,11 @@ class Translator(object):
+             return ["c->eip = rd32(c->r[4]); c->r[4] += %du; " % (4 + n) +
+                     orphan + "recomp_return(c); return;"]
++        if m == "IRETD":
++            # Same-privilege interrupt return: pop EIP, discard the flat CS,
++            # restore the EFLAGS image, and return through the popped address
++            # exactly like RET. A wrong CS or a privilege change would fault
++            # on hardware; this model only runs flat user-mode guests.
++            orphan = "recomp_seh_frame_orphan(c, seh_mark_); " if i in fn.seh_escapes else ""
++            return ["c->eip = rd32(c->r[4]); x86_set_eflags(c, rd32(c->r[4] + 8u)); "
++                    "c->r[4] += 12u; " + orphan + "recomp_return(c); return;"]
++        if m in ("LDS", "LES", "LSS", "LFS", "LGS"):
++            # A far pointer load in the flat model: keep the general-register
++            # dword from guest memory - a wild address faults on the read,
++            # exactly as hardware would - and drop the segment half, the way
++            # MOV to a segment register already does. No flags are affected.
++            if (len(ops) != 2 or ops[0].kind != "reg" or ops[0].size != 32
++                    or ops[1].kind != "mem"):
++                raise TranslateError("%s without a register/memory form" % m)
++            L.append(write_op(ops[0], 32, "rd32(%s)" % addr_expr(ops[1])))
++            return L
+ 
+         # ------------------------------------------------------------ SSE --
+         # Data movement only, in dword lanes. A Delphi runtime's FillChar and
+@@ -3439,9 +4023,11 @@ class Translator(object):
          if m == "HLT":
              return ["recomp_hlt(c);"]
          if m == "INT":
@@ -3108,7 +4399,7 @@ index 944f2ca..17c24c3 100644
          if m == "IN":
              size = operand_size(ops[:1], hint=32)
              port = read_op(ops[1], 32) if len(ops) > 1 else "0u"
-@@ -3454,9 +3892,10 @@ class Translator(object):
+@@ -3454,9 +4040,10 @@ class Translator(object):
              return L
          if m in ("NOP", "WAIT", "PAUSE"):
              return [";"]
@@ -3121,7 +4412,7 @@ index 944f2ca..17c24c3 100644
              return ["c->fpu_tag = 0xffffu;"]
          if m == "STMXCSR":
              # No translated SSE arithmetic changes MXCSR, so expose its reset value.
-@@ -3497,7 +3936,7 @@ class Translator(object):
+@@ -3497,7 +4084,7 @@ class Translator(object):
              return  # a translator built without bytes, as the unit tests are
          if self.image.base <= t < self.image.end:
              return
@@ -3130,7 +4421,23 @@ index 944f2ca..17c24c3 100644
              return
          raise TranslateError("call to %08x, which is outside the image" % t)
  
-@@ -3962,19 +4401,22 @@ def retarget_withdrawn(body, pruned):
+@@ -3901,6 +4488,15 @@ class Translator(object):
+             return ["x87_set_cw(c, rd16(%s));" % addr_expr(ops[0])]
+         if m == "FFREE":
+             return [";"]
++        if m == "FFREEP":
++            # Free-plus-pop of an x87 register. Unicorn 2.1.4 executes it as
++            # a full no-op - no tag change and no TOP change on full, partial
++            # and empty stacks, confirmed through FNSTSW - and this kit
++            # already models FFREE itself as ";", so the oracle and the kit
++            # agree. This differs from AMD-documented free-plus-pop; if
++            # browser evidence ever shows live x87 desync at such a site,
++            # revisit with that address in hand.
++            return [";"]
+         if m in ("FSAVE", "FNSAVE"):
+             return ["x87_fnsave(c, %s);" % addr_expr(ops[0])]
+         if m == "FRSTOR":
+@@ -3962,19 +4558,22 @@ def retarget_withdrawn(body, pruned):
      if not pruned:
          return body
      out = []
@@ -3165,7 +4472,40 @@ index 944f2ca..17c24c3 100644
      return out
  
  
-@@ -4045,6 +4487,21 @@ def main():
+@@ -3995,6 +4594,32 @@ def load_functions(only=None):
+     return funcs
+ 
+ 
++def load_forget_bodies(cfg, image, listed_starts):
++    """Audited recovered bodies to drop as if never recovered.
++
++    Each address must be executable code that is neither a listed function
++    start nor a configured entry point; the audit (zero static references,
++    junk content, dangling-only behavior) lives beside the game config and
++    the loader re-checks every address, so a stale audit fails loudly
++    instead of hiding a real function."""
++    inputs = cfg.get("translate", {})
++    if not inputs.get("forget_bodies_file"):
++        return frozenset()
++    try:
++        bodies = json.loads((Path(cfg["dir"]) / inputs["forget_bodies_file"]).read_text())
++    except (OSError, ValueError) as e:
++        raise TranslateError("forget-bodies file unreadable: %s" % e)
++    if not isinstance(bodies, list):
++        raise TranslateError("forget-bodies requires an address list")
++    entries = set(inputs.get("entry_points", ()))
++    for addr in bodies:
++        if (type(addr) is not int or not image.is_exec(addr)
++                or addr in listed_starts or addr in entries):
++            raise TranslateError(
++                "forget-bodies address is not a droppable recovered body: %r" % addr)
++    return frozenset(bodies)
++
++
+ def main():
+     ap = argparse.ArgumentParser()
+     ap.add_argument("--out", required=True, help="where the generated sources go (build/recomp/gen)")
+@@ -4045,6 +4670,49 @@ def main():
          AUX_MODULE = {"name": args.as_module, "base": cfg["game"]["image_base"],
                        "size": 0}  # the image's extent, filled in once it is read
      image = Image(BINARY)
@@ -3181,13 +4521,41 @@ index 944f2ca..17c24c3 100644
 +            if not RESUMABLE_STACKS or not isinstance(sites, list):
 +                raise TranslateError("call-site contracts require resumable_stacks and an address list")
 +            for site in sites:
-+                if type(site) is not int or not image.is_exec(site) or image.rd8(site) != 0xe8:
-+                    raise TranslateError("call-site contract is not a direct CALL in code: %r" % site)
++                if type(site) is not int or not image.is_exec(site):
++                    raise TranslateError("call-site contract is not code: %r" % site)
++                if image.rd8(site) == 0xe8:
++                    continue  # direct CALL, the original shape
++                # Indirect call through the IAT to an import that never
++                # returns (ExitProcess and kin, by OS contract). The audit
++                # pins the address; the loader re-checks the bytes, the
++                # shape and the import name so a stale audit fails loudly.
++                decoded = (list(image.md.disasm(
++                    image.data[site - image.base:site - image.base + 16],
++                    site, count=1)) if image.md is not None else [])
++                slot = None
++                if len(decoded) == 1 and decoded[0].mnemonic == "call":
++                    match = re.match(r"^dword ptr \[(0x[0-9a-fA-F]+)\]$",
++                                     decoded[0].op_str.strip())
++                    if match:
++                        slot = int(match.group(1), 16)
++                if (slot is None
++                        or image.iat_names.get(slot) not in NORETURN_IMPORTS):
++                    raise TranslateError(
++                        "call-site contract is not a direct CALL in code: %r" % site)
 +            image.noreturn_sites = frozenset(sites)
++        image.withdrawn_entries = frozenset()
++        if inputs.get("withdrawn_entries_file"):
++            withdrawn = json.loads((Path(cfg["dir"]) / inputs["withdrawn_entries_file"]).read_text())
++            if not isinstance(withdrawn, list):
++                raise TranslateError("withdrawn entries require an address list")
++            for target in withdrawn:
++                if type(target) is not int or not image.is_exec(target):
++                    raise TranslateError("withdrawn entry is not executable code: %r" % target)
++            image.withdrawn_entries = frozenset(withdrawn)
      discovered = []
      if args.discovered:
          global EXTRA_ENTRY_POINTS
-@@ -4072,11 +4529,17 @@ def main():
+@@ -4072,11 +4740,17 @@ def main():
  
      t0 = time.time()
      entries = load_functions(set(args.only) if args.only else None)
@@ -3205,7 +4573,7 @@ index 944f2ca..17c24c3 100644
              listed_starts.append(a)
              p = os.path.join(LISTINGS, "%08x.asm" % a)
              if os.path.exists(p) and os.path.getsize(p) > 0:
-@@ -4102,6 +4565,7 @@ def main():
+@@ -4102,6 +4776,7 @@ def main():
      for addr, name, nbytes, path in entries:
          try:
              insns = parse_listing(path)
@@ -3213,7 +4581,21 @@ index 944f2ca..17c24c3 100644
          except TranslateError as e:
              failures.append((addr, "parse: %s" % e))
              continue
-@@ -4488,7 +4952,7 @@ def main():
+@@ -4195,6 +4870,13 @@ def main():
+ 
+     os.makedirs(args.out, exist_ok=True)
+     chunks = []
++    # Chunks are numbered by position, so a run that emits fewer of them
++    # than the previous one would leave stale chunk_*.c behind - and the
++    # build compiles every chunk file in the directory, resurrecting
++    # withdrawn or deduplicated bodies as duplicate symbols. Clear them
++    # first; aux-* module trees in the same directory are preserved.
++    for stale in glob.glob(os.path.join(args.out, "chunk_*.c")):
++        os.unlink(stale)
+ 
+     def accepts(fn, reached=False):
+         """Can the emitter translate every instruction of this block?
+@@ -4488,7 +5170,7 @@ def main():
              return True
          bounds = None
          boundaries = set()
@@ -3222,7 +4604,7 @@ index 944f2ca..17c24c3 100644
          if protected and why == "config":
              # A configured entry states that this address IS a function, but
              # recovery still needs a ceiling. Unbounded, it runs past the body
-@@ -4543,7 +5007,7 @@ def main():
+@@ -4543,7 +5225,7 @@ def main():
                      owned.update(ins.addr for ins in block)
                      fragments.update((ins.addr, ins) for ins in block)
              if owned:
@@ -3231,7 +4613,7 @@ index 944f2ca..17c24c3 100644
              lo_index, hi_index = bisect_right(candidate_starts, t), bisect_right(candidate_starts, bounds[1])
              boundaries = {a for a in candidate_starts[lo_index:hi_index]
                            if a not in owned and a not in finally_owners}
-@@ -4853,6 +5317,9 @@ def main():
+@@ -4853,6 +5535,9 @@ def main():
      seh_stubs = set()
      converged = False
      for _round in range(64):
@@ -3241,14 +4623,26 @@ index 944f2ca..17c24c3 100644
          tr.func_addrs = all_addrs
          tr.all_insn_addrs = set(owner)
          tr.jumptables.clear()
-@@ -5276,12 +5743,40 @@ def main():
+@@ -5276,14 +5961,82 @@ def main():
      # after mismatched returns have unwound the native call stack.
      if RESUMABLE_STACKS:
          starts = {f.addr for f in parsed}
 -        for fn in parsed:
 +        existing_entries = defaultdict(set)
++        withdrawn = [t for t in extra
++                     if t in getattr(image, "withdrawn_entries", ())]
++        for t in withdrawn:
++            del extra[t]
++        if withdrawn:
++            print("  withdrawn entries: %s" %
++                  ", ".join("%08x" % t for t in sorted(withdrawn)),
++                  file=sys.stderr)
 +        for t, home in extra.items():
 +            existing_entries[home.addr].add(t)
++        # Diagnostic seed ledger: which live instruction grew each extra
++        # entry, dumped beside the blockers report when translation stops
++        # for review. Temporary investigation aid, not a contract.
++        extra_seed = {}
 +        work = list(parsed)
 +        queued = {fn.addr for fn in work}
 +        while work:
@@ -3256,7 +4650,13 @@ index 944f2ca..17c24c3 100644
 +            queued.discard(fn.addr)
 +            fn.index = {ins.addr: i for i, ins in enumerate(fn.insns)}
 +            fn.pushed_continuations = tr.live_continuations(fn)
-+            roots = {fn.addr} | existing_entries[fn.addr] | (set(fn.index) & all_addrs)
++            # Withdrawn addresses are never independent roots: not as extra
++            # entries above, and not as inner function starts here. Their own
++            # bodies still translate from their own address, and live code
++            # that genuinely reaches them re-seeds them through the loop.
++            withdrawn_roots = set(getattr(image, "withdrawn_entries", ()))
++            roots = ({fn.addr} | existing_entries[fn.addr]
++                     | ((set(fn.index) & all_addrs) - withdrawn_roots))
 +            fn.proven_zero_branches = tr.constant_zero_branches(fn, roots)
 +            live = tr.reached(fn, roots)
 +            fn.proven_zero_branches = {}
@@ -3280,14 +4680,98 @@ index 944f2ca..17c24c3 100644
 +                    home = owner[target]
 +                    if extra.get(target) is not home:
 +                        extra[target] = home
++                        extra_seed[target] = {
++                            "seeder_fn": "%08x" % fn.addr,
++                            "seeder_insn": "%08x" % ins.addr,
++                            "kind": ("ud2-retry" if ins.mnem == "UD2"
++                                     else "call-fallthrough"),
++                        }
 +                        existing_entries[home.addr].add(target)
 +                        if home.addr not in queued:
 +                            work.append(home)
 +                            queued.add(home.addr)
  
      entries_by_fn = defaultdict(set)
++    # Withdrawn entries stay out even when live code re-seeds them: the
++    # audit claims nothing dispatches to them, and the table below is built
++    # from `extra`, so leaving a re-seeded one in would emit a table slot
++    # with no wrapper behind it - a link error instead of a loud translation
++    # failure. If a live body genuinely calls one, the dangling check below
++    # (which also covers CALL_FN) fails naming caller and target, and the
++    # audit - not the build - is what gets fixed.
++    reseeded = [t for t in extra
++                if t in getattr(image, "withdrawn_entries", ())]
++    for t in reseeded:
++        del extra[t]
++    if reseeded:
++        tr.stats["_withdrawn_reseeded_purged"] = len(reseeded)
++        print("  purged %d re-seeded withdrawn entries: %s"
++              % (len(reseeded), ", ".join("%08x" % t for t in sorted(reseeded)[:12])),
++              file=sys.stderr)
      for t, fn in extra.items():
-@@ -5589,6 +6084,25 @@ def main():
+         entries_by_fn[fn.addr].add(t)
+ 
+@@ -5306,13 +6059,16 @@ def main():
+     # came from Ghidra's listing are never dropped - a dangling target there is
+     # a translator gap, and the invariant below turns it into a build failure.
+     fn_ref = re.compile(r"FN\(([0-9a-f]{8})\)")
++    call_ref = re.compile(r"CALL_FN\(([0-9a-f]{8})\)")
+ 
+     def dangling_targets(body, known):
+         """Literal dispatch targets in this body that are not entry points.
+ 
+-        Both spellings count: `recomp_call`/`recomp_jump` with a constant, and
+-        a direct `FN(ADDR)` reference, which is a link error rather than a
+-        runtime one if the entry has gone."""
++        All spellings count: `recomp_call`/`recomp_jump` with a constant, a
++        direct `FN(ADDR)` reference, and a direct `CALL_FN(ADDR)` call, each
++        of which is a link error rather than a runtime one if the entry has
++        gone (a withdrawn or pruned address called from live code fails here,
++        by name, instead of at wasm-ld)."""
+         out = []
+         for line in body:
+             for kind in ("recomp_call", "recomp_jump"):
+@@ -5331,6 +6087,10 @@ def main():
+                 target = int(hit, 16)
+                 if target not in known:
+                     out.append((target, line.strip()))
++            for hit in call_ref.findall(line):
++                target = int(hit, 16)
++                if target not in known:
++                    out.append((target, line.strip()))
+         return out
+ 
+     # Entries the emitter had to drop are not entry points either.
+@@ -5343,6 +6103,7 @@ def main():
+     withdrawn = []
+     recovered_addrs = prunable_blocks({f.addr for f in recovered}, provenance)
+     pruned = []
++    forget = forget | load_forget_bodies(cfg, image, listed_starts)
+     if forget:
+         for a in sorted(forget):
+             if a in bodies:
+@@ -5542,6 +6303,20 @@ def main():
+         tr.stats["_withdrawn_retargeted"] = len(gone)
+ 
+     ok = [fn for fn in parsed if fn.addr in bodies]
++    # One body per address: recovery can re-walk a listed function and append
++    # a second Function with the same start (its bodies dict already keeps
++    # only the last translation per address). Emitting both would define
++    # fn_ADDR twice and fail the link; dispatch is address-keyed, so keep
++    # the last occurrence per address, matching what bodies[] carries.
++    seen_addrs = set()
++    unique_ok = []
++    for fn in reversed(ok):
++        if fn.addr in seen_addrs:
++            tr.stats["_duplicate_body_dropped"] += 1
++            continue
++        seen_addrs.add(fn.addr)
++        unique_ok.append(fn)
++    ok = unique_ok[::-1]
+     if args.as_module and (args.only or discovered):
+         # Discovery ran over the whole image, as it must to recover a function
+         # whole, but a module carries only the functions it was asked for:
+@@ -5589,6 +6364,25 @@ def main():
                % (at, fn_addr, len(missing), total,
                   " ".join("%08x" % m for m in missing[:6])), file=sys.stderr)
      if (table_gaps or undecoded) and not args.allow_table_gaps:
@@ -3313,7 +4797,7 @@ index 944f2ca..17c24c3 100644
          raise TranslateError(
              "%d jump tables have entries that dispatch nowhere (%d slots in "
              "total) and %d table sites decoded nothing; pass "
-@@ -5663,6 +6177,29 @@ def main():
+@@ -5663,6 +6457,48 @@ def main():
                   % (target, line[:110])))
          dangling = []
      if dangling:
@@ -3340,10 +4824,29 @@ index 944f2ca..17c24c3 100644
 +                                           for t in sorted(entries_by_fn.get(caller, ())) ]}
 +                                      for caller, target, line in dangling],
 +            }, indent=2), encoding="utf-8")
++            seeders = blockers.with_suffix(".seeders.json")
++            seeders.write_text(json.dumps({
++                "scope": ("Diagnostic ledger of extra-entry seeders; "
++                          "temporary investigation aid, not a contract"),
++                "seeds": [{"target": "%08x" % target,
++                           "home": "%08x" % home.addr,
++                           "seeder_fn": seed["seeder_fn"],
++                           "seeder_insn": seed["seeder_insn"],
++                           "kind": seed["kind"],
++                           "provenance": provenance.get(target)}
++                          for target, home in extra.items()
++                          for seed in [extra_seed.get(target, {
++                              "seeder_fn": None, "seeder_insn": None,
++                              "kind": "pre-existing"})]],
++                "dangling_bodies": [{"caller": "%08x" % caller,
++                                     "provenance": provenance.get(caller),
++                                     "listed": caller in listed_functions}
++                                    for caller, target, line in dangling],
++            }, indent=2), encoding="utf-8")
          # A target that Ghidra listed but that failed to translate is the
          # usual cause, so name the failures first: they are what to fix.
          for a, why in failures[:40]:
-@@ -5782,7 +6319,8 @@ def main():
+@@ -5782,7 +6618,8 @@ def main():
      # neither another pop nor dispatching the continuation is correct here.
      call_returns = sorted({
          fn.fallthrough[i] or (fn.insns[i + 1].addr if i + 1 < len(fn.insns) else fn.end)
@@ -3353,6 +4856,141 @@ index 944f2ca..17c24c3 100644
      })
  
      # table.c ---------------------------------------------------------------
+diff --git a/web/player/index.html b/web/player/index.html
+index 66254e1..e78ec22 100644
+--- a/web/player/index.html
++++ b/web/player/index.html
+@@ -15,16 +15,25 @@
+   #status { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+             text-align: center; padding: 0 16px; white-space: pre-line; pointer-events: none; }
+   #status a { pointer-events: auto; color: #8cf; }
++  #diagnostics { position: fixed; bottom: 8px; left: 8px; right: 8px; max-height: 32vh;
++                 overflow: auto; background: #151515e8; padding: 8px; font: 12px monospace; }
++  #diagnostics pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+ </style>
+ </head>
+ <body>
+ <canvas id="canvas" tabindex="-1"></canvas>
+ <div id="status">Loading…</div>
++<details id="diagnostics"><summary id="phase">Preparing browser runtime</summary><pre id="boot-log"></pre></details>
+ <script>
+ "use strict";
+ const statusEl = document.getElementById("status");
+ const canvas = document.getElementById("canvas");
++const diagnostics = document.getElementById("diagnostics");
++const phase = document.getElementById("phase");
++const bootLog = document.getElementById("boot-log");
++let failed = false;
+ function status(text, back) {
++  if (failed && !back) return;
+   statusEl.textContent = text;
+   if (back) {
+     const a = document.createElement("a");
+@@ -36,6 +45,23 @@ function status(text, back) {
+ }
+ const log = [];
+ window.recompLog = log; // for tests
++function record(text) {
++  log.push(String(text));
++  if (log.length > 200) log.shift();
++  bootLog.textContent = log.join("\n");
++}
++function checkpoint(text) {
++  phase.textContent = text;
++  record(text);
++}
++function fail(text) {
++  failed = true;
++  checkpoint(text);
++  diagnostics.open = true;
++  status(text, true);
++}
++window.addEventListener("error", (e) => fail(e.message || "JavaScript resource failed to load."));
++window.addEventListener("unhandledrejection", (e) => fail(String(e.reason?.message || e.reason)));
+ 
+ async function gameId() {
+   const parts = location.pathname.split("/").filter(Boolean);
+@@ -56,10 +82,18 @@ async function start() {
+   let dir = await navigator.storage.getDirectory();
+   try {
+     for (const p of [id, "game"]) dir = await dir.getDirectoryHandle(p);
+-    await dir.getFileHandle(game.executable);
++    const exeFile = await (await dir.getFileHandle(game.executable)).getFile();
++    if (!exeFile.size) throw new Error("Empty executable");
++    const stamp = await (await (await dir.getFileHandle(".stamp")).getFile()).text();
++    if (stamp.trim() !== game.sha256) throw new Error("Incomplete or wrong-version import");
++    for (const name of game.requiredDirs || []) {
++      const folder = await dir.getDirectoryHandle(name);
++      if ((await folder.entries().next()).done) throw new Error(`Empty folder: ${name}`);
++    }
+   } catch {
+-    throw new Error(`${game.title} has not been imported yet.`);
++    throw new Error(`${game.title}: the game import is incomplete or has the wrong executable. Import all game files in the launcher before starting.`);
+   }
++  checkpoint("Game files imported; requesting WebGPU device");
+ 
+   const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+   if (!adapter) throw new Error("WebGPU gave no adapter.");
+@@ -75,18 +109,20 @@ async function start() {
+                    "maxInterStageShaderVariables"])
+     if (k in adapter.limits) requiredLimits[k] = adapter.limits[k];
+   const device = await adapter.requestDevice({ requiredFeatures, requiredLimits });
+-  device.lost.then((info) => status(`The graphics device was lost: ${info.message}`, true));
+-  device.addEventListener("uncapturederror", (e) => console.error("WebGPU:", e.error.message));
++  device.lost.then((info) => fail(`The graphics device was lost: ${info.message}`));
++  device.addEventListener("uncapturederror", (e) => fail(`WebGPU: ${e.error.message}`));
++  checkpoint("WebGPU device ready; loading WebAssembly");
+ 
+   const exe = `/opfs/${id}/game/${game.executable}`;
+   const Module = {
+     canvas,
+     preinitializedWebGPUDevice: device,
+     noInitialRun: true,
+-    print: (t) => { log.push(t); console.log(t); },
+-    printErr: (t) => { log.push(t); console.warn(t); },
++    print: (t) => { record(t); console.log(t); },
++    printErr: (t) => { record(t); diagnostics.open = true; console.warn(t); },
+     setStatus: (t) => status(t ? t : ""),
+-    onAbort: (what) => status(`The game stopped: ${what}`, true),
++    onAbort: (what) => fail(`The game stopped: ${what}`),
++    onExit: (code) => fail(`The runtime exited with code ${code}.`),
+     preRun: [() => {
+       const m = Module;
+       m.ENV.RECOMP_PROFILE_DIR = `/opfs/${id}/profile`;
+@@ -94,21 +130,29 @@ async function start() {
+       for (const [k, v] of extra) if (k.startsWith("RECOMP_")) m.ENV[k] = v;
+     }],
+     onRuntimeInitialized() {
+-      status("");
++      checkpoint("WebAssembly initialized; starting engine");
++      status("Starting engine…");
+       canvas.focus();
+-      Module.callMain([`--exe=${exe}`]);
++      try {
++        const code = Module.callMain([`--exe=${exe}`]);
++        if (code) return fail(`The engine returned error ${code}.`);
++        checkpoint("Engine main returned; guest startup and rendering remain unverified");
++        status("");
++      } catch (e) {
++        fail(`Engine startup failed: ${e.message || e}`);
++      }
+     },
+   };
+   window.Module = Module;
+   const script = document.createElement("script");
+   script.src = "@APP@.js";
+-  script.onerror = () => status("The game's web build is missing.", true);
++  script.onerror = () => fail("The game's web build is missing.");
+   document.body.append(script);
+ }
+ 
+ canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+ canvas.addEventListener("click", () => canvas.focus());
+-start().catch((e) => status(e.message, true));
++start().catch((e) => fail(e.message));
+ </script>
+ </body>
+ </html>
 diff --git a/docs/d3d9-fixed-function.md b/docs/d3d9-fixed-function.md
 new file mode 100644
 index 0000000..3dcc4ca

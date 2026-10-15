@@ -1,14 +1,133 @@
 {
-  "last_translation_run_utc": "2026-10-14T03:31:06.407545+00:00",
+  "last_translation_run_utc": "2026-10-15T00:49:00+00:00",
   "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
   "translation_complete": false,
-  "failed_functions": 10,
-  "dangling_dispatch_references": 147,
+  "failed_functions": 0,
+  "dangling_dispatch_references": 0,
   "full_conversion_percentage": null,
   "browser_gameplay_verified": false,
   "original_menu_verified": false,
   "original_intro_verified": false,
   "first_original_mission_verified": false,
   "original_vehicle_physics_verified": false,
-  "scope": "Current isolated executable; prototype rendering and older-image boot probes are separate evidence"
+  "last_triage_utc": "2026-10-14T18:22:55+00:00",
+  "triage_scope": "PHASE 1 DONE; PHASE 2 DONE (wasm+V8 OK); PHASE 3: strict boot passed DX-CreateEx after real IDirectDraw7; now needs d3d8/dpnhpast presence (registered, building); 336 suites pass; no gameplay verified",
+  "scope": "Current isolated executable; prototype rendering and older-image boot probes are separate evidence",
+  "recreation": {
+    "updated_utc": "2026-10-14T23:29:46Z",
+    "source": "web/recreation",
+    "opening_objective": "El regreso: BMX route and home arrival",
+    "implemented": true,
+    "original_scm_mission": false,
+    "installed_executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "mission_and_save_tests_passed": 3,
+    "cpu_route_complete": true,
+    "cpu_mission_elapsed_seconds": 25.31666666666651,
+    "cpu_world_objects_loaded": 1680,
+    "cpu_world_load_failures": 0,
+    "cpu_local_report": "web/recreation/checks/opening.json",
+    "browser_gameplay_verified": false,
+    "blockers": [
+      "No browser available through the browser-control tool; interactive rendering, rider placement, controls, audio and persistence remain unverified.",
+      "Full original mission scripts, cinematics, dialogue and pursuit are not implemented."
+    ]
+  },
+  "original_start": {
+    "scope": "Experimental original cutscene data playback; original first mission is not implemented",
+    "installed_executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "police_cutscene_cpu_actors": 11,
+    "police_camera_seconds": 80,
+    "automated_tests_passed": 8,
+    "local_report": "web/recreation/checks/cutscene.json",
+    "browser_verified": false,
+    "mission_verified": false,
+    "airport_blocker": "Transformaci\u00c3\u0192\u00c2\u00b3n original no finita con influencia visible:  L Toe0",
+    "audio_blocker": "Both installed prologue tracks contain the same CRC-valid 1.18578125-second Ogg followed by zero padding; original camera durations are 22.333332 and 80 seconds. Native-PC playback/reference remains unverified.",
+    "unverified_deformations": [
+      {
+        "time": 0,
+        "name": "cspulaski",
+        "size": [
+          48.85504327205854,
+          69.8006869130983,
+          77.45476368723894
+        ]
+      }
+    ],
+    "pending": [
+      "Verify native treatment of ANPK timestamps, transformations and camera interpolation",
+      "Verify audio decoding and installed source files",
+      "Implement PROLOG2 and execute original MAIN.SCM mission logic",
+      "Browser rendering and synchronization verification"
+    ],
+    "audio_source_audit": {
+      "scope": "Original prologue audio source, Ogg page CRC and duration verification",
+      "cutscene_archive_sha256": "28d9b9002ac5479106c06ce0fc390120f24e0ac2a2395517badbcbd0adf502cb",
+      "identical_scene_audio": true,
+      "scenes": [
+        {
+          "scene": "prolog1",
+          "trackId": 706,
+          "declaredBytes": 339611,
+          "oggBytes": 9504,
+          "paddingBytes": 330107,
+          "audioSeconds": 1.18578125,
+          "cameraSeconds": 22.333332,
+          "pages": 4,
+          "compatible": false,
+          "payloadSha256": "be1e788caeb8e7f66f43f4c97505245bcc0723bb8ad3762568c15518ddb5b0f4"
+        },
+        {
+          "scene": "prolog3",
+          "trackId": 708,
+          "declaredBytes": 1126397,
+          "oggBytes": 9504,
+          "paddingBytes": 1116893,
+          "audioSeconds": 1.18578125,
+          "cameraSeconds": 80,
+          "pages": 4,
+          "compatible": false,
+          "payloadSha256": "be1e788caeb8e7f66f43f4c97505245bcc0723bb8ad3762568c15518ddb5b0f4"
+        }
+      ],
+      "crc_verified": true,
+      "original_files_modified": false,
+      "local_report": "web/recreation/checks/opening-audio.json"
+    }
+  },
+  "black_screen_triage": {
+    "updated_utc": "2026-10-15T00:15:54.783125+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "wasm_sha256": "12c584f9c91d43022b157edcbe638bd363a73af1ae09cae7342189db3c374bab",
+    "wasm_bytes": 202564142,
+    "reported_url": "http://127.0.0.1:8771/gtasa-singleplayer/",
+    "reported_symptom": "User screenshot: black canvas without visible errors",
+    "verified_findings": [
+      "Previous local seed endpoint listed gta_sa.exe only; game config requires models/data/audio/anim.",
+      "Previous player hid its status before calling engine main and sent stderr/WebGPU validation failures only to the console."
+    ],
+    "implemented": [
+      "Prepared-only local inventory, bounded streaming import with existing launcher hash/stamp/resume logic; profile untouched.",
+      "Player rejects missing completion stamp, wrong-image stamp and empty/missing required directories.",
+      "Bounded on-screen boot log; persistent JS/WebGPU/abort/main error reporting."
+    ],
+    "local_inventory_files": 411,
+    "local_inventory_bytes": 5001060148,
+    "checks": {
+      "player_boot_contract_tests": 5,
+      "server_inventory_http_tests": 3,
+      "launcher_import_tests": 6,
+      "seed_module_syntax": "passed",
+      "live_http_endpoints": "passed",
+      "complete_runtime_patch_reverse_check": "passed",
+      "temporary_index_publication_audit": "passed; 127 source/documentation files; real index untouched",
+      "runtime_source_boundaries": "passed"
+    },
+    "browser_gameplay_verified": false,
+    "black_screen_resolved_in_browser": false,
+    "blockers": [
+      "Computer-use tool exposes no connected browser, so current OPFS contents and post-import runtime/rendering have not been observed.",
+      "Import prepared files through /seed.html and inspect visible engine boot diagnostics. Missing assets are a verified bootstrap defect, not a proven sole cause of the black screen."
+    ]
+  }
 }

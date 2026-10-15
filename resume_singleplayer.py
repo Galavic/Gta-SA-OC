@@ -27,6 +27,15 @@ def main():
         print(f"Translation supervisor PID {process.pid}; log: {LOG}")
         return
     state = json.loads(STATUS.read_text(encoding="utf-8"))
+    if state.get("state") == "translating":
+        # Two translations writing build/recomp/gen at once interleave chunks
+        # and resurrect stale bodies as duplicate symbols; refuse instead.
+        try:
+            os.kill(state["pid"], 0)
+        except OSError:
+            pass
+        else:
+            raise SystemExit(f"Translation already running (PID {state['pid']}); refusing a second writer")
     output = VARIANT / "build/recomp"
     output.mkdir(parents=True, exist_ok=True)
     command = [sys.executable, "-u", str(ROOT / "vendor/recomp-kit/tools/recomp/translate.py"),
