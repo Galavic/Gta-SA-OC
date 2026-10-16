@@ -1,5 +1,526 @@
 # Estado actual
 
+## Alto en la pantalla de carga en blanco (abierto) (2026-10-16)
+
+Tras los títulos, la carga inmediatamente anterior al menú queda en blanco.
+El usuario lo verifica en navegador: pantalla blanca con barra vacía, AGE
+~9-10 s, 0 FPS y ~1169 fotogramas descartados. El bootlog del servidor
+(16:12, 122 líneas) termina tras la inicialización del SoundManager y el
+inicio de la música de menú en bucle (buffers 384/385, 28000 Hz, 554176
+bytes); el sink de audio está sano (`0 starved`) y el huésped se bloquea sin
+`strict-stop` ni mensaje de error. Sospechosos sin confirmar: la import
+`wsprintfA` sin implementar registra "unknown stdcall argument count: not
+adjusting ESP, the guest stack will drift" (deriva potencial de pila si es
+realmente stdcall) y las líneas de `LoadLibrary` de `wmvcore.dll` y
+`quicktime.qts` sin shim poco antes del alto.
+
+Para nombrar la última llamada culpable hace falta la traza completa
+(`?RECOMP_LOG=2`). El transporte del bootlog se optimizó en
+`tools/serve_variant.py`: el escritor anterior (XHR síncrono cada 1500
+líneas, ~66 bloqueos/segundo con nivel 2) se sustituyó por un escritor
+asíncrono encadenado (lotes de 4096 líneas con cabecera `#B` auditable,
+reinyección al frente de la cola si un lote falla, y vaciado síncrono en
+`pagehide`); el espejado a la consola de DevTools ya no ocurre en la página.
+Verificado el servidor en `http://127.0.0.1:8771` (HTTP 200, `drain`
+asíncrono en la página servida). La ejecución del usuario con `RECOMP_LOG=2`
+sobre este transporte sigue pendiente; el estado de la pantalla blanca, del
+menú y de la carga no está verificado.
+
+## Sombreado plano verificado en navegador y suite nativa clasificada (2026-10-16)
+
+El usuario verifica en navegador con el build del 16/10 15:50: la secuencia
+de copyright y la de CJ se dibujan con su sonido; las pantallas de título
+dibujan la barra de progreso y esta se rellena sobre el arte (el sombreado
+plano de función fija llega al rasterizador); después aparece el alto
+documentado en la sección anterior. No se verifica mundo, prólogo ni
+primera misión.
+
+Suite nativa completa (`tools/test.py --native --jobs 4`, juego stub por
+defecto): 24/26 suites pasan. `d3d9_ffp_tests` pasa con 168 comprobaciones y
+0 fallos, incluidos los casos nuevos de sombreado plano: la puerta FFP
+acepta FLAT (rs[9]==1) en el mismo par de shaders, la traducción WebGPU
+declara ambos colores `@interpolate(flat)`, PHONG (3) sigue rechazado y el
+rasterizador CPU pinta el triángulo en el color del vértice provocador.
+`runtime_tests`, `interp_tests`, `gdi_tests`, `host_boundary_check` y el
+resto de la suite pasan.
+
+Corrección de la propia prueba: `flat_shading_cases()` ponía los render
+states en un pipeline local en vez del pipeline vivo del dispositivo, así
+que la puerta FFP veía `D3DRS_LIGHTING` (rs[137]) activado y rechazaba los
+dos dibujos; ahora opera sobre `d9_pipeline(dev->id)` como el resto de los
+casos.
+
+Corrección de prueba obsoleta en `dx_tests`: `test_directdraw_create_ex_fallback`
+codificaba el contrato antiguo de `DirectDrawCreateEx` (rechazo
+`DDERR_UNSUPPORTED`) y fallaba contra la fábrica v7 real pendiente de
+confirmar. Actualizado al contrato nuevo: la fábrica entrega el objeto v7
+(DirectDrawCreate devuelve `DD_OK`), se conservan los rechazos (IID v4,
+agregación y argumentos nulos) y el balance de referencias cierra a cero;
+`dx_tests` pasa completa ("all dx tests passed").
+
+Clasificación de los 2 fallos restantes contra la línea base
+HEAD `eb32cc4` del kit (suite nativa reconstruida en un worktree limpio del
+repositorio del kit): `host_tests` falla exactamente igual (2
+comprobaciones de `host_resource("controls")` con rutas de layout de
+repositorio/paquete) y `gpu_vulkan_tests` falla exactamente igual
+(`gpu_contract_tests.cpp:193`, el ancho del drawable tras
+`resize`+`acquire` no se actualiza en el backend Vulkan). Son fallas
+existentes de plataforma/backend, no del trabajo pendiente: no se tocan su
+subtree ni su contrato en este hito.
+
+Nota sobre Windows: `tools/format.py` requiere `clang-format` accesible;
+instalado (`clang-format==23.1.1` en el venv) y pasando con
+`.venv\Scripts` en el `PATH` (378 fuentes de primera mano formateadas).
+
+## Punto de entrada recuperado en el cargador de ajustes (2026-10-16)
+
+
+Con el shim del filter graph, el arranque avanzó más allá de los estados de
+cine hasta un nuevo alto estricto del usuario: `call to unknown target
+005c1723` y el descarte del tramo
+`["005c16f0", "data", "005c1820"]` en `blocks_withdrawn`. Todavía no hay
+verificación de pantalla, menú, carga ni partida tras ese avance. Evidencia
+verificada sobre el ejecutable: el literal de vtable en `0085a974` nombra
+`005c16f0`
+como puntero de función (ningún literal apunta a `005c1723`), el prólogo es
+`81 EC 88 01 00 00 / 55 56`, el cuerpo termina en `ret 4` en `005c18ed`
+(siguiente prólogo en `005c18f0`) y la reentrada del bucle en `005c1710`
+(`jl 005c1710` en `005c18dd`) queda dentro del cuerpo. La causa del retiro es
+la misma de `005347d0`: el descodificador arrancó la rutina en `005c1723` y la
+reentrada interna del bucle la dejó fuera. Añadido `0x005c16f0` a
+`entry_points` en `variants/singleplayer/game.toml`.
+
+Regeneración con `tools/build.py --game-dir variants/singleplayer --target web
+--diagnostic-all --regenerate`: salida 0, y `005c16f0` aparece una única vez en
+`translate-report.json`, como `recovered_blocks`; no queda en
+`blocks_withdrawn`. Wasm servido:
+`d2f27b1bdb629f3e9a60f7a92b735d4fc136334f73a808a0eb0485017f90b430`
+JS `4087d7786db7e7236794a54cfa738d600fcf2973033c87ef270e56aabe238837`,
+paquete `d328113ff9feb4b2aa809fd5c4ab35c99a4122107c48a2db6ebc225540002fc9`.
+`tools/check_publication.py` pasa. Falta la verificación del usuario en
+navegador; no se afirma menú, carga ni partida jugable.
+
+## Shim del filter graph de DirectShow para la secuencia de cine (2026-10-16)
+
+La traza estricta de 48 462 256 líneas del usuario mostró el arranque nuevo
+detenido en los estados 2/4 de WinMain (`00748b17`): la cola esperaba
+supuestamente el fin de la película, pero el aviso `WM_USER+13` (`0x40d`) nunca
+llegaba, porque `CoCreateInstance(CLSID_FilterGraph {e436ebb3…})` respondía
+`0x80040154` y el juego había cargado sin player. Causa única verificada sobre
+la imagen original y el IDL QuartzTypeLib real: el reproductor de cine usa el
+ABI de DirectShow con offsets exactos — `IGraphBuilder::RenderFile` = +0x34,
+`IMediaControl::Run` = +0x1c y `::Stop` = +0x24, `IMediaEventEx::GetEvent` =
++0x20, `::FreeEventParams` = +0x30 y `::SetNotifyWindow` = +0x34, y
+`IVideoWindow::put_WindowStyle` = +0x24 y `::put_Owner` = +0x74 (interfaces
+duales con IDispatch en 0x0c..0x18). Sólo {56a868b4} (IVideoWindow) faltaba
+registrado además del CLSID.
+
+Implementación en `dx/dshow.cpp`, sin tocar código generado: `CoCreateInstance`
+del FilterGraph crea un graph autónomo (sin stream multimedia; `graph_this`
+usa su propio registro de estado), `RenderFile` guarda la ruta pedida
+(`movies\Logo.mpg`, `movies\GTAtitles.mpg/GTAtitlesGER.mpg` están en el
+paquete) y completa siempre; `Run` encola `EC_COMPLETE` y lo anuncia por
+`SetNotifyWindow` con un mensaje real vía la bomba del host, que reactiva el
+manejador huésped `0x745fb0` y permite avanzar 2→3→4→5. La tabla nueva
+`IVideoWindow` es un no-op documentado en el orden dual del SDK. Los graphs de
+stream (música) no cambian: su `SetNotifyWindow` sigue sin producir mensajes y
+su `Run` sigue decodificando. El destructor borra el estado propio del graph
+autónomo; la referencia es nula.
+
+Alcance declarado: NO se decodifica ni muestra vídeo ni audio de las películas;
+la secuencia de apertura completa de inmediato (equivale a saltarla). No se
+afirma reproducción de vídeo. El dibujado fijo con sombreado plano (pantalla
+de carga posterior) sigue rechazado.
+
+Compilación web: salida 0, servida en el sitio del variant con wasm
+`5f32873e41c55a55d369b8c1720187276c35c6bca12446bdadb824bab7221cfa` (250 221 505
+bytes), JS `8670bab2adc3390cca314460c61ce490172e9bbe152bfb65acbd6ee751e9ba6f` y
+paquete `51564b0c3665e04e5553f8e015e3f2b8c321d388a023d7f5217a15a726dbfbd0`.
+El bootlog anterior (`bootlog.txt`, 2 929 324 465 bytes, y `bootlog.seq`) se
+rotó para la traza siguiente. Pendiente la verificación en navegador del
+usuario: el arranque debe pasar los estados de cine; ninguna prueba local
+acredita menú, carga o partida jugable.
+
+## Desbordamiento de pila durante la carga original (2026-10-15)
+
+Las capturas posteriores del usuario muestran el arte original de carga y
+una superficie blanca, con NEW a 0 FPS mientras el presentador sigue activo.
+El diagnóstico posterior registra `Maximum call stack size exceeded`.
+Esto verifica el bloqueo de carga; todavía no verifica mundo, prólogo ni
+primera misión. Ejecutable:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Wasm servido antes del diagnóstico:
+`4dea1d033cc086d069d2c529b1cee0f22411373a2b11b045cedf62ba9037d529`;
+Wasm servido con el muestreo:
+`3ddac5763b7619025282f8b4092119864248f8acd7026b991231eba40b8c9e70`.
+No se midió la identidad del Wasm cargado por el navegador.
+
+El muestreo opcional ahora puede informar durante la ejecución mediante
+`RECOMP_PROFILE=1&RECOMP_PROFILE_INTERVAL_MS=5000`. Solo lee el índice atómico
+publicado por el planificador. Las cadenas profundas se capturan en el hilo
+propietario. Una muestra repetida después de abortar puede ser un índice
+obsoleto: no demuestra que siga ejecutándose ni un bloqueo en
+LeaveCriticalSection, donde apareció una de las trazas de desbordamiento.
+
+Las cadenas profundas sí identificaron un ciclo real:
+`0069f800 → 004012bb → 0069f806 → 0069f800`, dentro de la conversión de
+cadenas original. El traductor emitía cada JMP entre cuerpos recuperados como
+una llamada nativa. La prueba CPU del ejecutable original conserva el texto
+de 255 caracteres, ESP y ESI, pero con muestreo alcanza profundidades de
+128, 256 y 512 antes de terminar. Identidad del probe previo:
+`3f939375f874a19d6509d3d54494d210342e2c5d532710569a62e5776eab41ca`.
+La corrección devuelve el destino EIP al despachador cuando están activas
+las pilas reanudables. Conserva el salto original, los registros y la pila
+invitada; no omite código ni amplía la pila del navegador. La configuración
+local `legacy_address_intrinsics = false` que dejó DeepSeek se conserva.
+
+La primera regeneración pasó la auditoría principal, pero falló al aplicar
+por error a una DLL la auditoría de cuerpos retirados del ejecutable.
+La auditoría se limita ahora a la imagen principal; la prueba de módulo
+auxiliar cubre ese aislamiento sin relajar sus comprobaciones. Pasan 181
+pruebas del traductor. La regeneración posterior pasa con cero fallos,
+no modelados, huecos de tabla y tablas sin decodificar en la imagen principal
+y las cuatro DLL. La compilación web completa y las pruebas posteriores
+siguen en curso; sus resultados se añadirán al terminar.
+
+Evidencia privada: `build/white-browser-depth-evidence.log`,
+`build/tail-before-identity.json`, `build/tail-before-string-1.log`,
+`build/tail-translator-tests.log`, `build/tail-web-regenerate.log` y
+`build/tail-web-regenerate-fixed.log`. La suite DX conserva sus 27 fallos
+históricos de cursor, disposición y DirectDraw, ajenos a esta corrección.
+El sombreado plano de función fija sigue sin implementarse. La continuación
+de la pantalla blanca en WebGPU, el prólogo, las voces y la primera misión
+requieren verificación en navegador.
+
+## Método virtual de límite de mundo ausente al iniciar partida (2026-10-15)
+
+El informe del usuario detiene la carga nueva partida en `call to unknown
+target 005347d0`. Es el método virtual de recorte de límites invocado desde
+`0053303b` (`CALL [EDX+0x4]`, retorno `0053303e`): no tiene referencia estática
+y solo lo nombra su hueco de tabla en `00866e7c`. El intérprete falla en
+`005347eb` (x87 `FCOMP`), el método devuelve 0 y la caída posterior llama a
+`c4e8600e` desde `00405cfe` (`CALL [EDX+0x8]`, retorno `00405d01`) y termina en
+`memory access out of bounds`. Es un fallo en cadena, no dos huecos.
+
+La causa no era la falta de candidato: el escaneo de punteros de datos sí
+recupera el cuerpo (158 instrucciones, `005347d0..00534ac8`), pero una rama
+desde su propio bloque de tabla de saltos (`00534acc`) hacia la continuación
+`00534aa7` retiraba el tramo completo como cuerpo especulativo, porque no hay
+prefijo terminado antes de ese destino. Un barrido de los cuerpos recuperados
+y luego retirados reunió 33 candidatos; 8 conservan prólogo, terminador y
+cuerpo verificados (los tres despachadores SEH `00474900`, `00478000`,
+`00479da0` y `005cc290`, `005347d0`, `006419f0`, `00690220`, `006cb7c0`).
+Los 8 se añaden como puntos de entrada explícitos de la variante con su
+evidencia; el resto del barrido fueron inicios desalineados o fragmentos.
+
+Traducción repetida: 50 679/51 963 funciones, 154 020 puntos de entrada
+(+103 341 alternativos), sin fallos, sin no modelados y sin huecos de tabla.
+Los ocho aparecen como `entry`/`config` en `build/recomp/gen/symbols.json` y en
+la tabla de despacho `table.c`; las ramas internas de `005347d0` quedan como
+continuaciones de su cuerpo. Los recuentos y la tabla no verifican una partida
+jugable: la compilación web se inició después y la carga en navegador sigue
+sin verificarse. Ejecutable:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Wasm servido al recibir el informe:
+`61036d3839b212996dd5ed68205dad2905feaa088600f1155a315c84af0bdf72`;
+no se midió el Wasm cargado en el navegador.
+
+La compilación web siguiente terminó con salida 0 reutilizando esa traducción,
+y la página del jugador se volvió a preparar. Wasm servido ahora:
+`4dea1d033cc086d069d2c529b1cee0f22411373a2b11b045cedf62ba9037d529`
+(253 836 912 bytes, JavaScript `f0a868da…`, paquete `f81f48d3…`). La carga en
+navegador sigue sin verificarse y ninguna medición establece una partida
+jugable.
+
+## Extensiones de signo y movimientos de 16 bits al cargar partida (2026-10-15)
+
+El informe posterior del usuario detiene la carga en `005c16f0`, retorno
+`004a4b4e`. El primer rechazo es MOVSX EAX,AL en `005c17da`. Los registros
+ampliados conservan ese primer bloqueo y añaden una aserción posterior de
+mutex, contadores de audio sin datos y mensajes Failed to fetch repetidos.
+No son evidencia de una partida jugable. Ejecutable:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Wasm servido al recibir el informe:
+`15e46e850bb21060057fa9cc8ef95b2fed6a269c243dcbef8d501645b1043164`;
+no se midió el Wasm cargado en el navegador.
+
+Se añadieron MOVSX/MOVZX de byte/word a registros de 32 bits y MOV de 16 bits
+entre registros/memoria. La rutina original también usa MOV word en `005c1899`.
+Las lecturas/escrituras comprueban exactamente los dos bytes accedidos;
+los registros conservan sus 16 bits superiores al mover word y la memoria
+adyacente no se modifica. Estas operaciones conservan los flags. Otros opcodes
+con prefijo 0x66 siguen rechazados: no se interpretan como operaciones de 32 bits.
+STRICT_UNKNOWN permanece activo y no se editan archivos originales/generados.
+
+La prueba autónoma pasa **381 comprobaciones, 0 fallos**. Incluye extensión
+negativa/positiva, registros byte altos, acceso word en el límite del arena,
+vecinos de memoria, preservación de flags y rechazo de prefijos no soportados.
+**35 casos contra Unicorn pasan**, salida 0. Sobre el ejecutable verificado,
+la rutina completa desde `005c16f0` pasa el diagnóstico de decodificación sin
+ejecutar instrucciones. No se presenta esa cobertura como ejecución de la
+carga real. Evidencia privada: `build/narrow-result.json`,
+`build/narrow-unit.log`, `build/narrow-decode.log`, `build/narrow-unicorn.log`.
+
+El envío opcional de telemetría a /log no capturaba el rechazo asíncrono de
+fetch: el try/catch solo cubría errores síncronos. Se añade el manejador de
+rechazo. Además, la página conserva el primer error fatal en pantalla y guarda
+los errores posteriores en el registro. Pasan 4 pruebas del servidor y 6 del
+bootstrap, incluida la secuencia aborto → mutex → rechazo de red. No se afirma
+que esto repare todas las peticiones de red ni la aserción de mutex. En la
+comprobación posterior el servidor local estaba detenido y se inició de nuevo;
+la página estricta responde HTTP 200 con la telemetría actualizada.
+
+Compilación web terminada con salida 0. Nuevo Wasm servido:
+`5ad508d814f7e05a0918dae876c12833793deccf6871635176831cc542f8fcb5`.
+Probe CPU:
+`6e158eb71e26bf436fabc7b500d52c32ac49d2610766bab8514cf27f3f931541`.
+Quedan pendientes la continuación al iniciar partida en WebGPU, el prólogo,
+primera misión y audio audible original. Los fallos históricos de la suite DX
+y las interfaces opcionales pendientes se conservan en las secciones anteriores.
+
+## Menú original verificado; bloqueo al iniciar partida (2026-10-15)
+
+Las capturas del usuario muestran el menú original con Start Game, Options y
+Quit Game. El registro inicializa SoundManager, arranca el dispositivo de audio
+y envía PCM no nulo. Eso verifica envío al mezclador, no que se hayan escuchado
+las voces o la música. Se actualiza original_menu_verified a true; no se
+verifican jugabilidad, prólogo ni primera misión. El ejecutable sigue siendo
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+El Wasm servido antes del informe era
+`45ff03479294726106c94f080659787065e8677d274dee1b5884767be3984848`;
+no se midió el módulo que el navegador había cargado.
+
+Al elegir jugar, el usuario informa de un abort estricto en `015633bd`. Sus
+bytes originales coinciden con el comienzo informado. El decodificador acotado
+rechazaba XCHG [ESP],EDX en `0156346e`; la misma rutina también contiene shifts
+y multiplicación firmada de un operando. Se añadieron XCHG de 32 bits,
+SHL/SHR/SAR e IMUL con resultado EDX:EAX, sin cambiar archivos originales,
+fuentes generadas ni desactivar STRICT_UNKNOWN. Los shifts y la multiplicación
+usan las funciones de flags del CPU traducido. XCHG conserva los flags y lee
+ambos operandos antes de escribir, incluyendo operandos que forman la dirección.
+
+La prueba autónoma del intérprete pasa **362 comprobaciones, 0 fallos**:
+intercambio en pila y con direcciones que usan el registro intercambiado,
+redirección de retorno, flags de shifts con cuenta cero/enmascarada, producto
+firmado y overflow, además de los casos anteriores. Al habilitarla se corrigió
+su seam de logging y fixtures anteriores que codificaban BH donde comentaban
+BL, y direcciones DATA con orden de bytes incorrecto. Se implementó MOV inmediato
+a registro byte, presente en una rama que el decodificador valida antes de
+cualquier ejecución, aunque la prueba no la tome.
+
+**23 casos contra Unicorn pasan**, comparando registros, memoria y flags finales
+definidos. Unicorn en Windows emitió un diagnóstico SEH de acceso durante mem_map;
+pytest completó igualmente con salida 0 y 23 passed. No se oculta ese diagnóstico.
+El nuevo modo `game_boot_probe <exe> --decode <dirección>` usa el mismo
+decodificador sin ejecutar instrucciones. Sobre la imagen verificada, toda la
+rutina desde `015633bd` pasa. Esto es cobertura de decodificación, no una prueba
+de que la partida arranque. Evidencia privada: `build/newgame-result.json`,
+`build/newgame-decode.log`, `build/newgame-interp-tests.log`,
+`build/newgame-unicorn-tests.log`.
+
+Compilación web terminada con salida 0. Wasm servido:
+`15e46e850bb21060057fa9cc8ef95b2fed6a269c243dcbef8d501645b1043164`.
+Identidad del probe CPU:
+`b84d9da4773e31e05ed5728faf19660575f87a9978986441cd43ed7fcf38e38d`.
+Se conserva telemetría y el modo estricto. Queda pendiente comprobar en WebGPU
+la continuación al iniciar partida. La captura también muestra una aserción
+posterior de mutex, que no se ha aislado ni se declara corregida. Los 27 fallos
+de la suite DX anterior y las interfaces opcionales no implementadas siguen
+registrados en las secciones históricas siguientes.
+
+## Listener del búfer primario y parámetros de audio 3D (2026-10-15)
+
+El nuevo registro del navegador aportado por el usuario supera la fábrica EAX,
+pero rechaza IDirectSound3DListener en un IDirectSoundBuffer. Después aborta en
+un salto nulo desde `004f153c`; la captura muestra además un fallo posterior de
+mutex pthread. El ejecutable sigue siendo
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+El Wasm servido al recibir ese informe era
+`fffe4e4b468356f2db791b3d056efcde309b42b73d0dc1d7788cd9c87eddf97f`;
+no se midió el hash cargado dentro del navegador.
+
+La rutina original de creación usa flags 0x11 (PRIMARYBUFFER | CTRL3D) y pide
+el listener al búfer primario. El runtime lo ofrecía solo en el dispositivo.
+Ahora el búfer primario 3D expone esa interfaz sobre el mismo objeto COM, con
+referencia propia que mantiene vivo el búfer. Las consultas desde búferes
+secundarios o primarios sin CTRL3D se rechazan y ponen el resultado a cero.
+Las consultas desde otras interfaces del búfer conservan esa restricción.
+También se corrigió DS3DLISTENER: sus parámetros ocupan 64 bytes, no los 68
+que exigía GetAllParameters y leía SetAllParameters. Se valida tamaño exacto.
+
+La prueba enfocada ejecuta la fábrica EAX original traducida, crea el búfer
+primario, obtiene su listener y libera la referencia inicial del búfer. Luego
+GetAllParameters y SetAllParameters por las vtables originales pasan con un
+registro de 64 bytes y canario posterior intacto. Salida 0, pila conservada.
+Las pruebas DX añaden 37 comprobaciones sin nuevos fallos, incluyendo tamaño,
+round trip, referencias y rechazo por capacidades. Total de la suite:
+141.197 comprobaciones, **27 fallos** persistentes en layout del host, cursor
+y fallback DirectDraw; no se declara que la suite completa pase.
+Evidencia privada: `build/listener-result.json`,
+`build/listener-factory-result.log`, `build/listener-dx-tests.log`.
+
+Compilación web terminada con salida 0, página estricta HTTP 200 y telemetría
+conservada. Wasm servido:
+`45ff03479294726106c94f080659787065e8677d274dee1b5884767be3984848`.
+Identidad de la prueba CPU:
+`d37c00444de5db92b5f8fc18ca87f605e57a7e135a1d7a320a210e53a4cd9bb5`.
+La compilación y estas llamadas aisladas no verifican el arranque posterior
+en WebGPU, reproducción audible, menú, prólogo ni primera misión. El error de
+mutex aparece después del aborto en el informe del usuario; no se ha aislado
+su causa ni se afirma que esté corregido. FilterGraph e IKsPropertySet siguen
+sin implementar.
+
+## Enlace de DLL y creación de audio DirectSound8 (2026-10-15)
+
+La captura aportada por el usuario verifica que aparece la pantalla original de
+título/carga. No acredita menú ni juego. Su registro termina en una llamada nula
+a GetCaps, retorno `004d9a25`, después de un éxito ficticio de `EAX.DLL!ord6`,
+y sale con `c0000005`. El ejecutable sigue siendo
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+El Wasm servido al recibir el informe era
+`68da1970d8c7e8a3e8e0b4fcf6e854a70f53bb9bc8d26f1e02e5b68b07f70bec`;
+no se midió el módulo cargado dentro del navegador.
+
+La exportación ordinal 6 de la DLL preparada es EAXDirectSoundCreate8. El
+cargador enlazaba la IAT principal antes de mapear las DLL, dejando un trampoline
+sin implementación en vez de la exportación original. Las importaciones entre
+DLL también dependían del orden de configuración. Ahora primero verifica hashes
+y mapea todas las imágenes; después enlaza las IAT por nombre/ordinal y guarda
+las imágenes enlazadas para recarga. Se mantienen los límites PE originales.
+
+Una prueba directa de esa exportación original reveló además que faltaba
+CLSID_DirectSound8 y que IID_IDirectSound8 estaba mal registrado. Se corrigieron
+ambos registros sobre el objeto DirectSound existente. No se reemplaza la DLL
+original con un retorno simulado ni se desactiva el modo estricto.
+
+La prueba enfocada con código traducido real verifica 58 importaciones entre
+imágenes y sus snapshots de recarga. EAXDirectSoundCreate8 devuelve HRESULT 0,
+objeto válido y pila conservada; la llamada GetCaps por su vtable original
+también devuelve 0. La negativa IKsPropertySet sigue siendo explícita y la DLL
+continúa por su alternativa soportada. Esto no demuestra reproducción audible
+ni efectos EAX. Evidencia privada: `build/audio-factory-result.json` y
+`build/audio-factory-result.log`.
+
+La compilación web termina con salida 0 y ya se sirve el Wasm
+`fffe4e4b468356f2db791b3d056efcde309b42b73d0dc1d7788cd9c87eddf97f`.
+La página estricta responde HTTP 200 y conserva la telemetría local. La nueva
+prueba CPU tiene identidad `93cc9525fb3580dae566458f2ec5ed9dac989c759d02a03e0ca1f431bcc8767b`.
+La suite DX completa ejecuta 141.160 comprobaciones y termina con **27 fallos**:
+expectativas de layout de host de 64 bits en wasm32, cursor aprendido y fallback
+DirectDrawCreateEx. Los subtests de creación COM DirectSound/8 y de datos,
+notificaciones y streaming de audio pasan. No se presenta la suite como verde.
+Registro privado: `build/audio-dx-tests.log`.
+
+Una ejecución CPU limitada a 45 segundos, anterior a la corrección COM, verificó
+los enlaces y permaneció en el bucle de título; no alcanzó la inicialización de
+audio y no sustituye la prueba enfocada. Se conserva su identidad en
+`build/audio-link-probe-result.json`. Sigue pendiente la comprobación visual del
+nuevo arranque en WebGPU y escuchar las voces/música originales. FilterGraph de
+DirectShow sigue sin implementar. No están verificados el menú, prólogo,
+primera misión ni estado jugable.
+
+## Continuación de cámara y declaración de vértices (2026-10-15)
+
+El usuario confirmó por registro del navegador que la corrección anterior
+supera la creación de cámara e inicializa mods. Después rechaza un dibujo
+sin FVF y aborta en `005908f7`. El ejecutable es
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+El Wasm servido al recibir el informe era
+`97a801afbe5d5b8e606ee0065afa54fb765f5ea9d72c39f73c47cd2f5edba1f2`;
+no se midió el hash del módulo cargado dentro del navegador. El bootlog local
+contiene también una ejecución antigua sin modo estricto; no sustituye la
+traza estricta pegada por el usuario.
+
+Causa verificada: un listado truncado terminaba llamando a `007ee180`, que
+retorna por un salto de despacho sin tener RET propio. El traductor lo
+clasificaba globalmente como noreturn y omitía su continuación en `005908f7`.
+La regla ahora conserva esas continuaciones. La nueva generación contiene
+las instrucciones originales y la entrada compilada correspondiente, sin
+el antiguo unknown_call en ese retorno. No se editaron fuentes generadas.
+
+La primera regeneración se rechazó por una arista adicional: `0127f1df`
+llama a un thunk que cambia el retorno de `0127f1e4` a `0127f292`. El
+reconocedor existente `audit_checksum_call_thunks.inspect` verificó la
+secuencia completa original, su checksum, destino calculado `0115cb30` y
+RET 4. Solo entonces se registró el contrato local de no-fallthrough de ese
+CALL y se repitió la traducción. Los archivos originales no se modifican y
+RECOMP_STRICT_UNKNOWN permanece activado. Auditoría privada:
+`build/fallthrough-checksum-contract.json`; contrato en el archivo de
+configuración local indicado por no_fallthrough_calls_file del variant.
+Los bloqueos del primer intento se conservan en
+`build/fallthrough-initial-blockers.json`.
+
+El dibujado fijo también acepta ahora declaraciones explícitas que coinciden
+exactamente con los formatos FVF ya soportados. SetVertexDeclaration borra
+el FVF, y antes esa ruta lo seguía exigiendo. Se validan tipos, offsets,
+orden, stream y terminador; no se adivinan formatos ni se aceptan layouts
+fuera del subconjunto implementado.
+
+Verificación: 181 pruebas del traductor y 150 comprobaciones gráficas del
+runtime pasan. La traducción completa termina con cero funciones fallidas,
+cero instrucciones sin modelar, cero destinos literales colgantes y cero
+huecos/sitios sin decodificar en las tablas. Las traducciones previamente
+verificadas de las DLL de audio se conservaron. La compilación web final
+termina con salida 0; los 32.182.155 bytes de symbols.json empaquetados
+coinciden con la generación actual. V8 compila el Wasm servido y la página
+estricta responde HTTP 200. Se conservan identidad y evidencia históricas.
+
+El probe del entry original, con host gráfico/audio nulo y framebuffer CPU,
+se limitó externamente a 20 segundos. Registró 59 presentaciones de 800x600,
+hasta 281 de 4.949 muestras con color, sin reportes de llamada desconocida,
+aborto ni rechazo del dibujado fijo. Terminó por el límite del ensayo;
+no demuestra que el programa complete el arranque o que no pueda bloquearse
+más adelante. Identidad de su Wasm y logs privados en progress.json.
+
+Wasm web nuevo: `68da1970d8c7e8a3e8e0b4fcf6e854a70f53bb9bc8d26f1e02e5b68b07f70bec` (253710648 bytes). JS/data tienen sus hashes en
+progress.json. El servidor local 8771 ya sirve esta compilación y conserva
+el diagnóstico. Basta recargar el reproductor estricto con Ctrl+F5; no es
+necesario repetir la importación del juego.
+
+Pendiente: observar la imagen WebGPU en el navegador y cualquier bloqueo
+posterior. El control de Windows no conecta con su canal nativo. Estas
+comprobaciones CPU no verifican menú, introducción, misión, audio ni
+jugabilidad, y no se declara resuelta toda la pantalla negra.
+
+
+## Correcciones del runtime original (2026-10-15)
+
+El registro del usuario llega a CreateDevice y termina con ExitProcess(0),
+tras fallar la creación del raster de cámara. El ejecutable sigue siendo
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`. La traza anterior no prueba que el shader sea la causa única.
+La identidad del Wasm anterior a esta recompilación no se capturó; no debe
+atribuirse esa traza al binario nuevo.
+
+Se corrigieron tres partes del runtime: el empaquetado web toma el mapa de
+símbolos desde recomp/gen, donde sí existía; CreateDevice exclusivo sincroniza
+el área de cliente con el back buffer, conserva la ventana de foco si se
+omite la ventana del dispositivo y restaura la geometría al volver a modo
+ventana; y los shaders independientes de vértices/píxeles ahora son objetos
+COM con código validado, enlaces de pipeline y vida propia. Los programas
+fuera del subconjunto soportado se rechazan. Referencia del contrato:
+[CreatePixelShader](https://learn.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-createpixelshader)
+y [GetFunction](https://learn.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3dpixelshader9-getfunction).
+
+Compilación web con tools/build.py: salida 0. El paquete contiene los
+31.806.103 bytes de symbols.json, idénticos al generado para este a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26.
+139 comprobaciones de d3d9_ffp_tests pasan bajo Node/Wasm, incluyendo
+creación/enlace/vida de shaders, dibujo programable real en framebuffer CPU
+y GetClientRect 800x600 con restauración a 320x240. También pasan 4 pruebas
+del servidor y 5 del bootstrap, los límites de literales del juego y
+WebAssembly.compile sobre el Wasm servido. Son pruebas sin juego visual.
+
+Wasm nuevo servido: `97a801afbe5d5b8e606ee0065afa54fb765f5ea9d72c39f73c47cd2f5edba1f2` (222734557 bytes).
+Identidades JS/data y comprobaciones están en progress.json. El parche del
+runtime conserva todos los cambios locales sobre la dependencia fijada.
+La página de diagnóstico está actualizada en el servidor local 8771.
+No requiere volver a importar los archivos originales.
+
+Pendiente: recargar el reproductor con RECOMP_STRICT_UNKNOWN=1 y observar
+si supera la cámara y qué bloqueo aparece después. El control de Windows
+no conecta con su canal nativo; no se pudo ejecutar esa verificación visual.
+No se declara resuelta la pantalla negra ni verificados menú, misión o audio.
+
+
 ## Pantalla negra del port original: diagnóstico del arranque
 
 La captura del usuario muestra el canvas negro en el port singleplayer local.
@@ -344,7 +865,7 @@ o_fallthrough_calls_file extendido a indirectos via IAT con nombre en NORETURN_I
 Regla off-image-CALL-noreturn el 2026-10-14 (
 ever_returns cubre CALL directo fuera de imagen/shims/intrinsecos, con guarda sin-bytes para tests; regresion nueva): el trap NO limpia filas vivas, solo poda colas; verificado en la pasada. 329 suites.
 
-Estado 2026-10-14: 0 fallidas, 9 dangling tras olvidar 3 huerfanos mas (97 forget total): 00d52a60→00d52a85, 00d53b90→01eaf735, 00d55360→00d553bd (x2), 012907c0→16ed3fc0, 01297d80→01297dd8. Fase 1 COMPLETA (traduccion estricta en verde). Fase 2 COMPLETA (wasm publicado, V8 OK). Fase 3 en curso: el arranque estricto del 2026-10-14 llegaba a ExitProcess(0) tras el mensaje de DirectX 9 (DirectDrawCreateEx devolvia DDERR_UNSUPPORTED siempre). Implementado IDirectDraw7 minimo (vtable v4 + StartModeTest/EvaluateMode con nombre, CreateEx real, registro com_define/bind/iid). Siguiente arranque estricto: pasar del check DX (FUN_00745650 busca 0x900) hacia D3D9.
+Estado 2026-10-14: 0 fallidas, 9 dangling tras olvidar 3 huerfanos mas (97 forget total): 00d52a60→00d52a85, 00d53b90→01eaf735, 00d55360→00d553bd (x2), 012907c0→16ed3fc0, 01297d80→01297dd8. Fase 1 COMPLETA (traduccion estricta en verde). Fase 2 COMPLETA (wasm publicado, V8 OK). Fase 3 COMPLETA el 2026-10-15: el juego ABRE en el navegador (menu alcanzado, verificado por el usuario). Cadena de desbloqueos: CreateEx real (IDirectDraw7), presencia d3d8/dpnhpast, DirectSoundCreate8, modos de pantalla con 800x600x32, GetRenderTarget real, entrada 00750760, build XP SP2 2600. La puerta de salida del entry (008246fc) NO se dispara en el arranque real. Pendiente de verificar: menu operable, intro, mision, fisica.
 
 ## Criterios de aceptación pendientes
 

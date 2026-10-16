@@ -1,17 +1,17 @@
 {
-  "last_translation_run_utc": "2026-10-15T00:49:00+00:00",
+  "last_translation_run_utc": "2026-10-16T03:04:54.794297+00:00",
   "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
   "translation_complete": false,
   "failed_functions": 0,
   "dangling_dispatch_references": 0,
   "full_conversion_percentage": null,
   "browser_gameplay_verified": false,
-  "original_menu_verified": false,
+  "original_menu_verified": true,
   "original_intro_verified": false,
   "first_original_mission_verified": false,
   "original_vehicle_physics_verified": false,
-  "last_triage_utc": "2026-10-14T18:22:55+00:00",
-  "triage_scope": "PHASE 1 DONE; PHASE 2 DONE (wasm+V8 OK); PHASE 3: strict boot passed DX-CreateEx after real IDirectDraw7; now needs d3d8/dpnhpast presence (registered, building); 336 suites pass; no gameplay verified",
+  "last_triage_utc": "2026-10-16T04:23:26.850638+00:00",
+  "triage_scope": "Original loading reaches browser stack overflow. Owner-thread profile identifies cross-owner direct-JMP recursion in the original string routine; resumable translation now returns EIP continuations to the dispatcher. Full rebuild and post-build probes pending; browser new-game continuation remains unverified.",
   "scope": "Current isolated executable; prototype rendering and older-image boot probes are separate evidence",
   "recreation": {
     "updated_utc": "2026-10-14T23:29:46Z",
@@ -41,7 +41,7 @@
     "local_report": "web/recreation/checks/cutscene.json",
     "browser_verified": false,
     "mission_verified": false,
-    "airport_blocker": "Transformaci\u00c3\u0192\u00c2\u00b3n original no finita con influencia visible:  L Toe0",
+    "airport_blocker": "TransformaciÃƒÂ³n original no finita con influencia visible:  L Toe0",
     "audio_blocker": "Both installed prologue tracks contain the same CRC-valid 1.18578125-second Ogg followed by zero padding; original camera durations are 22.333332 and 80 seconds. Native-PC playback/reference remains unverified.",
     "unverified_deformations": [
       {
@@ -128,6 +128,520 @@
     "blockers": [
       "Computer-use tool exposes no connected browser, so current OPFS contents and post-import runtime/rendering have not been observed.",
       "Import prepared files through /seed.html and inspect visible engine boot diagnostics. Missing assets are a verified bootstrap defect, not a proven sole cause of the black screen."
+    ]
+  },
+  "runtime_startup_fix": {
+    "updated_utc": "2026-10-15T18:40:27.528874+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "scope": "Original singleplayer runtime; standalone shader COM support, exclusive window sizing and symbol packaging",
+    "prior_triage_scope": "PHASE 3 DONE 2026-10-15: game OPENS in browser (menu reached, user-verified); menu operability, intro, mission, physics still unverified; 336 suites pass",
+    "evidence_before_fix": {
+      "source": "user pasted browser boot log; local bootlog.txt matches",
+      "entry": "00824570",
+      "camera_setup": "005bd643 returns null raster; 005bd668 takes failure path; 005bf390 returns false before ExitProcess",
+      "shader_is_sole_cause": false,
+      "previous_wasm_identity": "not captured before rebuild; do not attribute pasted trace to new binary",
+      "source_note": "Browser observations are from the user-pasted logs. Local bootlog.txt also contains a different non-strict run and must not be treated as an exact transcript of the user report."
+    },
+    "changes": [
+      "Package symbols.json from recomp/gen beside current generated table, with legacy fallback.",
+      "Resize exclusive device client area to back-buffer dimensions, use focus window when device window omitted, restore geometry on windowed Reset.",
+      "Create, bind, retrieve and release real standalone pixel/vertex shader COM objects; preserve bytecode for queued draws; refuse unsupported/truncated programs.",
+      "Ignore test JavaScript when staging local player."
+    ],
+    "served_artifacts": {
+      "GTASASingleplayer.wasm": {
+        "bytes": 222734557,
+        "sha256": "97a801afbe5d5b8e606ee0065afa54fb765f5ea9d72c39f73c47cd2f5edba1f2"
+      },
+      "GTASASingleplayer.js": {
+        "bytes": 483542,
+        "sha256": "74838d9fb7652df284dc6885ae14f4701284f45cc05501d3e48544cd5005fdfa"
+      },
+      "GTASASingleplayer.data": {
+        "bytes": 31820190,
+        "sha256": "8e9c4b3c5a46ddaa5460a167f412e9c947bc71119b4f889786cb82be21194a3e"
+      }
+    },
+    "checks": {
+      "web_build_exit_code": 0,
+      "native_wasm_graphics_checks": 139,
+      "native_wasm_graphics_failures": 0,
+      "server_tests": 4,
+      "player_boot_tests": 5,
+      "packaged_symbols_bytes": 31806103,
+      "packaged_symbols_match_current_generated_file": true,
+      "served_wasm_v8_compile": "passed",
+      "live_player_http": 200,
+      "game_literal_boundary_check": "passed"
+    },
+    "browser_after_fix_verified": false,
+    "black_screen_resolved_in_browser": false,
+    "remaining": [
+      "Windows computer-use helper cannot connect its native pipe; no post-fix browser execution/visual verification.",
+      "Reload the strict player and inspect the next boot trace; additional unsupported rendering or guest startup paths may remain."
+    ],
+    "local_evidence": [
+      "build/shader-camera-build.log",
+      "build/shader-camera-tests.log",
+      "build/shader-camera-symbols-audit.json"
+    ],
+    "browser_followup": {
+      "source": "user pasted strict browser log",
+      "camera_setup_returned_success": true,
+      "mods_initialized": true,
+      "draw_calls_reached": 2,
+      "strict_halt_target": "005908f7",
+      "visual_frame_verified": false
+    }
+  },
+  "continuation_and_declaration_fix": {
+    "updated_utc": "2026-10-15T19:06:02.614648+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "before_served_wasm_sha256": "97a801afbe5d5b8e606ee0065afa54fb765f5ea9d72c39f73c47cd2f5edba1f2",
+    "browser_wasm_hash_measured": false,
+    "reported_halt": "005908f7 after callback 007ee180; interpreter refuses backward branch to 00590880",
+    "verified_cause": "A different truncated caller ending in CALL caused global noreturn inference for a returning tail dispatcher and removed the live continuation.",
+    "drawing_fix": "Recognize exactly FVF-representable explicit declarations when SetVertexDeclaration clears the FVF; reject unsupported layouts.",
+    "additional_contract": {
+      "call_site": "0127f1df",
+      "original_return": "0127f1e4",
+      "changed_continuation": "0127f292",
+      "computed_destination": "0115cb30",
+      "verification": "audit_checksum_call_thunks.inspect exact original-byte recognizer",
+      "local_audit": "build/fallthrough-checksum-contract.json"
+    },
+    "checks": {
+      "translator_tests": 181,
+      "graphics_runtime_checks": 150,
+      "graphics_runtime_failures": 0,
+      "strict_translation_exit_code": 0,
+      "translation_failures": 0,
+      "translation_unmodelled": 0,
+      "table_gaps": 0,
+      "undecoded_table_sites": 0,
+      "emitted_original_continuation_verified": true,
+      "web_build_exit_code": 0,
+      "served_wasm_v8_compile": "passed",
+      "packaged_symbols_match_current_generation": true,
+      "packaged_symbols_bytes": 32182155,
+      "strict_player_http": 200
+    },
+    "state": "rebuilt_served_cpu_probe_bounded",
+    "strict_unknown_enabled": true,
+    "browser_after_fix_verified": false,
+    "local_logs": [
+      "build/fallthrough-translation.log",
+      "build/fallthrough-translation-final.log",
+      "build/fallthrough-graphics.log",
+      "build/fallthrough-web-build.log",
+      "build/fallthrough-probe.stderr.log",
+      "build/fallthrough-probe-result.json"
+    ],
+    "initial_attempt": {
+      "result": "refused; existing served binary preserved",
+      "dangling_caller": "0127f1b0",
+      "dangling_target": "0127f1e4",
+      "local_blocker_report": "build/fallthrough-initial-blockers.json",
+      "resolution": "Exact checksum stack-thunk call-site contract verified against original image before retry."
+    },
+    "served_artifacts": {
+      "GTASASingleplayer.wasm": {
+        "sha256": "68da1970d8c7e8a3e8e0b4fcf6e854a70f53bb9bc8d26f1e02e5b68b07f70bec",
+        "bytes": 253710648
+      },
+      "GTASASingleplayer.js": {
+        "sha256": "d049e321f21b1b3d4d2751c01881aa1c0a93bc8eb52b0ec2dd176c35d3b68c8a",
+        "bytes": 483542
+      },
+      "GTASASingleplayer.data": {
+        "sha256": "f0981d6f0d4d0f6cb999567b92c6d9ce35b5efe460b5aa3359a12a77a2d04a80",
+        "bytes": 32196242
+      }
+    },
+    "cpu_probe": {
+      "result": "bounded_timeout",
+      "timeout_seconds": 20,
+      "elapsed_seconds": 20.10900000000038,
+      "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+      "probe_wasm_sha256": "6b52e579513f4f5498ceba6a9aa4b377122c393c98b57d579810ac5003b5bec6",
+      "browser_gameplay_verified": false,
+      "log_bytes": 12441,
+      "cpu_present_log_lines": 59,
+      "max_lit_samples": 281,
+      "unknown_call_reports": 0,
+      "aborts": 0,
+      "fixed_function_draw_refusals": 0,
+      "scope": "Actual original PE entry and translated code; null graphics/audio host; software framebuffer, not browser/WebGPU or gameplay acceptance. External 20-second timeout ended the probe."
+    },
+    "local_contracts_sha256": "6c4be62f976fb26d868f323a0885a82bd85d3ee5e97f8492400268e1cf820073",
+    "remaining": [
+      "Reload the strict player in the browser and verify the WebGPU image and subsequent startup.",
+      "No original menu, intro, mission, audio or playable status is established by this CPU probe."
+    ],
+    "previous_translation_run_utc": "2026-10-15T00:49:00+00:00"
+  },
+  "audio_factory_startup_fix": {
+    "updated_utc": "2026-10-15T19:17:13.635136+00:00",
+    "state": "rebuilt_served_focused_cpu_probe_passed",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "previous_served_wasm_sha256": "68da1970d8c7e8a3e8e0b4fcf6e854a70f53bb9bc8d26f1e02e5b68b07f70bec",
+    "served_wasm_sha256": "fffe4e4b468356f2db791b3d056efcde309b42b73d0dc1d7788cd9c87eddf97f",
+    "browser_evidence": {
+      "source": "User-provided screenshot and pasted browser log, 2026-10-15",
+      "original_title_splash_visible": true,
+      "loaded_wasm_hash_measured": false,
+      "original_menu_verified": false,
+      "stop": "EAX.DLL ordinal 6 missing shim returned fake success with null output; null GetCaps call returned to 004d9a25; guest exit c0000005"
+    },
+    "cause": [
+      "Main IAT bound before auxiliary DLL mapping; auxiliary imports likewise depended on configuration order.",
+      "DirectSound8 COM class was unregistered and its adapter interface IID was incorrect."
+    ],
+    "changes": [
+      "Map all hash-verified images before binding named/ordinal imports; retain bound snapshots after linking.",
+      "Register CLSID_DirectSound8 and correct IID_IDirectSound8; use the existing audio object implementation.",
+      "Probe validates actual cross-module IAT and reload bytes, then optionally runs translated DirectSound factory and original vtable GetCaps."
+    ],
+    "verification": {
+      "exit_code": 0,
+      "exe_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+      "probe_wasm_sha256": "93cc9525fb3580dae566458f2ec5ed9dac989c759d02a03e0ca1f431bcc8767b",
+      "web_wasm_sha256": "fffe4e4b468356f2db791b3d056efcde309b42b73d0dc1d7788cd9c87eddf97f",
+      "mapped_imports": 58,
+      "factory_hresult": 0,
+      "getcaps_hresult": 0,
+      "stack_preserved": true
+    },
+    "probe_log": "build/audio-factory-result.log",
+    "full_dx_suite": {
+      "checks": 141160,
+      "failures": 27,
+      "audio_subtests_passed": true,
+      "failure_groups": [
+        "64-bit host layout expectations under wasm32 ABI",
+        "cursor learned",
+        "DirectDrawCreateEx fallback"
+      ],
+      "log": "build/audio-dx-tests.log",
+      "passed": false
+    },
+    "bounded_cpu_startup_before_com_fix": {
+      "result": "build/audio-link-probe-result.json",
+      "seconds": 45,
+      "scope": "CPU title splash loop; did not reach audio initialization; not a browser result"
+    },
+    "remaining": [
+      "Reload strict browser player and verify continuation beyond audio initialization.",
+      "Audible original audio, original menu, intro and first mission remain unverified.",
+      "DirectShow FilterGraph activation and optional EAX IKsPropertySet are unsupported.",
+      "27 general DX-suite failures remain; suite is not wholly green."
+    ]
+  },
+  "primary_listener_fix": {
+    "updated_utc": "2026-10-15T19:25:55.953525+00:00",
+    "state": "rebuilt_served_focused_original_dll_probe_passed",
+    "previous_served_wasm_sha256": "fffe4e4b468356f2db791b3d056efcde309b42b73d0dc1d7788cd9c87eddf97f",
+    "verification": {
+      "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+      "served_wasm_sha256": "45ff03479294726106c94f080659787065e8677d274dee1b5884767be3984848",
+      "probe_wasm_sha256": "d37c00444de5db92b5f8fc18ca87f605e57a7e135a1d7a320a210e53a4cd9bb5",
+      "focused_factory_exit_code": 0,
+      "original_primary_listener_passed": true,
+      "get_all_parameters_bytes": 64,
+      "trailing_canary_preserved": true,
+      "queried_listener_retains_buffer": true,
+      "dx_checks": 141197,
+      "dx_failures": 27,
+      "dx_new_checks": 37,
+      "dx_new_failures": 0
+    },
+    "browser_evidence": {
+      "source": "User-pasted browser log and screenshot, 2026-10-15",
+      "loaded_wasm_hash_measured": false,
+      "eax_factory_missing_shim_resolved": true,
+      "stop": "Primary buffer QueryInterface(IDirectSound3DListener) rejected; null indirect jump at 004f153c; later pthread mutex deadlock assertion."
+    },
+    "changes": [
+      "Expose listener on CTRL3D primary buffers with shared object/reference ownership.",
+      "Refuse listener on other buffer instances, including queries from alternate buffer interface views.",
+      "Correct DS3DLISTENER GetAllParameters/SetAllParameters from 68 to 64 bytes."
+    ],
+    "evidence": [
+      "build/listener-factory-result.log",
+      "build/listener-result.json",
+      "build/listener-dx-tests.log",
+      "build/listener-web-build.log"
+    ],
+    "remaining": [
+      "Browser/WebGPU follow-up, original menu, intro, first mission and audible playback are unverified.",
+      "Later mutex assertion in browser log has not independently been diagnosed or reproduced; do not claim it fixed.",
+      "General DX suite retains 27 failures in host layout, cursor and DirectDraw fallback tests.",
+      "DirectShow FilterGraph and optional IKsPropertySet remain unsupported."
+    ]
+  },
+  "new_game_interpreter_fix": {
+    "updated_utc": "2026-10-15T19:36:33.648428+00:00",
+    "state": "rebuilt_served_decode_and_instruction_tests_passed",
+    "previous_served_wasm_sha256": "45ff03479294726106c94f080659787065e8677d274dee1b5884767be3984848",
+    "verification": {
+      "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+      "served_wasm_sha256": "15e46e850bb21060057fa9cc8ef95b2fed6a269c243dcbef8d501645b1043164",
+      "probe_wasm_sha256": "b84d9da4773e31e05ed5728faf19660575f87a9978986441cd43ed7fcf38e38d",
+      "interp_wasm_sha256": "5e4b1a8438e590b7d839b836cbb6c1c303ff79f22e624bbbc48c38e56e181629",
+      "decode_target": "015633bd",
+      "decode_only_exit": 0,
+      "interp_checks": 362,
+      "interp_failures": 0,
+      "unicorn_cases": 23,
+      "unicorn_failures": 0,
+      "unicorn_log_note": "Unicorn Windows SEH emitted an access-violation diagnostic during mem_map; pytest nevertheless completed with 23 passed, exit 0.",
+      "gameplay_verified": false
+    },
+    "browser_evidence": {
+      "source": "User screenshots and pasted log, 2026-10-15",
+      "loaded_wasm_hash_measured": false,
+      "original_main_menu_visible": true,
+      "sound_manager_initialized": true,
+      "nonzero_pcm_submitted": true,
+      "audible_playback_verified": false,
+      "stop": "Unknown 015633bd; bounded decoder rejects XCHG [ESP],EDX at 0156346e. Screenshot also shows a later mutex assertion."
+    },
+    "changes": [
+      "Bounded decoder executes 32-bit XCHG, SHL/SHR/SAR and signed EDX:EAX IMUL; uses existing CPU shift/multiply flag helpers.",
+      "Added byte-register immediate MOV needed by standalone decoder tests.",
+      "Added decode-only diagnostic using the same bounded decoder/cache, without executing original instructions.",
+      "Corrected standalone test fixtures that encoded BL as BH and wrong little-endian DATA addresses; supplied standalone logging seam."
+    ],
+    "private_evidence": [
+      "build/newgame-result.json",
+      "build/newgame-decode.log",
+      "build/newgame-interp-tests.log",
+      "build/newgame-unicorn-tests.log",
+      "build/newgame-web-build.log"
+    ],
+    "remaining": [
+      "Original routine decode is not execution proof of the new-game path; browser follow-up is required.",
+      "First mission, intro, 3D gameplay and audible original playback remain unverified.",
+      "The secondary pthread mutex assertion has not been independently diagnosed.",
+      "Earlier 27 DX-suite failures and unsupported optional audio/video interfaces remain documented."
+    ]
+  },
+  "narrow_moves_fix": {
+    "updated_utc": "2026-10-15T19:44:32.669957+00:00",
+    "state": "rebuilt_served_decode_and_instruction_tests_passed",
+    "previous_served_wasm_sha256": "15e46e850bb21060057fa9cc8ef95b2fed6a269c243dcbef8d501645b1043164",
+    "verification": {
+      "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+      "served_wasm_sha256": "5ad508d814f7e05a0918dae876c12833793deccf6871635176831cc542f8fcb5",
+      "probe_wasm_sha256": "6e158eb71e26bf436fabc7b500d52c32ac49d2610766bab8514cf27f3f931541",
+      "interp_wasm_sha256": "d334067052318a3736449e797ae71183dc19d5a23de88597c3f0c1ac17e4feb0",
+      "decode_target": "005c16f0",
+      "decode_only_exit": 0,
+      "interp_checks": 381,
+      "interp_failures": 0,
+      "unicorn_cases": 35,
+      "unicorn_failures": 0,
+      "server_tests_passed": 4,
+      "player_tests_passed": 6,
+      "browser_gameplay_verified": false
+    },
+    "browser_evidence": {
+      "source": "Repeated user-pasted browser logs including boot-log HTML, 2026-10-15",
+      "loaded_wasm_hash_measured": false,
+      "stop": "Unknown 005c16f0, return 004a4b4e; decoder refuses MOVSX EAX,AL at 005c17da. Abort is followed by mutex assertion, starved audio pulls and repeated Failed to fetch."
+    },
+    "changes": [
+      "MOVSX/MOVZX byte or word to 32-bit register; bounded word loads.",
+      "16-bit register/memory MOV preserves high register bits and neighboring memory; other 0x66 instructions remain refused.",
+      "Capture optional async /log fetch rejection to avoid unhandled rejection feedback.",
+      "Retain the first fatal player status; secondary worker/network errors remain in diagnostics."
+    ],
+    "evidence": [
+      "build/narrow-result.json",
+      "build/narrow-unit.log",
+      "build/narrow-decode.log",
+      "build/narrow-unicorn.log",
+      "build/narrow-web-build.log"
+    ],
+    "remaining": [
+      "Post-fix WebGPU new-game path, intro, first mission and audible playback remain unverified.",
+      "Decode-only success is not execution evidence for this complete game routine.",
+      "The mutex assertion itself has not been independently fixed or reproduced.",
+      "Optional telemetry rejection handling does not establish that every possible game network failure is fixed.",
+      "Historical 27 DX suite failures remain outside this change."
+    ]
+  },
+  "retired_body_entry_points_fix": {
+    "updated_utc": "2026-10-16T03:12:00.000000+00:00",
+    "state": "wasm_built_awaiting_browser",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "translation": {
+      "functions_ok": 50679,
+      "functions_total": 51963,
+      "entry_points": 154020,
+      "alternate_entries": 103341,
+      "entry_points_from_data_pointers": 28539,
+      "data_pointer_candidates_rejected": 8343,
+      "failures": 0,
+      "unmodelled": 0,
+      "table_gaps": 0,
+      "table_sites_undecoded": 0,
+      "seconds": 404.7
+    },
+    "added_entry_points": [
+      "00474900",
+      "00478000",
+      "00479da0",
+      "005347d0",
+      "005cc290",
+      "006419f0",
+      "00690220",
+      "006cb7c0"
+    ],
+    "browser_evidence": {
+      "source": "User-pasted boot log, 2026-10-15; previous served wasm 61036d3839b212996dd5ed68205dad2905feaa088600f1155a315c84af0bdf72",
+      "loaded_wasm_hash_measured": false,
+      "stop": "New game reaches the loading screen, then call to unknown target 005347d0 from 0053303b; the wrapped return 0 makes 00405cfe call c4e8600e (return 00405d01), ending in memory access out of bounds."
+    },
+    "served_build": {
+      "wasm_sha256": "4dea1d033cc086d069d2c529b1cee0f22411373a2b11b045cedf62ba9037d529",
+      "wasm_bytes": 253836912,
+      "javascript_sha256": "f0a868da31b48c00fa5949003ced3d2ec4293a948f14fb4720c9f29d52ae755f",
+      "package_sha256": "f81f48d3c6a3f2ab2f4dec0e4f72e6bd283d420481ad9f34999aeacd1747e40a",
+      "built_utc": "2026-10-16T03:18:43+00:00",
+      "player_page_staged_utc": "2026-10-16T03:20:30+00:00",
+      "note": "Built from the verified translation; no browser run has loaded it yet."
+    },
+    "changes": [
+      "Add the eight recovered-then-retired functions as explicit variant entry points with their evidence comments.",
+      "005347d0 is the world-bounds clamp reached only through the vtable slot at 00866e7c; 00474900/00478000/00479da0 are SEH dispatchers; the other four are thiscall/stdcall methods with verified terminators."
+    ],
+    "evidence": [
+      "build/recomp/gen/symbols.json (eight config entries, blocks and continuations present)",
+      "build/recomp/gen/table.c (dispatch entries for the eight addresses)",
+      "build/recomp/gen/chunk_036.c (FUN_005347d0, 158 insns, entries 00534881..00534aa7)",
+      "build/recomp/translate-report.json (no failures, unmodelled or table gaps)"
+    ],
+    "remaining": [
+      "Browser new-game continuation, intro, first mission and audible playback remain unverified.",
+      "The rebuilt page is staged but no browser run has loaded it; the next boot log decides the next stop.",
+      "The other 25 retired bodies stay out of the build: they recovered as misaligned or mid-code fragments, not functions.",
+      "The translator rule that retires an enclosing body on a jump-table block branch is unchanged; the eight entries are the evidence-based workaround."
+    ]
+  },
+  "loading_stack_overflow": {
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "pre_diagnostic_wasm_sha256": "4dea1d033cc086d069d2c529b1cee0f22411373a2b11b045cedf62ba9037d529",
+    "diagnostic_wasm_sha256": "3ddac5763b7619025282f8b4092119864248f8acd7026b991231eba40b8c9e70",
+    "loaded_browser_wasm_measured": false,
+    "original_loading_artwork_observed": true,
+    "white_surface_observed": true,
+    "browser_error": "Maximum call stack size exceeded",
+    "owner_thread_cycle": [
+      "0069f800",
+      "004012bb",
+      "0069f806",
+      "0069f800"
+    ],
+    "baseline_probe_wasm_sha256": "3f939375f874a19d6509d3d54494d210342e2c5d532710569a62e5776eab41ca",
+    "baseline_original_cstring": {
+      "address": "0069f7e0",
+      "length": 255,
+      "output_esp_esi_passed": true,
+      "profile_depths": [
+        128,
+        256,
+        512
+      ]
+    },
+    "fix": "Direct JMP to a known external body publishes EIP and returns to recomp_run in resumable mode, preserving the original guest state.",
+    "variant_legacy_address_intrinsics": false,
+    "translator_tests_passed": 181,
+    "auxiliary_main_audit_isolation_verified": true,
+    "build_status": "running",
+    "browser_fix_verified": false,
+    "blockers": [
+      "Browser loading continuation and actual world rendering remain unverified.",
+      "Fixed-function flat shading remains unsupported.",
+      "Original intro, first mission and audible voices remain unverified.",
+      "27 historical DX suite failures remain outside this change."
+    ]
+  },
+  "directshow_filtergraph_shim": {
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "root_cause": "WinMain states 2/4 wait on WM_USER+13 (0x40d); CoCreateInstance(CLSID_FilterGraph 0xe436ebb3) returned 0x80040154 because the class was not registered, so no EC_COMPLETE notify ever arrived.",
+    "guest_abi_verified": {
+      "IGraphBuilder": {
+        "RenderFile": "0x34"
+      },
+      "IMediaControl": {
+        "Run": "0x1c",
+        "Stop": "0x24"
+      },
+      "IMediaEventEx": {
+        "GetEvent": "0x20",
+        "FreeEventParams": "0x30",
+        "SetNotifyWindow": "0x34"
+      },
+      "IVideoWindow": {
+        "put_WindowStyle": "0x24",
+        "put_Owner": "0x74"
+      }
+    },
+    "implementation": "dx/dshow.cpp: CLSID_FilterGraph registration produces a standalone K_GRAPH graph; RenderFile records the movie path and always completes; IMediaControl::Run queues EC_COMPLETE and posts the notify message through the host pump; SetNotifyWindow only acts on standalone graphs; stream graphs unchanged; IVideoWindow added as documented no-op in dual ABI order.",
+    "movie_playback_claimed": false,
+    "note": "Intro movies complete immediately (no video/audio decode); equivalent to skipping them. Flat-shading fixed-function draws still refused.",
+    "served_wasm_sha256": "5f32873e41c55a55d369b8c1720187276c35c6bca12446bdadb824bab7221cfa",
+    "served_js_sha256": "8670bab2adc3390cca314460c61ce490172e9bbe152bfb65acbd6ee751e9ba6f",
+    "served_data_sha256": "51564b0c3665e04e5553f8e015e3f2b8c321d388a023d7f5217a15a726dbfbd0",
+    "build_exit_code": 0,
+    "bootlog_rotated": true,
+    "browser_fix_verified": false,
+    "blockers": [
+      "Browser verification of the boot passing the intro states is pending.",
+      "Fixed-function flat shading remains unsupported (loading screen draws).",
+      "Menu, load, first mission and sounds remain unverified by this change."
+    ]
+  },
+  "settings_loader_entry_point": {
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "strict_stop": "call to unknown target 005c1723; blocks_withdrawn contained 005c16f0 as (data, 005c1820).",
+    "evidence": "Vtable literal at 0085a974 names 005c16f0; no literal names 005c1723; prologue 81 EC 88 01 00 00 / 55 56; body 005c16f0..005c18ed (ret 4); loop re-entry 005c1710 inside the body; same decoder-start mis-class as 005347d0.",
+    "action": "Added 0x005c16f0 to entry_points in variants/singleplayer/game.toml; regenerated translation and web build.",
+    "result": "005c16f0 now appears only in recovered_blocks in translate-report.json; blocks_withdrawn entry gone. Build exit 0.",
+    "served_wasm_sha256": "d2f27b1bdb629f3e9a60f7a92b735d4fc136334f73a808a0eb0485017f90b430",
+    "served_js_sha256": "4087d7786db7e7236794a54cfa738d600fcf2973033c87ef270e56aabe238837",
+    "served_data_sha256": "d328113ff9feb4b2aa809fd5c4ab35c99a4122107c48a2db6ebc225540002fc9",
+    "browser_fix_verified": true,
+    "blockers": [
+      "Menu, load, first mission and sounds remain beyond what this entry point verifies."
+    ]
+  },
+  "flat_shading_verified": {
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "evidence": "Browser (user, 16/10 build): copyright and CJ intro sequences render with their sound; title screens draw the progress bar and it fills over the artwork, which exercises D3DSHADE_FLAT through the synthesized FFP pipelines; afterwards boot stops at the white pre-menu loading screen. Native suite (tools/test.py --native --jobs 4, kit stub game): 24/26 suites pass; d3d9_ffp_tests 168 checks 0 failures including the new flat cases (FFP gate accepts rs[9]==1 into the same shader pair, WebGPU translation declares both colour varyings @interpolate(flat), PHONG refused, CPU raster paints the provoking vertex's colour); dx_tests passes fully after updating test_directdraw_create_ex_fallback to the v7 DirectDrawCreateEx contract (factory hands a real v7 object, refusals preserved, reference balance closes to zero). Remaining 2 failures match a clean-HEAD baseline run byte for byte (host_tests host_resource controls path checks; gpu_contract_tests.cpp:193 describe width after resize in the Vulkan backend), so they are pre-existing platform/backend issues outside this change's touch.",
+    "flat_colors_plumbing": "HostD9Draw.flat_colors only synthesized FFP pipelines set it (dx/d3d9.cpp gpu_draw, binding.changed && pl.rs[9]==1); d9wgsl emits the V2FF flat varying variant keyed into the WebGPU module cache; CPU raster copies the provoking (first-submission) vertex's od0/od1 including odd-triangle i1 and fan apex; Metal/Vulkan D3D9 renderers skip flat draws with a refusal; MSDN says triangle fans provoke their second vertex while WebGPU flat uses the first, documented deviation.",
+    "extra_checks": [
+      "tools/check_game_literals.py and tools/check_repo.py pass.",
+      "tools/format.py --write covers 378 first-party sources (clang-format==23.1.1 installed in the venv)."
+    ],
+    "blockers": [
+      "Browser freeze at the white pre-menu loading screen is open; see white_loading_screen_blocker.",
+      "Menu, world, prologue and first mission remain unverified."
+    ]
+  },
+  "white_loading_screen_blocker": {
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "served_wasm_sha256": "da536b5ed1dfc27127b5dc4f67d54df49115d465b7b8426c77c95fa100e91601",
+    "served_js_sha256": "1ca7d6f4d9b913fcda7828a342257d95b4546c095157267f2879723fb3963c52",
+    "served_data_sha256": "d328113ff9feb4b2aa809fd5c4ab35c99a4122107c48a2db6ebc225540002fc9",
+    "symptom": "After the title screens the pre-menu loading screen shows white with an empty progress bar, AGE ~9-10 s, 0 FPS, ~1169 dropped frames (user-reported).",
+    "bootlog_evidence": "Server bootlog (16:12, 122 lines) ends after SoundManager initialisation with menu music looping (buffers 384/385, 28000 Hz, 554176 bytes); audio sink healthy (0 starved); the guest blocks with no strict-stop and no error. Unconfirmed suspects: the unimplemented wsprintfA import (warning says the guest stack drifts if it is really stdcall) and LoadLibrary without shim for wmvcore.dll and quicktime.qts shortly before the freeze.",
+    "action": "Optimised the boot-log transport in tools/serve_variant.py: the sync XHR every 1500 lines became a chained async writer (4096-line batches with an auditable #B header, requeued on failure, sync pagehide flush); DevTools console mirroring removed from the served page. Server verified running on port 8771 with the new page.",
+    "pending": "A user run with ?RECOMP_LOG=2 through the new transport, then read the bootlog tail to name the last guest import call before the block.",
+    "blockers": [
+      "No evidence yet for the menu, in-game loading or gameplay after this screen."
     ]
   }
 }

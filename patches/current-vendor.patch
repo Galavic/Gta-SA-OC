@@ -1,11 +1,77 @@
 diff --git a/CHANGELOG.md b/CHANGELOG.md
-index 20fdc15..4b1e51a 100644
+index 20fdc15..99886d4 100644
 --- a/CHANGELOG.md
 +++ b/CHANGELOG.md
-@@ -2,6 +2,89 @@
+@@ -2,6 +2,155 @@
  
  ## Unreleased
  
++- Treat a standalone DirectShow graph (CoCreateInstance(CLSID_FilterGraph),
++  RenderFile, IMediaControl::Run and an IMediaEventEx notify window) as an
++  ownerless player: without a multimedia stream behind it there is no video to
++  decode or show, and its single completion event is announced through the
++  notify window as soon as the graph runs, so boot paths parked at "the movie
++  is over" advance on the guest's own message pump.
++
++- Hand DirectDrawCreateEx the version 7 factory: the same object as the legacy
++  factory through the v7 view, with the v7-only mode-test pair named as the
++  only extra stubs, older interfaces still routed through DirectDrawCreate
++  plus QueryInterface, and the refusal cases (aggregation, non-v7 IIDs)
++  preserved.
++
++- Round out the early D3D9 device surface: enumerate era-standard adapter
++  display modes so the game's 800x600x32 default exists in the list, return
++  the real render target from GetRenderTarget instead of an untouched
++  out-pointer, and bind or query FVFs through real declarations whose failed
++  validation leaves the previous binding intact.
++
++- Implement fixed-function flat shading (D3DRS_SHADEMODE = D3DSHADE_FLAT): the
++  gate accepts it into the same shader pair, the WebGPU renderer declares the
++  two colour varyings `@interpolate(flat)` in both stages, the CPU rasterizer
++  draws each triangle in its first vertex's colour, and the Metal and Vulkan
++  renderers refuse such draws rather than interpolate colours wrongly. Flat
++  shading keeps the first-vertex provoking rule of triangle lists and strips;
++  a triangle fan follows the WebGPU hardware rule (its apex) instead of the
++  Direct3D 9 fan rule (its second vertex), a documented deviation.
++
++- In resumable images, return cross-function direct JMP continuations to the
++  dispatcher instead of recursively calling their generated native bodies.
++  Split loops retain their guest state without accumulating native frames.
++  Add opt-in live profiling windows and bounded owner-thread depth reports.
++  Keep main-executable recovered-body audits out of auxiliary DLL translation.
++
++- Strip the trailing spaces and periods of every path component before
++  resolving a guest file name, matching Win32: names like "DATA\DEFAULT.IDE "
++  taken verbatim from game data files open the plain file instead of being
++  reported as missing.
++
++- Decode byte/word MOVSX and MOVZX to 32-bit registers and bounded 16-bit
++  register/memory MOV in the fallback interpreter. Keep the first player
++  failure visible when secondary worker or network errors arrive.
++
++- Execute bounded 32-bit XCHG, SHL/SHR/SAR and signed EDX:EAX IMUL in the
++  fallback interpreter, sharing the translated CPU's shift/multiply flags.
++  Support byte-register immediate MOV and decode-only startup diagnostics.
++
++- Expose the 3D listener on primary DirectSound buffers created with CTRL3D,
++  preserve buffer lifetime through listener references, and reject listener
++  queries on secondary buffers. Use the 64-byte DS3DLISTENER parameter record.
++
++- Map all verified auxiliary DLLs before binding any PE import table. Resolve
++  executable-to-DLL and DLL-to-DLL named/ordinal imports against guest exports
++  regardless of configuration order, and retain the bound reload snapshots.
++  Register the DirectSound8 COM device class and correct its interface IID so
++  an original audio DLL can create and initialize it through CoCreateInstance.
++
++- Keep returning tail-dispatch continuations live when another truncated
++  listing ends at a call to the dispatcher. Accept exactly FVF-representable
++  explicit vertex declarations in the bounded fixed-function draw path.
++
++- Package the current generated symbol map in web builds even after a direct
++  translator run. Match exclusive Direct3D 9 window geometry to the back buffer
++  and restore it on windowed reset. Implement standalone vertex/pixel shader
++  creation, binding, retrieval and bytecode lifetime through real COM objects.
++
 +- Refuse incomplete web imports before entering the engine and retain a bounded
 +  on-screen boot log, including JavaScript, WebGPU and runtime startup failures.
 +
@@ -132,10 +198,10 @@ index 2542377..a291325 100644
    # defines FN_<addr>, so every call site, tail call and jump-table case for a
    # replaced address goes to the native function instead.
 diff --git a/docs/testing.md b/docs/testing.md
-index bb8776b..4e77013 100644
+index bb8776b..8ad7e88 100644
 --- a/docs/testing.md
 +++ b/docs/testing.md
-@@ -12,6 +12,28 @@ Run checks appropriate to your change. Every suite's output belongs under ignore
+@@ -12,6 +12,56 @@ Run checks appropriate to your change. Every suite's output belongs under ignore
  | `tools/test.py --mods` | Real loader/hooks/settings/native Options and replay contracts | Yes, plus translated archive |
  | `tools/test.py --gameplay` | Menu navigation, mode cycling, selection, movement and clean exit | Yes, plus translated archive |
  
@@ -151,8 +217,36 @@ index bb8776b..4e77013 100644
 +through `tools/build.py`'s build API for the selected game. For Emscripten, run
 +`node <output>/game_boot_probe.js <verified-executable>`; NODERAWFS reads the
 +local installation and the loader still verifies every configured image hash.
++`game_boot_probe <exe> --decode <hex-address>` validates a bounded original
++routine using the fallback decoder without executing it. This establishes
++instruction/branch coverage only, not correct execution of the game path.
++`game_boot_probe <exe> --cstring <hex-address> <text>` invokes a known
++two-argument guest string-copy/conversion routine with `(text, 0)`. It checks
++the returned text, ESP and callee-preserved ESI; select only a routine whose ABI
++and expected identity conversion for the supplied input were independently
++verified. It is a focused CPU regression check, not gameplay evidence.
++
++With `RECOMP_PROFILE=1`, `RECOMP_PROFILE_INTERVAL_MS=5000` logs the three most
++sampled published caller indices in each window. Valid intervals are 1000–60000
++ms; absence leaves existing exit-only reporting unchanged. Shims and host waits
++are attributed to their guest caller. A crashed worker can leave its published
++slot stale, so repeated samples alone do not prove execution is still advancing.
++The same option records the last twelve logical callers at exponentially
++increasing depths (128, 256, 512...). These chains are copied by their owning
++thread, never by racing another thread's mutable guest stack.
 +Both `RECOMP_STRICT_UNKNOWN` and `RECOMP_STRICT_IMPORTS` are forced on, so missing
 +code, missing import implementations or unknown import signatures stop the run.
++Before entry, the probe checks every import from a configured mapped module in
++the executable and auxiliary DLLs against the real named/ordinal export table,
++including the IAT bytes retained for DLL reload. A mismatch fails the probe.
++`game_boot_probe <exe> --sound-factory <module> <export>` instead calls a mapped
++three-argument DirectSound creation export, checks HRESULT/output/stack, invokes
++GetCaps through the returned original COM vtable, and releases the object. This
++focused test also creates a primary CTRL3D buffer, queries its listener, releases
++the buffer reference, and checks 64-byte GetAllParameters/SetAllParameters through
++the original DLL vtables with a trailing canary. It uses translated DLL code;
++it does not verify audible playback. The DX suite additionally checks refusal
++on primary buffers without CTRL3D and secondary-buffer interface views.
 +Use an external execution timeout. `RECOMP_PROBE_DUMP=<existing-dir>/halt` writes
 +live main/auxiliary images, stack, TEB and register metadata before a strict
 +halt. These private diagnostic binaries belong under ignored `build/`.
@@ -165,7 +259,7 @@ index bb8776b..4e77013 100644
  `game` needs your installation, `gpu` needs a Metal device, `device` needs a
  real Metal and audio device (the offline audio render is not what a hosted CI
 diff --git a/dx/CMakeLists.txt b/dx/CMakeLists.txt
-index a16dd2f..a95c864 100644
+index a16dd2f..8205cc6 100644
 --- a/dx/CMakeLists.txt
 +++ b/dx/CMakeLists.txt
 @@ -2,7 +2,7 @@ set(POP_DX_SOURCES
@@ -196,8 +290,20 @@ index a16dd2f..a95c864 100644
  # host_api.h is a C header too. The C11 consumer is an object the DX tests
  # link; the header is also parsed as C++17 on its own.
  add_library(host_api_header_test OBJECT tests/host_api_header_test.c)
+@@ -40,6 +52,11 @@ target_link_libraries(dx_tests PRIVATE recomp_platform recomp_dx recomp_runtime)
+ target_compile_options(dx_tests PRIVATE ${POP_WARN_HOST})
+ pop_optimize(dx_tests 1)
+ pop_test_binary(dx_tests)
++if(EMSCRIPTEN)
++  # The guest arena exceeds Emscripten's default 16 MiB even before tests run.
++  target_link_options(dx_tests PRIVATE -sALLOW_MEMORY_GROWTH=1
++    -sINITIAL_MEMORY=1073741824 -sENVIRONMENT=node -sEXIT_RUNTIME=1)
++endif()
+ add_test(NAME dx_tests COMMAND dx_tests WORKING_DIRECTORY ${POP_ROOT})
+ set_tests_properties(dx_tests PROPERTIES LABELS nogame)
+ 
 diff --git a/dx/com.h b/dx/com.h
-index 0a87829..aef54b9 100644
+index 0a87829..e3fbfda 100644
 --- a/dx/com.h
 +++ b/dx/com.h
 @@ -47,6 +47,7 @@ enum ComIface : uint16_t {
@@ -217,19 +323,72 @@ index 0a87829..aef54b9 100644
      IF_DINPUT,
      IF_DINPUTDEVICE,
      // DirectShow multimedia streaming (dshow.cpp)
+@@ -83,8 +86,9 @@ enum ComIface : uint16_t {
+     IF_MEDIAEVENT,       // IMediaEventEx (IMediaEvent as its prefix)
+     IF_MEDIASEEKING,     // IMediaSeeking
+     IF_BASICAUDIO,       // IBasicAudio
+-    IF_MEDIAPOSITION,    // IMediaPosition
++    IF_MEDIAPOSITION,    // IMediaPosition (dual, like the interfaces above)
+     IF_ENUMFILTERS,      // IEnumFilters over the graph's (empty) filter list
++    IF_VIDEOWINDOW,      // IVideoWindow on a standalone graph (a movie player)
+     IF_D3D11_DEVICE,
+     IF_D3D11_CONTEXT,
+     IF_D3D11_TEXTURE,
+@@ -139,6 +143,8 @@ enum ComIface : uint16_t {
+     // version 8 vtables.
+     IF_DINPUT8,
+     IF_DINPUTDEVICE8,
++    IF_D3DVERTEXSHADER9,
++    IF_D3DPIXELSHADER9,
+     IF_COUNT
+ };
+ 
+@@ -206,6 +212,8 @@ enum ComKind : uint16_t {
+     K_D3D9IB,         // an index buffer
+     K_D3D9DECL,       // a vertex declaration
+     K_D3D9QUERY,      // an occlusion or event query
++    K_D3D9VS,
++    K_D3D9PS,
+ };
+ 
+ // A DirectInput joystick axis's DIPROP_RANGE, DIPROP_DEADZONE and
+@@ -352,7 +360,11 @@ struct ComObj {
+     uint32_t dsh_stream = 0;       // multimedia stream: the audio media stream it carries
+     uint32_t dsh_graph = 0;        // multimedia stream: its filter graph, once asked for
+     uint32_t dsh_notify_flags = 0; // graph: IMediaEventEx::SetNotifyFlags
+-    uint32_t dsh_data = 0;         // sample: the audio data object it fills
++    // graph: the window IMediaEventEx::SetNotifyWindow gave, and the message
++    // it wants when the movie ends. Only a standalone graph acts on these.
++    uint32_t dsh_notify_hwnd = 0;
++    uint32_t dsh_notify_msg = 0;
++    uint32_t dsh_data = 0; // sample: the audio data object it fills
+     bool dsh_initialised = false;
+     uint32_t dsh_state = 0;                               // STREAMSTATE_STOP 0 / STREAMSTATE_RUN 1
+     uint32_t md_buffer = 0, md_length = 0, md_actual = 0; // audio data: the guest buffer
 diff --git a/dx/d3d9.cpp b/dx/d3d9.cpp
-index 1973efb..e033db8 100644
+index 1973efb..d615390 100644
 --- a/dx/d3d9.cpp
 +++ b/dx/d3d9.cpp
-@@ -21,6 +21,7 @@
+@@ -19,8 +19,10 @@
+ #include "dx.h"
+ #include "../runtime/guest.h"
  #include "../runtime/memory.h"
++#include "../runtime/win32.h"
  #include "host_api.h"
  #include "d3d9_pipeline.h"
 +#include "d3d9_ffp.h"
  #include "d3d9_raster.h"
  #include "d3d9_shader.h"
  #include "host_d9.h"
-@@ -132,25 +133,44 @@ void D9_GetAdapterIdentifier(X86 *c) {
+@@ -60,6 +62,7 @@ static const uint8_t IID_IDirect3DDevice9_[16] =
+ static const uint32_t D3D_OK9 = 0u;
+ static const uint32_t D3DERR_NOTAVAILABLE = MAKE_D3DHRESULT(2154);
+ static const uint32_t D3DERR_INVALIDCALL = MAKE_D3DHRESULT(2156);
++static void device_shader_destroy(ComObj *dev);
+ 
+ // Defined with the resources further down.
+ struct ComObj;
+@@ -132,25 +135,43 @@ void D9_GetAdapterIdentifier(X86 *c) {
      com_ret(c, D3D_OK9);
  }
  
@@ -245,9 +404,8 @@ index 1973efb..e033db8 100644
 +    uint32_t w, h, refresh, format;
 +};
 +static const DisplayMode kDisplayModes[] = {
-+    {640, 480, 60, 22},   {800, 600, 60, 22},   {1024, 768, 60, 22},
-+    {1152, 864, 60, 22},  {1280, 720, 60, 22},  {1280, 960, 60, 22},
-+    {1600, 1200, 60, 22}, {1920, 1080, 60, 22},
++    {640, 480, 60, 22},  {800, 600, 60, 22},  {1024, 768, 60, 22},  {1152, 864, 60, 22},
++    {1280, 720, 60, 22}, {1280, 960, 60, 22}, {1600, 1200, 60, 22}, {1920, 1080, 60, 22},
 +};
 +static void put_display_mode(uint32_t p, const DisplayMode &m) {
      if (!p)
@@ -260,12 +418,12 @@ index 1973efb..e033db8 100644
 +    wr32(p + 4, m.h);
 +    wr32(p + 8, m.refresh);
 +    wr32(p + 12, m.format);
- }
++}
 +// (this, Adapter, Format)
 +void D9_GetAdapterModeCount(X86 *c) {
 +    uint32_t format = arg(c, 2);
 +    set_eax(c, format >= 21 && format <= 23 ? (uint32_t)std::size(kDisplayModes) : 0);
-+}
+ }
 +// (this, Adapter, Format, Mode, pMode)
  void D9_EnumAdapterModes(X86 *c) {
 -    put_display_mode(arg(c, 4));
@@ -285,7 +443,7 @@ index 1973efb..e033db8 100644
      com_ret(c, D3D_OK9);
  }
  void D9_CheckDeviceType(X86 *c) {
-@@ -174,6 +194,7 @@ void D9_CheckDeviceMultiSampleType(X86 *c) {
+@@ -174,6 +195,7 @@ void D9_CheckDeviceMultiSampleType(X86 *c) {
      uint32_t type = arg(c, 5), quality = arg(c, 6);
      uint32_t levels = type == 0 ? 1 : type == 1 ? 2 : (type == 2 || type == 4) ? 1 : 0;
      if (!levels) {
@@ -293,7 +451,28 @@ index 1973efb..e033db8 100644
          com_ret(c, 0x8876086au); // D3DERR_NOTAVAILABLE
          return;
      }
-@@ -369,7 +390,6 @@ D9_STUB(UpdateTexture, 3)
+@@ -307,6 +329,8 @@ void D9_CreateDevice(X86 *c) {
+         dev->height = rd32(present + 4);
+         dev->bpp = 32;
+         dev->hwnd = rd32(present + 28);
++        if (!dev->hwnd)
++            dev->hwnd = arg(c, 3);
+         dev->samples = multisample_count(rd32(present + 16), rd32(present + 20));
+     }
+     uint32_t view = com_view(dev, IF_D3DDEVICE9);
+@@ -329,6 +353,11 @@ void D9_CreateDevice(X86 *c) {
+     }
+     LOGW("d3d9: CreateDevice %ux%u, window %08x, %s renderer", dev->width, dev->height, dev->hwnd,
+          host_d9_active() ? "GPU" : "CPU");
++    // An exclusive swap chain changes the guest window's client area too.
++    // Keeping the old desktop-size rectangle makes camera-raster validation
++    // reject a perfectly valid back buffer before the first draw.
++    if (present && !rd32(present + 32) && dev->width && dev->height)
++        win32_cover_display(c, dev->hwnd, dev->width, dev->height);
+     com_out_ptr(out, view);
+     com_ret(c, D3D_OK9);
+ }
+@@ -369,7 +398,6 @@ D9_STUB(UpdateTexture, 3)
  D9_STUB(GetRenderTargetData, 3)
  D9_STUB(GetFrontBufferData, 3)
  D9_STUB(ColorFill, 4)
@@ -301,26 +480,41 @@ index 1973efb..e033db8 100644
  D9_STUB(GetTransform, 3)
  D9_STUB(MultiplyTransform, 3)
  D9_STUB(SetMaterial, 2)
-@@ -401,10 +421,7 @@ D9_STUB(SetNPatchMode, 2)
+@@ -401,11 +429,6 @@ D9_STUB(SetNPatchMode, 2)
  D9_STUB(GetNPatchMode, 1)
  D9_STUB(ProcessVertices, 6)
  D9_STUB(GetVertexDeclaration, 2)
 -D9_STUB(SetFVF, 2)
 -D9_STUB(GetFVF, 2)
- D9_STUB(CreateVertexShader, 3)
+-D9_STUB(CreateVertexShader, 3)
 -D9_STUB(SetVertexShader, 2)
- D9_STUB(GetVertexShader, 2)
+-D9_STUB(GetVertexShader, 2)
  D9_STUB(GetVertexShaderConstantF, 4)
  D9_STUB(SetVertexShaderConstantI, 4)
-@@ -416,7 +433,6 @@ D9_STUB(SetStreamSourceFreq, 3)
+ D9_STUB(GetVertexShaderConstantI, 4)
+@@ -415,9 +438,6 @@ D9_STUB(GetStreamSource, 5)
+ D9_STUB(SetStreamSourceFreq, 3)
  D9_STUB(GetStreamSourceFreq, 3)
  D9_STUB(GetIndices, 2)
- D9_STUB(CreatePixelShader, 3)
+-D9_STUB(CreatePixelShader, 3)
 -D9_STUB(SetPixelShader, 2)
- D9_STUB(GetPixelShader, 2)
+-D9_STUB(GetPixelShader, 2)
  D9_STUB(GetPixelShaderConstantF, 4)
  D9_STUB(SetPixelShaderConstantI, 4)
-@@ -1328,6 +1344,35 @@ void Dev_GetDepthStencilSurface(X86 *c) {
+ D9_STUB(GetPixelShaderConstantI, 4)
+@@ -454,6 +474,11 @@ void Dev_Reset(X86 *c) {
+     dev->width = rd32(present + 0);
+     dev->height = rd32(present + 4);
+     dev->samples = multisample_count(rd32(present + 16), rd32(present + 20));
++    if (rd32(present + 32))
++        win32_uncover_display(c, dev->hwnd);
++    else if (dev->width && dev->height)
++        win32_cover_display(c, dev->hwnd, dev->width, dev->height);
++    device_shader_destroy(dev);
+     device_forget_buffers(dev);
+     ComObj *bb = device_backbuffer(dev);
+     dev->render_target = bb ? bb->id : 0;
+@@ -1328,6 +1353,35 @@ void Dev_GetDepthStencilSurface(X86 *c) {
      com_ret(c, D3D_OK9);
  }
  
@@ -356,7 +550,7 @@ index 1973efb..e033db8 100644
  void Dev_SetRenderTarget(X86 *c) {
      ComObj *dev = this_device9(c);
      ComObj *s = com_this(arg(c, 2));
-@@ -1402,10 +1447,79 @@ void Dev_SetVertexDeclaration(X86 *c) {
+@@ -1402,10 +1456,204 @@ void Dev_SetVertexDeclaration(X86 *c) {
      if (dev) {
          dev->current_viewport = (d && d->kind == K_D3D9DECL) ? d->id : 0;
          d9_pipeline(dev->id).declaration = dev->current_viewport;
@@ -408,35 +602,160 @@ index 1973efb..e033db8 100644
 +    com_ret(c, D3D_OK9);
 +}
 +
-+// The adapter does not yet expose standalone shader COM objects. Unbinding
-+// them is nevertheless a real operation, needed to leave an effect's pass.
-+void Dev_SetVertexShader(X86 *c) {
++// A shader owns its tokens; pipeline snapshots share those bytes, so changing
++// bindings or releasing a COM shader cannot invalidate an in-flight draw.
++struct Shader9 {
++    D9ShaderBytes code;
++};
++static std::map<uint32_t, Shader9> &shader_objects() {
++    static std::map<uint32_t, Shader9> objects;
++    return objects;
++}
++static void shader_destroy(ComObj *o) {
++    shader_objects().erase(o->id);
++}
++static std::map<uint32_t, std::array<uint32_t, 2>> &shader_bindings() {
++    static std::map<uint32_t, std::array<uint32_t, 2>> bindings;
++    return bindings;
++}
++static void device_shader_destroy(ComObj *dev) {
++    auto it = shader_bindings().find(dev->id);
++    if (it != shader_bindings().end()) {
++        for (uint32_t id : it->second)
++            if (ComObj *o = com_get(id))
++                com_release(o);
++        shader_bindings().erase(it);
++    }
++    auto &p = d9_pipeline(dev->id);
++    p.vs = {};
++    p.ps = {};
++    p.vs_key = p.ps_key = 0;
++}
++
++static void create_shader(X86 *c, bool pixel) {
 +    ComObj *dev = this_device9(c);
-+    if (!dev || arg(c, 1)) {
++    uint32_t input = arg(c, 1), out = arg(c, 2);
++    if (!out || !gm_valid(out, 4)) {
 +        com_ret(c, D3DERR_INVALIDCALL);
 +        return;
 +    }
-+    D9Pipeline &p = d9_pipeline(dev->id);
-+    p.vs = {};
-+    p.vs_key = 0;
++    wr32(out, 0);
++    if (!dev || !input || !gm_valid(input, 8)) {
++        com_ret(c, D3DERR_INVALIDCALL);
++        return;
++    }
++    size_t size =
++        d9sh::bytecode_size(gm_ptr(input), std::min(size_t(GUEST_SIZE - input), size_t(65536)));
++    if (!size || ((rd32(input) >> 16) == 0xffff) != pixel) {
++        com_ret(c, D3DERR_INVALIDCALL);
++        return;
++    }
++    auto code = std::make_shared<const std::vector<uint8_t>>(gm_ptr(input), gm_ptr(input) + size);
++    const auto &program = d9sh::program_for(*code);
++    if (!program.ok) {
++        LOGW("d3d9: shader refused: %s", program.why.c_str());
++        com_ret(c, D3DERR_INVALIDCALL);
++        return;
++    }
++    ComObj *o = com_new(pixel ? K_D3D9PS : K_D3D9VS);
++    uint32_t view = o ? com_view(o, pixel ? IF_D3DPIXELSHADER9 : IF_D3DVERTEXSHADER9) : 0;
++    if (!view) {
++        if (o)
++            com_release(o);
++        com_ret(c, E_OUTOFMEMORY);
++        return;
++    }
++    o->dev_d3d = dev->id;
++    shader_objects()[o->id].code.bytes = std::move(code);
++    wr32(out, view);
++    com_ret(c, D3D_OK9);
++}
++void Dev_CreatePixelShader(X86 *c) {
++    create_shader(c, true);
++}
++void Dev_CreateVertexShader(X86 *c) {
++    create_shader(c, false);
++}
++
++static void set_shader(X86 *c, bool pixel) {
++    ComObj *dev = this_device9(c), *o = com_this(arg(c, 1));
++    if (!dev ||
++        (arg(c, 1) && (!o || o->kind != (pixel ? K_D3D9PS : K_D3D9VS) || o->dev_d3d != dev->id))) {
++        com_ret(c, D3DERR_INVALIDCALL);
++        return;
++    }
++    auto &p = d9_pipeline(dev->id);
++    uint32_t &binding = shader_bindings()[dev->id][pixel ? 1 : 0];
++    ComObj *old = com_get(binding);
++    if (o)
++        com_addref(o);
++    binding = o ? o->id : 0;
++    if (old)
++        com_release(old);
++    auto &bound = pixel ? p.ps : p.vs;
++    bound = o ? shader_objects().at(o->id).code : D9ShaderBytes{};
++    (pixel ? p.ps_key : p.vs_key) = bound.empty() ? 0 : d9sh::code_key(bound.data(), bound.size());
 +    com_ret(c, D3D_OK9);
 +}
 +void Dev_SetPixelShader(X86 *c) {
++    set_shader(c, true);
++}
++void Dev_SetVertexShader(X86 *c) {
++    set_shader(c, false);
++}
++
++static void get_shader(X86 *c, bool pixel) {
 +    ComObj *dev = this_device9(c);
-+    if (!dev || arg(c, 1)) {
++    uint32_t out = arg(c, 1);
++    if (!dev || !out || !gm_valid(out, 4)) {
 +        com_ret(c, D3DERR_INVALIDCALL);
 +        return;
 +    }
-+    D9Pipeline &p = d9_pipeline(dev->id);
-+    p.ps = {};
-+    p.ps_key = 0;
++    const auto &bound = pixel ? d9_pipeline(dev->id).ps : d9_pipeline(dev->id).vs;
++    wr32(out, 0);
++    for (auto &[id, shader] : shader_objects()) {
++        if (!bound.empty() && shader.code.bytes == bound.bytes) {
++            ComObj *o = com_get(id);
++            if (o) {
++                com_addref(o);
++                wr32(out, com_view(o, pixel ? IF_D3DPIXELSHADER9 : IF_D3DVERTEXSHADER9));
++            }
++            break;
++        }
++    }
++    com_ret(c, D3D_OK9);
++}
++void Dev_GetPixelShader(X86 *c) {
++    get_shader(c, true);
++}
++void Dev_GetVertexShader(X86 *c) {
++    get_shader(c, false);
++}
++
++void Shader_GetFunction(X86 *c) {
++    ComObj *o = com_this_arg(c);
++    uint32_t data = arg(c, 1), size = arg(c, 2);
++    auto it = o ? shader_objects().find(o->id) : shader_objects().end();
++    if (it == shader_objects().end() || !size || !gm_valid(size, 4)) {
++        com_ret(c, D3DERR_INVALIDCALL);
++        return;
++    }
++    const auto &code = it->second.code;
++    uint32_t capacity = rd32(size);
++    wr32(size, uint32_t(code.size()));
++    if (data && (capacity < code.size() || !gm_valid(data, uint32_t(code.size())))) {
++        com_ret(c, D3DERR_INVALIDCALL);
++        return;
++    }
++    if (data)
++        memcpy(gm_ptr(data), code.data(), code.size());
 +    com_ret(c, D3D_OK9);
 +}
 +
  // (this, Type, ppQuery). A query with no GPU behind it answers immediately.
  void Dev_CreateQuery(X86 *c) {
      ComObj *dev = this_device9(c);
-@@ -1580,15 +1694,61 @@ static void target_viewport(ComObj *dev, const HostD9Target &t, int32_t vp[4]) {
+@@ -1580,15 +1828,69 @@ static void target_viewport(ComObj *dev, const HostD9Target &t, int32_t vp[4]) {
      vp[3] = rt ? (int32_t)rt->height : (int32_t)dev->height;
  }
  
@@ -465,10 +784,18 @@ index 1973efb..e033db8 100644
 +        D9FixedFunction ff;
 +        std::string why;
 +        ComObj *rt = com_get(dev->render_target);
++        uint32_t fvf = pl.fvf;
++        if (!fvf) {
++            ComObj *decl = com_get(pl.declaration);
++            if (!decl || decl->kind != K_D3D9DECL)
++                why = "no fixed-function vertex declaration or FVF is bound";
++            else
++                d9_declaration_fvf(decl->blob, fvf, why);
++        }
 +        if (!pl.vs.empty() || !pl.ps.empty())
 +            why = "mixed programmable/fixed-function shaders are not implemented";
-+        else if (d9_ffp_prepare(pl, pl.fvf, rt ? rt->width : dev->width,
-+                                rt ? rt->height : dev->height, ff, why)) {
++        else if (why.empty() && d9_ffp_prepare(pl, fvf, rt ? rt->width : dev->width,
++                                               rt ? rt->height : dev->height, ff, why)) {
 +            saved_vs = pl.vs;
 +            saved_ps = pl.ps;
 +            saved_vs_key = pl.vs_key;
@@ -506,7 +833,18 @@ index 1973efb..e033db8 100644
      d.target = gpu_target(dev);
      target_viewport(dev, d.target, d.viewport);
      d.depth_range[0] = pl.viewport_z[0];
-@@ -1614,7 +1774,7 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
+@@ -1607,6 +1909,10 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
+     d.vs_size = (uint32_t)pl.vs.size();
+     d.ps = pl.ps.data();
+     d.ps_size = (uint32_t)pl.ps.size();
++    // Only the synthesized fixed-function pipeline reacts to SHADEMODE flat;
++    // a programmable pair owns its own interpolation regardless of the
++    // render state.
++    d.flat_colors = binding.changed && pl.rs[9] == 1;
+     d.vconst = &pl.vconst[0][0];
+     d.vconst_count = std::min<uint32_t>(vs.max_const, 256);
+     d.pconst = &pl.pconst[0][0];
+@@ -1614,7 +1920,7 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
      ComObj *decl = com_get(pl.declaration);
      if (!decl || decl->kind != K_D3D9DECL) {
          log_once("d3d9.gpu.nodecl", "d3d9: a draw with no vertex declaration is skipped");
@@ -515,7 +853,7 @@ index 1973efb..e033db8 100644
      }
      d.decl = decl->blob.data();
      d.decl_size = (uint32_t)decl->blob.size();
-@@ -1649,19 +1809,26 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
+@@ -1649,19 +1955,28 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
      bool color_write = !pl.rs_set[168] || (pl.rs[168] & 0xf) != 0;
      bool z_write = (!pl.rs_set[14] || pl.rs[14]) && (!pl.rs_set[7] || pl.rs[7]);
      gpu_target_drawn(dev, color_write, z_write);
@@ -539,12 +877,15 @@ index 1973efb..e033db8 100644
 +        return false;
      ComObj *decl = com_get(dev->current_viewport); // SetVertexDeclaration keeps it here
      static const std::vector<uint8_t> none;
-     d9_raster_draw(dev, target, (decl && decl->kind == K_D3D9DECL) ? decl->blob : none, call);
+-    d9_raster_draw(dev, target, (decl && decl->kind == K_D3D9DECL) ? decl->blob : none, call);
++    D9DrawCall shaded = call;
++    shaded.flat_colors = binding.changed && binding.pl.rs[9] == 1;
++    d9_raster_draw(dev, target, (decl && decl->kind == K_D3D9DECL) ? decl->blob : none, shaded);
 +    return true;
  }
  
  // (this, PrimitiveType, StartVertex, PrimitiveCount)
-@@ -1675,8 +1842,7 @@ void Dev_DrawPrimitive(X86 *c) {
+@@ -1675,8 +1990,7 @@ void Dev_DrawPrimitive(X86 *c) {
          d.primitive = arg(c, 1);
          d.primitive_count = arg(c, 3);
          d.start = arg(c, 2);
@@ -554,7 +895,7 @@ index 1973efb..e033db8 100644
          return;
      }
      ComObj *vb = dev ? com_get(dev->back_obj) : nullptr;
-@@ -1688,7 +1854,10 @@ void Dev_DrawPrimitive(X86 *c) {
+@@ -1688,7 +2002,10 @@ void Dev_DrawPrimitive(X86 *c) {
          call.vertex_bytes = vb->blob.size() - dev->lock_off;
          call.stride = dev->rate;
          call.first = arg(c, 2);
@@ -566,7 +907,7 @@ index 1973efb..e033db8 100644
      }
      com_ret(c, D3D_OK9);
  }
-@@ -1701,6 +1870,7 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
+@@ -1701,6 +2018,7 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
      ComObj *dev = this_device9(c);
      if (dev && gpu_on()) {
          ComObj *ibo = com_get(d9_pipeline(dev->id).index_buffer);
@@ -574,7 +915,7 @@ index 1973efb..e033db8 100644
          if (ibo) {
              gpu_sync_buffer(ibo);
              HostD9Draw d{};
-@@ -1710,9 +1880,9 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
+@@ -1710,9 +2028,9 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
              d.base_vertex = (int32_t)arg(c, 2);
              d.index_buffer = ibo->id;
              d.index_size = ibo->rmask ? ibo->rmask : 2;
@@ -586,7 +927,7 @@ index 1973efb..e033db8 100644
          return;
      }
      ComObj *vb = dev ? com_get(dev->back_obj) : nullptr;
-@@ -1729,7 +1899,10 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
+@@ -1729,7 +2047,10 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
          call.index_size = ib->rmask ? ib->rmask : 2;
          call.base_vertex = (int32_t)arg(c, 2);
          call.first = arg(c, 5);
@@ -598,7 +939,7 @@ index 1973efb..e033db8 100644
      }
      com_ret(c, D3D_OK9);
  }
-@@ -1801,6 +1974,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
+@@ -1801,6 +2122,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
              describe_draw_inputs(c, arg(c, 3), arg(c, 4), arg(c, 2) + 2);
      }
      if (ComObj *dev = this_device9(c); dev && gpu_on()) {
@@ -606,7 +947,7 @@ index 1973efb..e033db8 100644
          HostD9Draw d{};
          d.primitive = arg(c, 1);
          d.primitive_count = arg(c, 2);
-@@ -1809,9 +1983,9 @@ void Dev_DrawPrimitiveUP(X86 *c) {
+@@ -1809,9 +2131,9 @@ void Dev_DrawPrimitiveUP(X86 *c) {
              d.stream[0].stride = arg(c, 4);
              d.inline_vertices = gm_ptr(arg(c, 3));
              d.inline_bytes = bytes;
@@ -618,7 +959,7 @@ index 1973efb..e033db8 100644
          return;
      }
      D9DrawCall call;
-@@ -1819,8 +1993,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
+@@ -1819,8 +2141,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
      call.prim_count = arg(c, 2);
      call.vertices = arg(c, 3);
      call.stride = arg(c, 4);
@@ -628,7 +969,7 @@ index 1973efb..e033db8 100644
  }
  
  // (this, PrimitiveType, MinVertexIndex, NumVertices, PrimitiveCount,
-@@ -1831,6 +2004,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
+@@ -1831,6 +2152,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
               "indices at %08x",
               g_draws, prim_name(arg(c, 1)), arg(c, 4), arg(c, 3), arg(c, 8), arg(c, 7), arg(c, 5));
      if (ComObj *dev = this_device9(c); dev && gpu_on()) {
@@ -636,7 +977,7 @@ index 1973efb..e033db8 100644
          HostD9Draw d{};
          d.primitive = arg(c, 1);
          d.primitive_count = arg(c, 4);
-@@ -1844,9 +2018,9 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
+@@ -1844,9 +2166,9 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
              d.inline_indices = gm_ptr(arg(c, 5));
              d.inline_index_bytes = ibytes;
              d.index_size = isize;
@@ -648,7 +989,7 @@ index 1973efb..e033db8 100644
          return;
      }
      D9DrawCall call;
-@@ -1856,8 +2030,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
+@@ -1856,8 +2178,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
      call.stride = arg(c, 8);
      call.indices = arg(c, 5);
      call.index_size = arg(c, 6) == 102 ? 4 : 2;
@@ -658,6 +999,37 @@ index 1973efb..e033db8 100644
  }
  
  // ---------------------------------------------------------------------------
+@@ -2258,6 +2579,14 @@ static const ComMethod g_decl9[] = {
+     {"GetDeclaration", 3, Decl_GetDeclaration},
+ };
+ 
++static const ComMethod g_shader9[] = {
++    {"QueryInterface", 3, com_QueryInterface},
++    {"AddRef", 1, com_AddRef},
++    {"Release", 1, com_Release},
++    {"GetDevice", 2, Res_GetDevice},
++    {"GetFunction", 3, Shader_GetFunction},
++};
++
+ static const ComMethod g_query9[] = {
+     {"QueryInterface", 3, com_QueryInterface},
+     {"AddRef", 1, com_AddRef},
+@@ -2593,6 +2922,15 @@ void d3d9_register() {
+     com_bind(IF_D3DINDEXBUFFER9, K_D3D9IB);
+     com_bind(IF_D3DVERTEXDECL9, K_D3D9DECL);
+     com_bind(IF_D3DQUERY9, K_D3D9QUERY);
++    com_define(IF_D3DPIXELSHADER9, "d3d9.dll", "IDirect3DPixelShader9", g_shader9,
++               std::size(g_shader9));
++    com_define(IF_D3DVERTEXSHADER9, "d3d9.dll", "IDirect3DVertexShader9", g_shader9,
++               std::size(g_shader9));
++    com_bind(IF_D3DPIXELSHADER9, K_D3D9PS);
++    com_bind(IF_D3DVERTEXSHADER9, K_D3D9VS);
++    com_set_destructor(K_D3D9PS, shader_destroy);
++    com_set_destructor(K_D3D9VS, shader_destroy);
++    com_set_destructor(K_D3D9DEVICE, device_shader_destroy);
+     for (ComKind k : {K_D3D9TEXTURE, K_D3D9SURFACE, K_D3D9VB, K_D3D9IB})
+         com_set_destructor(k, d3d9_resource_destroy);
+     com_set_destructor(K_D3D9QUERY, query_destroy);
 diff --git a/dx/d3d9_pipeline.h b/dx/d3d9_pipeline.h
 index cc84cf4..7cef5bc 100644
 --- a/dx/d3d9_pipeline.h
@@ -689,7 +1061,7 @@ index cc84cf4..7cef5bc 100644
      }
  };
 diff --git a/dx/d3d9_raster.cpp b/dx/d3d9_raster.cpp
-index 00e088b..6b59ed6 100644
+index 00e088b..f45d07f 100644
 --- a/dx/d3d9_raster.cpp
 +++ b/dx/d3d9_raster.cpp
 @@ -196,8 +196,11 @@ const Decoded *texture_rgba(uint32_t texture_id) {
@@ -748,8 +1120,217 @@ index 00e088b..6b59ed6 100644
          }
          float area = (sx[1] - sx[0]) * (sy[2] - sy[0]) - (sx[2] - sx[0]) * (sy[1] - sy[0]);
          if (std::fabs(area) < 1e-8f)
+@@ -976,7 +998,20 @@ void d9_raster_draw(ComObj *device, ComObj *target, const std::vector<uint8_t> &
+         }
+         const Out b = shade_vertex(vertex_index(i1));
+         const Out c = shade_vertex(vertex_index(i2));
+-        draw_triangle(a, b, c);
++        Out fa = a, fb = b, fc = c;
++        if (call.flat_colors) {
++            // The colour varyings (od0, od1) come from the provoking vertex —
++            // the first vertex the primitive submitted. A list and a fan both
++            // keep it in i0 above; an odd strip triangle was winding-swapped,
++            // so the walking vertex lands in fb instead. This is the same
++            // first-vertex choice the WebGPU flat interpolation makes, not
++            // DX9's own fan rule (its second vertex); see d3d9_ffp.cpp.
++            const uint32_t walk = call.prim == 5 ? (p & 1 ? i1 : i0) : i0;
++            const Out &prov = shade_vertex(vertex_index(walk));
++            fb.attr[0] = fc.attr[0] = prov.attr[0];
++            fb.attr[1] = fc.attr[1] = prov.attr[1];
++        }
++        draw_triangle(fa, fb, fc);
+     }
+     static uint32_t reported = 0;
+     if (++reported <= 16)
+diff --git a/dx/d3d9_raster.h b/dx/d3d9_raster.h
+index 3f14a05..ce89a4c 100644
+--- a/dx/d3d9_raster.h
++++ b/dx/d3d9_raster.h
+@@ -31,6 +31,11 @@ struct D9DrawCall {
+     size_t vertex_bytes = 0;
+     const uint8_t *index_data = nullptr;
+     size_t index_bytes = 0;
++    // Fixed-function draw under D3DSHADE_FLAT: colours are constant across
++    // each triangle. Like the WebGPU renderer, the provoking vertex is the
++    // first in the triangle's submission order (the fan apex — DX9's own fan
++    // rule provokes the second vertex; see d3d9_ffp.cpp).
++    bool flat_colors = false;
+ };
+ 
+ // Draws into `target` (a 32-bit surface object) with the device's pipeline.
+diff --git a/dx/d3d9_shader.cpp b/dx/d3d9_shader.cpp
+index b692964..6b66fa6 100644
+--- a/dx/d3d9_shader.cpp
++++ b/dx/d3d9_shader.cpp
+@@ -255,6 +255,37 @@ Program load(const std::vector<uint8_t> &code) {
+ 
+ } // namespace
+ 
++size_t bytecode_size(const uint8_t *data, size_t available) {
++    if (!data || available < 8)
++        return 0;
++    auto word = [&](size_t i) {
++        uint32_t v;
++        memcpy(&v, data + i * 4, 4);
++        return v;
++    };
++    uint32_t version = word(0), major = (version >> 8) & 255, minor = version & 255;
++    bool pixel = (version >> 16) == 0xffff;
++    if (((version >> 16) != 0xfffe && !pixel) || major < 1 || major > 3)
++        return 0;
++    size_t n = available / 4;
++    for (size_t i = 1; i < n;) {
++        uint32_t token = word(i), op = token & 0xffff;
++        if (token == OP_END)
++            return (i + 1) * 4;
++        int count = operand_count(op, major, minor, pixel);
++        if (op != OP_COMMENT && op != OP_PHASE && count < 0)
++            return 0;
++        size_t length = op == OP_COMMENT ? ((token >> 16) & 0x7fff)
++                        : op == OP_PHASE ? 0
++                        : major >= 2     ? ((token >> 24) & 15)
++                                         : size_t(count);
++        if (length > n - i - 1)
++            return 0;
++        i += 1 + length;
++    }
++    return 0;
++}
++
+ uint64_t code_key(const uint8_t *code, size_t size) {
+     uint64_t h = 1469598103934665603ull;
+     for (size_t i = 0; i < size; ++i) {
+diff --git a/dx/d3d9_shader.h b/dx/d3d9_shader.h
+index 3c5121d..e4b87ff 100644
+--- a/dx/d3d9_shader.h
++++ b/dx/d3d9_shader.h
+@@ -143,6 +143,9 @@ struct Program {
+ 
+ // A decoded program, cached by its bytes.
+ const Program &program_for(const std::vector<uint8_t> &code);
++// Length through END, walking instructions/comments rather than matching an
++// operand's bit pattern. Zero means truncated, unsupported or unterminated.
++size_t bytecode_size(const uint8_t *data, size_t available);
+ // The key that names a program's bytes (64-bit FNV-1a, never zero), and the
+ // program cached under it: the per-draw path looks programs up by key.
+ uint64_t code_key(const uint8_t *code, size_t size);
+diff --git a/dx/d3d9_shadergen.cpp b/dx/d3d9_shadergen.cpp
+index cfee72a..cce6dcb 100644
+--- a/dx/d3d9_shadergen.cpp
++++ b/dx/d3d9_shadergen.cpp
+@@ -1145,7 +1145,26 @@ namespace d9wgsl {
+ using d9msl::Gen;
+ using d9msl::Lang;
+ 
+-bool vertex_source(const d9sh::Program &p, std::string *out, std::string *why) {
++// The flat variant of the shared varying struct: the same members, but the
++// two colour slots take the first vertex's value across the triangle, which
++// is what D3DSHADE_FLAT asks of a triangle list or strip (triangle fans
++// disagree: DX9 provokes the second vertex of each fan triangle, WebGPU
++// always the first index reference — the documented exception here). Both
++// shaders of a flat pipeline use this type, so the varying layouts match.
++const char kWgslV2fFlat[] =
++    "struct V2FF {                                          \n"
++    "    @builtin(position) pos: vec4f,                     \n"
++    "    @location(0) @interpolate(flat) d0: vec4f,         \n"
++    "    @location(1) @interpolate(flat) d1: vec4f,         \n"
++    "    @location(2) t0: vec4f, @location(3) t1: vec4f, @location(4) t2: vec4f, "
++    "@location(5) t3: vec4f,\n"
++    "    @location(6) t4: vec4f, @location(7) t5: vec4f, @location(8) t6: vec4f, "
++    "@location(9) t7: vec4f,\n"
++    "    @location(10) fog: f32,                            \n"
++    "    @location(11) fogz: f32,                           \n"
++    "};                                                     \n";
++
++bool vertex_source(const d9sh::Program &p, std::string *out, std::string *why, bool flat_colors) {
+     if (!p.ok || p.pixel) {
+         if (why)
+             *why = p.ok ? "not a vertex shader" : p.why;
+@@ -1156,6 +1175,10 @@ bool vertex_source(const d9sh::Program &p, std::string *out, std::string *why) {
+         return false;
+     const std::string n = std::to_string(g.const_limit);
+     std::string s = d9msl::kWgslPrelude;
++    if (flat_colors) {
++        s += kWgslV2fFlat;
++    }
++    const std::string out_ty = flat_colors ? "V2FF" : "V2F";
+     s += "struct VC { c: array<vec4f, " + n +
+          "> };\n"
+          "@group(0) @binding(0) var<uniform> VCB: VC;\n"
+@@ -1168,7 +1191,9 @@ bool vertex_source(const d9sh::Program &p, std::string *out, std::string *why) {
+     if (seen.empty())
+         s += "    @builtin(vertex_index) vid: u32,\n";
+     s += "};\n"
+-         "@vertex fn vs_main(vin: VIn) -> V2F {\n"
++         "@vertex fn vs_main(vin: VIn) -> " +
++         out_ty +
++         " {\n"
+          "    let c = &VCB.c;\n"
+          "    _ = c[0];\n"
+          "    var r: array<vec4f, 32>;\n"
+@@ -1185,7 +1210,8 @@ bool vertex_source(const d9sh::Program &p, std::string *out, std::string *why) {
+         s += "    vv[" + k + "] = vin.v" + k + " * P.ascale[" + k + "];\n";
+     }
+     s += g.body;
+-    s += "    var o: V2F;\n"
++    s += "    var o: " + out_ty +
++         ";\n"
+          "    o.pos = vec4f(opos.xy + P.halfpix.xy * opos.w, opos.zw);\n"
+          "    o.d0 = " +
+          std::string(p.major >= 3 ? "od[0]" : "saturate(od[0])") +
+@@ -1204,7 +1230,7 @@ bool vertex_source(const d9sh::Program &p, std::string *out, std::string *why) {
+ }
+ 
+ bool pixel_source(const d9sh::Program &p, const d9msl::PixelVariant &v, std::string *out,
+-                  std::string *why) {
++                  std::string *why, bool flat_colors) {
+     if (!p.ok || !p.pixel) {
+         if (why)
+             *why = p.ok ? "not a pixel shader" : p.why;
+@@ -1216,6 +1242,10 @@ bool pixel_source(const d9sh::Program &p, const d9msl::PixelVariant &v, std::str
+         return false;
+     const std::string n = std::to_string(g.const_limit);
+     std::string s = d9msl::kWgslPrelude;
++    if (flat_colors) {
++        s += kWgslV2fFlat;
++    }
++    const std::string in_ty = flat_colors ? "V2FF" : "V2F";
+     s += "struct PC { c: array<vec4f, " + n +
+          "> };\n"
+          "@group(0) @binding(2) var<uniform> PCB: PC;\n"
+@@ -1247,7 +1277,9 @@ bool pixel_source(const d9sh::Program &p, const d9msl::PixelVariant &v, std::str
+     if (depth)
+         s += "    @builtin(frag_depth) depth: f32,\n";
+     s += "};\n"
+-         "@fragment fn ps_main(vin: V2F) -> FOut {\n"
++         "@fragment fn ps_main(vin: " +
++         in_ty +
++         ") -> FOut {\n"
+          "    let c = &PCB.c;\n"
+          "    _ = c[0];\n"
+          "    var r: array<vec4f, 32>;\n"
+diff --git a/dx/d3d9_wgsl.h b/dx/d3d9_wgsl.h
+index 976bcb6..e4d755b 100644
+--- a/dx/d3d9_wgsl.h
++++ b/dx/d3d9_wgsl.h
+@@ -23,8 +23,13 @@ namespace d9wgsl {
+ constexpr uint32_t kTextureBinding = 4;
+ constexpr uint32_t kSamplerBinding = 20;
+ 
+-bool vertex_source(const d9sh::Program &p, std::string *out, std::string *why);
++// A flat-shaded pipeline (D3DSHADE_FLAT, D3DRS_SHADEMODE): both entry points
++// take `flat_colors` and must agree, or the WebGPU vertex/fragment varying
++// layouts do not match. True declares the colour varyings d0, d1
++// @interpolate(flat) — DX9's first-vertex shading for lists and strips.
++bool vertex_source(const d9sh::Program &p, std::string *out, std::string *why,
++                   bool flat_colors = false);
+ bool pixel_source(const d9sh::Program &p, const d9msl::PixelVariant &v, std::string *out,
+-                  std::string *why);
++                  std::string *why, bool flat_colors = false);
+ 
+ } // namespace d9wgsl
 diff --git a/dx/ddraw.cpp b/dx/ddraw.cpp
-index 0b42f52..759935f 100644
+index 0b42f52..decc1bb 100644
 --- a/dx/ddraw.cpp
 +++ b/dx/ddraw.cpp
 @@ -4699,6 +4699,11 @@ void DD_GetDeviceIdentifier(X86 *c) {
@@ -834,7 +1415,7 @@ index 0b42f52..759935f 100644
      com_define(IF_DDSURFACE, "DDRAW.dll", "IDirectDrawSurface", g_surface1, std::size(g_surface1));
      com_define(IF_DDSURFACE2, "DDRAW.dll", "IDirectDrawSurface2", g_surface2,
                 std::size(g_surface2));
-@@ -4924,6 +4963,14 @@ void ddraw_register() {
+@@ -4924,6 +4963,18 @@ void ddraw_register() {
      com_bind(IF_DIRECTDRAW, K_DDRAW);
      com_bind(IF_DIRECTDRAW2, K_DDRAW);
      com_bind(IF_DIRECTDRAW4, K_DDRAW);
@@ -846,10 +1427,14 @@ index 0b42f52..759935f 100644
 +    // the signal to implement whatever the guest actually wanted.
 +    imports_register_presence_only("d3d8.dll");
 +    imports_register_presence_only("dpnhpast.dll");
++    // mscoree.dll ships in-box on every desktop Windows, so its presence is
++    // part of the Windows 5.1 persona; the guest probes it during init and
++    // a missing module leaves a null where native code keeps a handle.
++    imports_register_presence_only("mscoree.dll");
      com_bind(IF_DDSURFACE, K_SURFACE);
      com_bind(IF_DDSURFACE2, K_SURFACE);
      com_bind(IF_DDSURFACE3, K_SURFACE);
-@@ -4935,6 +4982,7 @@ void ddraw_register() {
+@@ -4935,6 +4986,7 @@ void ddraw_register() {
      com_register_iid(IF_DIRECTDRAW, IID_IDirectDraw_);
      com_register_iid(IF_DIRECTDRAW2, IID_IDirectDraw2_);
      com_register_iid(IF_DIRECTDRAW4, IID_IDirectDraw4_);
@@ -857,8 +1442,328 @@ index 0b42f52..759935f 100644
      com_register_iid(IF_DDSURFACE, IID_IDirectDrawSurface_);
      com_register_iid(IF_DDSURFACE2, IID_IDirectDrawSurface2_);
      com_register_iid(IF_DDSURFACE3, IID_IDirectDrawSurface3_);
+diff --git a/dx/dshow.cpp b/dx/dshow.cpp
+index 146e8a8..318df59 100644
+--- a/dx/dshow.cpp
++++ b/dx/dshow.cpp
+@@ -20,6 +20,16 @@
+ //    with minimp3 and streamed to a host audio channel, refilled from the
+ //    frame pump, and EC_COMPLETE is posted when the last of it has played.
+ //
++//  - Playing a movie. A game can also build the graph itself,
++//    CoCreateInstance(CLSID_FilterGraph) + RenderFile + IMediaControl::Run,
++//    and wait on IMediaEventEx::SetNotifyWindow(0x40d) fed by its own message
++//    pump. Such a graph has no multimedia stream behind it (graph_this keys
++//    its state on itself), there is no video to decode or show, and its
++//    single completion event is queued as soon as it runs, announced through
++//    the notify window the player registered for. Boot paths that hold at
++//    "the movie is over" therefore move on the next pump, which is when the
++//    guest's own movie-wait states can advance.
++//
+ // Object model. One host object per COM object, as everywhere in dx/:
+ //   K_MMSTREAM      IAMMultiMediaStream (IMultiMediaStream is its prefix);
+ //                   owns the decoder and playback state, one audio media
+@@ -135,6 +145,10 @@ const uint8_t IID_IMediaSeeking_[16] =
+     IID_BYTES(0x36b73880, 0xc2c8, 0x11cf, 0x8b, 0x46, 0x00, 0x80, 0x5f, 0x6c, 0xef, 0x60);
+ const uint8_t IID_IEnumFilters_[16] =
+     IID_BYTES(0x56a86893, 0x0ad4, 0x11ce, 0xb0, 0x3a, 0x00, 0x20, 0xaf, 0x0b, 0xa7, 0x70);
++const uint8_t IID_IVideoWindow_[16] =
++    IID_BYTES(0x56a868b4, 0x0ad4, 0x11ce, 0xb0, 0x3a, 0x00, 0x20, 0xaf, 0x0b, 0xa7, 0x70);
++const uint8_t CLSID_FilterGraph_[16] =
++    IID_BYTES(0xe436ebb3, 0x524f, 0x11ce, 0x9f, 0x53, 0x00, 0x20, 0xaf, 0x0b, 0xa7, 0x70);
+ const uint8_t TIME_FORMAT_MEDIA_TIME_[16] =
+     IID_BYTES(0x7b785574, 0x8c82, 0x11cf, 0xbc, 0x0c, 0x00, 0xaa, 0x00, 0xac, 0x74, 0xf6);
+ 
+@@ -1195,7 +1209,9 @@ GraphThis graph_this(X86 *c) {
+     if (t.g && t.g->kind != K_GRAPH)
+         t.g = nullptr;
+     t.mm = owner_of(t.g);
+-    t.s = t.mm ? &source_for(t.mm) : nullptr;
++    // A standalone graph, made through CoCreateInstance(CLSID_FilterGraph), has
++    // no multimedia stream behind it: its state is keyed on the graph itself.
++    t.s = t.mm ? &source_for(t.mm) : (t.g ? &source_for(t.g) : nullptr);
+     return t;
+ }
+ 
+@@ -1296,7 +1312,35 @@ DX_STUB(GB_Disconnect, E_NOTIMPL)
+ DX_STUB(GB_SetDefaultSyncSource, S_OK)
+ DX_STUB(GB_Connect, E_NOTIMPL)
+ DX_STUB(GB_Render, E_NOTIMPL)
+-DX_STUB(GB_RenderFile, E_NOTIMPL)
++
++// RenderFile(LPCWSTR filename, LPCWSTR list): becomes the record of the movie
++// file the graph is to play. There are no filters here and no decoder: the
++// graph is movie-shaped, a fact its methods see through graph_this, and the
++// movie is over as soon as IMediaControl::Run asks for it (see MC_Run). The
++// name resolves the way CreateFileA's would for the log; a file the variant
++// does not ship still renders, because completing the graph is what keeps a
++// movie-driven boot path moving.
++void GB_RenderFile(X86 *c) {
++    GraphThis t = graph_this(c);
++    uint32_t path = arg(c, 1);
++    if (!t.g) {
++        com_ret(c, E_FAIL);
++        return;
++    }
++    if (!path || !gm_valid(path, 2)) {
++        com_ret(c, E_POINTER);
++        return;
++    }
++    Source &s = source_for(t.g);
++    stop_playback(s);
++    s.loaded = false;
++    s.events.clear();
++    s.name = read_wide(path);
++    std::string host = win32_host_path(s.name, false);
++    LOGV("dshow: RenderFile(%s)%s", s.name.c_str(), host.empty() ? " (not shipped)" : "");
++    com_ret(c, S_OK);
++}
++
+ DX_STUB(GB_AddSourceFilter, E_NOTIMPL)
+ DX_STUB(GB_SetLogFile, S_OK)
+ DX_STUB(GB_Abort, S_OK)
+@@ -1330,6 +1374,20 @@ void MC_Run(X86 *c) {
+         com_ret(c, E_FAIL);
+         return;
+     }
++    // A standalone movie graph has no decoder behind RenderFile: the movie is
++    // over the moment it runs. The completion event goes into the queue, and
++    // the notify window the player registered for is posted through the host
++    // pump, which is where the guest's own movie-wait wakes up.
++    if (!t.mm) {
++        stop_playback(*t.s);
++        t.s->running = false;
++        t.s->events.clear();
++        t.s->events.push_back(EC_COMPLETE);
++        if (t.g->dsh_notify_hwnd && t.g->dsh_notify_msg)
++            host_post_message(t.g->dsh_notify_hwnd, t.g->dsh_notify_msg, 0, 0);
++        com_ret(c, S_OK);
++        return;
++    }
+     if (!t.s->loaded) {
+         com_ret(c, MS_E_NOSTREAM);
+         return;
+@@ -1469,7 +1527,24 @@ void ME_WaitForCompletion(X86 *c) {
+ DX_STUB(ME_CancelDefaultHandling, S_OK)
+ DX_STUB(ME_RestoreDefaultHandling, S_OK)
+ DX_STUB(ME_FreeEventParams, S_OK)
+-DX_STUB(ME_SetNotifyWindow, S_OK)
++
++// SetNotifyWindow(OAHWND hwnd, LONG lMsg, LONG_PTR lInstance): a standalone
++// movie graph records the pair so its Run can announce itself; a stream's
++// graph keeps playing under its own pump, and its events leave the way they
++// always have, so the registration changes nothing there.
++void ME_SetNotifyWindow(X86 *c) {
++    GraphThis t = graph_this(c);
++    if (!t.g || t.mm) {
++        com_ret(c, t.g ? S_OK : E_FAIL);
++        return;
++    }
++    t.g->dsh_notify_hwnd = arg(c, 1);
++    t.g->dsh_notify_msg = arg(c, 2);
++    // Anything finished while nobody was watching is announced now.
++    if (t.s && !t.s->events.empty() && t.g->dsh_notify_hwnd && t.g->dsh_notify_msg)
++        host_post_message(t.g->dsh_notify_hwnd, t.g->dsh_notify_msg, 0, 0);
++    com_ret(c, S_OK);
++}
+ 
+ void ME_SetNotifyFlags(X86 *c) {
+     GraphThis t = graph_this(c);
+@@ -1515,6 +1590,129 @@ const ComMethod g_mediaevent[] = {
+     {"GetNotifyFlags", 2, ME_GetNotifyFlags},
+ };
+ 
++// A get answered for a stopped video window: zero, wherever a put is not
++// recorded — the movie player only puts, and a get that fails (a negative
++// HRESULT) would break a movie window's bookkeeping.
++#define VW_GET(name, val)                                                                          \
++    static void name(X86 *c) {                                                                     \
++        uint32_t out = arg(c, 1);                                                                  \
++        if (out && gm_valid(out, 4))                                                               \
++            wr32(out, (uint32_t)(val));                                                            \
++        com_ret(c, S_OK);                                                                          \
++    }
++
++void VW_GetWindowPosition(X86 *c) { // four out LONGs: at the origin
++    for (uint32_t i = 1; i <= 4; ++i) {
++        uint32_t out = arg(c, i);
++        if (out && gm_valid(out, 4))
++            wr32(out, 0);
++    }
++    com_ret(c, S_OK);
++}
++
++void VW_GetIdealImageSize(X86 *c) { // two out LONGs: one unshown frame
++    uint32_t first = arg(c, 1), second = arg(c, 2);
++    if (first && gm_valid(first, 4))
++        wr32(first, 640);
++    if (second && gm_valid(second, 4))
++        wr32(second, 480);
++    com_ret(c, S_OK);
++}
++
++DX_STUB(VW_put_Caption, S_OK)
++VW_GET(VW_get_Caption, 0) // a NULL BSTR
++DX_STUB(VW_put_WindowStyle, S_OK)
++VW_GET(VW_get_WindowStyle, 0)
++DX_STUB(VW_put_WindowStyleEx, S_OK)
++VW_GET(VW_get_WindowStyleEx, 0)
++DX_STUB(VW_put_AutoShow, S_OK)
++VW_GET(VW_get_AutoShow, 0)
++DX_STUB(VW_put_WindowState, S_OK)
++VW_GET(VW_get_WindowState, 0)
++DX_STUB(VW_put_BackgroundPalette, S_OK)
++VW_GET(VW_get_BackgroundPalette, 0)
++DX_STUB(VW_put_Visible, S_OK)
++VW_GET(VW_get_Visible, 0)
++DX_STUB(VW_put_Left, S_OK)
++VW_GET(VW_get_Left, 0)
++DX_STUB(VW_put_Width, S_OK)
++VW_GET(VW_get_Width, 0)
++DX_STUB(VW_put_Top, S_OK)
++VW_GET(VW_get_Top, 0)
++DX_STUB(VW_put_Height, S_OK)
++VW_GET(VW_get_Height, 0)
++DX_STUB(VW_put_Owner, S_OK)
++VW_GET(VW_get_Owner, 0)
++DX_STUB(VW_put_MessageDrain, S_OK)
++VW_GET(VW_get_MessageDrain, 0)
++VW_GET(VW_get_BorderColor, 0)
++DX_STUB(VW_put_BorderColor, S_OK)
++VW_GET(VW_get_FullScreenMode, 0)
++DX_STUB(VW_put_FullScreenMode, S_OK)
++DX_STUB(VW_SetWindowForeground, S_OK)
++DX_STUB(VW_NotifyOwnerMessage, S_OK)
++DX_STUB(VW_SetWindowPosition, S_OK)
++void VW_GetMinIdealImageSize(X86 *c) {
++    VW_GetIdealImageSize(c);
++}
++void VW_GetMaxIdealImageSize(X86 *c) {
++    VW_GetIdealImageSize(c);
++}
++void VW_GetRestorePosition(X86 *c) {
++    VW_GetWindowPosition(c);
++}
++DX_STUB(VW_HideCursor, S_OK)
++VW_GET(VW_IsCursorHidden, 0)
++
++const ComMethod g_videowindow[] = {
++    {"QueryInterface", 3, com_QueryInterface},
++    {"AddRef", 1, com_AddRef},
++    {"Release", 1, com_Release},
++    {"GetTypeInfoCount", 2, DISP_GetTypeInfoCount},
++    {"GetTypeInfo", 4, DISP_GetTypeInfo},
++    {"GetIDsOfNames", 6, DISP_GetIDsOfNames},
++    {"Invoke", 9, DISP_Invoke},
++    {"put_Caption", 2, VW_put_Caption},
++    {"get_Caption", 2, VW_get_Caption},
++    {"put_WindowStyle", 2, VW_put_WindowStyle},
++    {"get_WindowStyle", 2, VW_get_WindowStyle},
++    {"put_WindowStyleEx", 2, VW_put_WindowStyleEx},
++    {"get_WindowStyleEx", 2, VW_get_WindowStyleEx},
++    {"put_AutoShow", 2, VW_put_AutoShow},
++    {"get_AutoShow", 2, VW_get_AutoShow},
++    {"put_WindowState", 2, VW_put_WindowState},
++    {"get_WindowState", 2, VW_get_WindowState},
++    {"put_BackgroundPalette", 2, VW_put_BackgroundPalette},
++    {"get_BackgroundPalette", 2, VW_get_BackgroundPalette},
++    {"put_Visible", 2, VW_put_Visible},
++    {"get_Visible", 2, VW_get_Visible},
++    {"put_Left", 2, VW_put_Left},
++    {"get_Left", 2, VW_get_Left},
++    {"put_Width", 2, VW_put_Width},
++    {"get_Width", 2, VW_get_Width},
++    {"put_Top", 2, VW_put_Top},
++    {"get_Top", 2, VW_get_Top},
++    {"put_Height", 2, VW_put_Height},
++    {"get_Height", 2, VW_get_Height},
++    {"put_Owner", 2, VW_put_Owner},
++    {"get_Owner", 2, VW_get_Owner},
++    {"put_MessageDrain", 2, VW_put_MessageDrain},
++    {"get_MessageDrain", 2, VW_get_MessageDrain},
++    {"get_BorderColor", 2, VW_get_BorderColor},
++    {"put_BorderColor", 2, VW_put_BorderColor},
++    {"get_FullScreenMode", 2, VW_get_FullScreenMode},
++    {"put_FullScreenMode", 2, VW_put_FullScreenMode},
++    {"SetWindowForeground", 2, VW_SetWindowForeground},
++    {"NotifyOwnerMessage", 5, VW_NotifyOwnerMessage},
++    {"SetWindowPosition", 5, VW_SetWindowPosition},
++    {"GetWindowPosition", 5, VW_GetWindowPosition},
++    {"GetMinIdealImageSize", 3, VW_GetMinIdealImageSize},
++    {"GetMaxIdealImageSize", 3, VW_GetMaxIdealImageSize},
++    {"GetRestorePosition", 5, VW_GetRestorePosition},
++    {"HideCursor", 2, VW_HideCursor},
++    {"IsCursorHidden", 2, VW_IsCursorHidden},
++};
++
+ // --- IMediaSeeking, in media time (100 ns units), the only format here.
+ bool is_media_time(uint32_t guid) {
+     return guid && gm_valid(guid, 16) && memcmp(gm_ptr(guid), TIME_FORMAT_MEDIA_TIME_, 16) == 0;
+@@ -1929,6 +2127,26 @@ ComObj *audiodata_create() {
+     return com_new(K_AUDIODATA);
+ }
+ 
++// A graph put up through CoCreateInstance(CLSID_FilterGraph) stands alone: no
++// multimedia stream owns it, and its file comes from RenderFile. The state its
++// methods key on is the source entry its own id holds, dropped here.
++ComObj *filtergraph_create() {
++    ComObj *g = com_new(K_GRAPH);
++    if (g)
++        g->dsh_owner = 0;
++    return g;
++}
++
++void graph_destroy(ComObj *g) {
++    if (g->dsh_owner)
++        return; // a stream's graph plays the stream's source, not its own
++    auto it = sources().find(g->id);
++    if (it != sources().end()) {
++        release_playback(it->second);
++        sources().erase(it);
++    }
++}
++
+ } // namespace
+ 
+ void dshow_frame_pump(X86 *) {
+@@ -1962,6 +2180,8 @@ void dshow_register() {
+                std::size(g_mediaposition));
+     com_define(IF_ENUMFILTERS, "QUARTZ.dll", "IEnumFilters", g_enumfilters,
+                std::size(g_enumfilters));
++    com_define(IF_VIDEOWINDOW, "QUARTZ.dll", "IVideoWindow", g_videowindow,
++               std::size(g_videowindow));
+ 
+     com_bind(IF_MMSTREAM, K_MMSTREAM);
+     com_bind(IF_MEDIASTREAM, K_MEDIASTREAM);
+@@ -1975,6 +2195,7 @@ void dshow_register() {
+     com_bind(IF_BASICAUDIO, K_GRAPH);
+     com_bind(IF_MEDIAPOSITION, K_GRAPH);
+     com_bind(IF_ENUMFILTERS, K_ENUMFILTERS);
++    com_bind(IF_VIDEOWINDOW, K_GRAPH);
+ 
+     com_register_iid(IF_MMSTREAM, IID_IAMMultiMediaStream_);
+     com_register_iid(IF_MMSTREAM, IID_IMultiMediaStream_);
+@@ -1993,13 +2214,18 @@ void dshow_register() {
+     com_register_iid(IF_BASICAUDIO, IID_IBasicAudio_);
+     com_register_iid(IF_MEDIAPOSITION, IID_IMediaPosition_);
+     com_register_iid(IF_ENUMFILTERS, IID_IEnumFilters_);
++    com_register_iid(IF_VIDEOWINDOW, IID_IVideoWindow_);
+ 
+     com_set_destructor(K_MMSTREAM, mmstream_destroy);
+     com_set_destructor(K_STREAMSAMPLE, sample_destroy);
++    com_set_destructor(K_GRAPH, graph_destroy);
+ 
+     com_register_class(CLSID_AMMultiMediaStream_, "AMMultiMediaStream", IF_MMSTREAM,
+                        mmstream_create);
+     com_register_class(CLSID_AMAudioData_, "AMAudioData", IF_AUDIODATA, audiodata_create);
++    // A movie player reaches the same shim through the ordinary filter graph
++    // class, rendered to with RenderFile and driven control/event-only.
++    com_register_class(CLSID_FilterGraph_, "FilterGraph", IF_GRAPH, filtergraph_create);
+ }
+ 
+ void dshow_reset() {
 diff --git a/dx/dsound.cpp b/dx/dsound.cpp
-index d23446d..441065b 100644
+index d23446d..782f8e8 100644
 --- a/dx/dsound.cpp
 +++ b/dx/dsound.cpp
 @@ -51,6 +51,10 @@ static const uint8_t IID_IDirectSound3DBuffer_[16] =
@@ -866,13 +1771,100 @@ index d23446d..441065b 100644
  static const uint8_t IID_IDirectSoundNotify_[16] =
      IID_BYTES(0xB0210783, 0x89CD, 0x11D0, 0xAF, 0x08, 0x00, 0xA0, 0xC9, 0x25, 0xCD, 0x16);
 +static const uint8_t IID_IDirectSound8_[16] =
-+    IID_BYTES(0x390145A1, 0x90A6, 0x11D2, 0xAA, 0x1C, 0x00, 0xA0, 0xC9, 0xA4, 0xF9, 0xAC);
++    IID_BYTES(0xC50A7E93, 0xF395, 0x4834, 0x9E, 0xF6, 0x7F, 0xA9, 0x9D, 0xE5, 0x09, 0x66);
 +static const uint8_t IID_IDirectSoundBuffer8_[16] =
 +    IID_BYTES(0xB0210781, 0x89CD, 0x11D0, 0xAF, 0x08, 0x00, 0xA0, 0xC9, 0x25, 0xCD, 0x16);
  
  namespace {
  
-@@ -1674,9 +1678,37 @@ static ComObj *dsound_create() {
+@@ -1083,8 +1087,26 @@ void Buffer_Restore(X86 *c) {
+     com_ret(c, DS_OK);
+ } // buffers are never lost
+ 
++// A 3D listener belongs to a primary buffer created with CTRL3D. Sharing the
++// interface kind with secondary buffers must not give them a listener view.
++void Sound_QueryInterface(X86 *c) {
++    ComObj *o = com_this_arg(c);
++    if (o && o->kind == K_DSBUFFER && com_iface_for_iid(arg(c, 1)) == IF_DS3DLISTENER &&
++        (!o->is_primary_buffer || !(o->buf_flags & DSBCAPS_CTRL3D))) {
++        uint32_t out = arg(c, 2);
++        if (!out || !gm_valid(out, 4)) {
++            com_ret(c, E_POINTER);
++            return;
++        }
++        wr32(out, 0);
++        com_ret(c, E_NOINTERFACE);
++        return;
++    }
++    com_QueryInterface(c);
++}
++
+ const ComMethod g_dsbuffer[] = {
+-    {"QueryInterface", 3, com_QueryInterface},
++    {"QueryInterface", 3, Sound_QueryInterface},
+     {"AddRef", 1, com_AddRef},
+     {"Release", 1, com_Release},
+     {"GetCaps", 2, Buffer_GetCaps},
+@@ -1218,7 +1240,7 @@ DX_STUB(B3D_SetMinDistance, DS_OK)
+ DX_STUB(B3D_SetMode, DS_OK)
+ 
+ const ComMethod g_ds3dbuffer[] = {
+-    {"QueryInterface", 3, com_QueryInterface},
++    {"QueryInterface", 3, Sound_QueryInterface},
+     {"AddRef", 1, com_AddRef},
+     {"Release", 1, com_Release},
+     {"GetAllParameters", 2, B3D_GetAllParameters},
+@@ -1304,13 +1326,13 @@ void L3D_SetVelocity(X86 *c) {
+ void L3D_GetAllParameters(X86 *c) {
+     uint32_t out = arg(c, 1);
+     // DS3DLISTENER: dwSize, vPosition, vVelocity, vOrientFront, vOrientTop,
+-    // flDistanceFactor, flRolloffFactor, flDopplerFactor = 68 bytes.
++    // flDistanceFactor, flRolloffFactor, flDopplerFactor = 64 bytes.
+     if (!out || !gm_valid(out, 4)) {
+         com_ret(c, DSERR_INVALIDPARAM);
+         return;
+     }
+     uint32_t size = rd32(out);
+-    if (size < 68 || !gm_valid(out, size)) {
++    if (size != 64 || !gm_valid(out, 64)) {
+         com_ret(c, DSERR_INVALIDPARAM);
+         return;
+     }
+@@ -1331,7 +1353,7 @@ void L3D_GetAllParameters(X86 *c) {
+ 
+ void L3D_SetAllParameters(X86 *c) {
+     uint32_t in = arg(c, 1);
+-    if (!in || !gm_valid(in, 68)) {
++    if (!in || !gm_valid(in, 64) || rd32(in) != 64) {
+         com_ret(c, DSERR_INVALIDPARAM);
+         return;
+     }
+@@ -1387,7 +1409,7 @@ void L3D_CommitDeferredSettings(X86 *c) {
+ }
+ 
+ const ComMethod g_ds3dlistener[] = {
+-    {"QueryInterface", 3, com_QueryInterface},
++    {"QueryInterface", 3, Sound_QueryInterface},
+     {"AddRef", 1, com_AddRef},
+     {"Release", 1, com_Release},
+     {"GetAllParameters", 2, L3D_GetAllParameters},
+@@ -1450,7 +1472,7 @@ void Notify_SetNotificationPositions(X86 *c) {
+ }
+ 
+ const ComMethod g_dsnotify[] = {
+-    {"QueryInterface", 3, com_QueryInterface},
++    {"QueryInterface", 3, Sound_QueryInterface},
+     {"AddRef", 1, com_AddRef},
+     {"Release", 1, com_Release},
+     {"SetNotificationPositions", 3, Notify_SetNotificationPositions},
+@@ -1669,14 +1691,44 @@ void DirectSoundCreate(X86 *c) {
+ // DirectSoundCreate. Both make the same host object.
+ static const uint8_t CLSID_DirectSound_[16] =
+     IID_BYTES(0x47D4D946, 0x62E8, 0x11CF, 0x93, 0xBC, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00);
++static const uint8_t CLSID_DirectSound8_[16] =
++    IID_BYTES(0x3901CC3F, 0x84B5, 0x4FA4, 0xBA, 0x35, 0xAA, 0x81, 0x72, 0xB8, 0xA0, 0x9B);
+ 
+ static ComObj *dsound_create() {
      return com_new(K_DSOUND);
  }
  
@@ -910,7 +1902,7 @@ index d23446d..441065b 100644
  };
  
  // A DirectSound object also answers to IDirectSound3DListener, and a buffer to
-@@ -1751,7 +1783,10 @@ void dsound_register() {
+@@ -1751,7 +1803,10 @@ void dsound_register() {
      done = true;
  
      com_define(IF_DSOUND, "DSOUND.dll", "IDirectSound", g_dsound, std::size(g_dsound));
@@ -921,12 +1913,13 @@ index d23446d..441065b 100644
      com_define(IF_DS3DBUFFER, "DSOUND.dll", "IDirectSound3DBuffer", g_ds3dbuffer,
                 std::size(g_ds3dbuffer));
      com_define(IF_DS3DLISTENER, "DSOUND.dll", "IDirectSound3DListener", g_ds3dlistener,
-@@ -1759,13 +1794,17 @@ void dsound_register() {
+@@ -1759,13 +1814,18 @@ void dsound_register() {
      com_define(IF_DSNOTIFY, "DSOUND.dll", "IDirectSoundNotify", g_dsnotify, std::size(g_dsnotify));
  
      com_bind(IF_DSOUND, K_DSOUND);
 +    com_bind(IF_DSOUND8, K_DSOUND);
      com_bind(IF_DS3DLISTENER, K_DSOUND);
++    com_bind(IF_DS3DLISTENER, K_DSBUFFER);
      com_bind(IF_DSBUFFER, K_DSBUFFER);
 +    com_bind(IF_DSBUFFER8, K_DSBUFFER);
      com_bind(IF_DS3DBUFFER, K_DSBUFFER);
@@ -939,6 +1932,278 @@ index d23446d..441065b 100644
      com_register_iid(IF_DS3DBUFFER, IID_IDirectSound3DBuffer_);
      com_register_iid(IF_DS3DLISTENER, IID_IDirectSound3DListener_);
      com_register_iid(IF_DSNOTIFY, IID_IDirectSoundNotify_);
+@@ -1775,5 +1835,6 @@ void dsound_register() {
+     com_set_qi_hook(K_DSBUFFER, dsbuffer_qi);
+ 
+     com_register_class(CLSID_DirectSound_, "DirectSound", IF_DSOUND, dsound_create);
++    com_register_class(CLSID_DirectSound8_, "DirectSound8", IF_DSOUND8, dsound_create);
+     imports_register(g_dsound_exports, std::size(g_dsound_exports));
+ }
+diff --git a/dx/host_d9.h b/dx/host_d9.h
+index f489558..e30cdfa 100644
+--- a/dx/host_d9.h
++++ b/dx/host_d9.h
+@@ -104,6 +104,11 @@ typedef struct HostD9Draw {
+     // is, so a host may reuse its copy from an earlier draw with the same value.
+     uint64_t state_version;
+     const char *label; // what bound the shaders, for diagnostics; may be null
++    // Fixed-function draw under D3DRS_SHADEMODE flat: the colour varyings d0,
++    // d1 take the first vertex's value (DX9's provoking vertex for triangle
++    // lists and strips), so renderers that interpolate them should declare
++    // them flat. Only synthesized fixed-function pipelines set this.
++    bool flat_colors = false;
+ } HostD9Draw;
+ 
+ void host_d9_draw(const HostD9Draw *draw);
+diff --git a/dx/tests/dx_tests.cpp b/dx/tests/dx_tests.cpp
+index 7771a52..ba75885 100644
+--- a/dx/tests/dx_tests.cpp
++++ b/dx/tests/dx_tests.cpp
+@@ -3135,7 +3135,63 @@ static void test_lock_diff_partial_records_and_payload() {
+ 
+ // A DirectSound object made through CoCreateInstance is not initialised
+ // until the game calls Initialize on it, which must therefore succeed; the
+-// class is the only one the runtime registers.
++// both supported device classes must expose their documented interface IDs.
++static void test_primary_sound_listener() {
++    cpu_reset();
++    uint32_t out = sc(0), desc = sc(0x40), iid = sc(0x80), params = sc(0x100);
++    static const uint8_t listener_iid[16] = {0x84, 0xfa, 0x9a, 0x27, 0x81, 0x49, 0xce, 0x11,
++                                             0xa5, 0x21, 0x00, 0x20, 0xaf, 0x0b, 0xe5, 0x60};
++    memcpy(g_mem + iid, listener_iid, 16);
++    CHECK_EQ(call_shim(tramp("DSOUND.dll", "DirectSoundCreate8"), {0, out, 0}), DS_OK);
++    uint32_t ds = rd32(out);
++    for (uint32_t flags : {DSBCAPS_PRIMARYBUFFER, DSBCAPS_PRIMARYBUFFER | DSBCAPS_CTRL3D}) {
++        gm_zero(desc, DSBUFFERDESC_SIZE);
++        wr32(desc, DSBUFFERDESC_SIZE);
++        wr32(desc + DSBD_OFF_dwFlags, flags);
++        CHECK_EQ(call_method(ds, DS_CreateSoundBuffer, {desc, out, 0}), DS_OK);
++        uint32_t buffer = rd32(out);
++        wr32(out, 0xdeadbeef);
++        uint32_t hr = call_method(buffer, 0, {iid, out});
++        if (!(flags & DSBCAPS_CTRL3D)) {
++            CHECK_EQ(hr, E_NOINTERFACE);
++            CHECK_EQ(rd32(out), 0u);
++            call_method(buffer, 2);
++            continue;
++        }
++        CHECK_EQ(hr, DS_OK);
++        uint32_t listener = rd32(out);
++        CHECK(listener != 0);
++        call_method(buffer, 2); // the listener owns its own reference
++        if (!listener)
++            continue;
++        gm_zero(params, 68);
++        wr32(params, 64);
++        wr32(params + 64, 0xdeadbeef);
++        CHECK_EQ(call_method(listener, 3, {params}), DS_OK);
++        CHECK_EQ(rd32(params + 64), 0xdeadbeefu);
++        wrf32(params + 4, 3.5f);
++        CHECK_EQ(call_method(listener, 10, {params, 0}), DS_OK);
++        CHECK_EQ(call_method(listener, 3, {params}), DS_OK);
++        CHECK_EQ(rdf32(params + 4), 3.5f);
++        wr32(params, 60);
++        CHECK_EQ(call_method(listener, 3, {params}), DSERR_INVALIDPARAM);
++        CHECK_EQ(call_method(listener, 10, {params, 0}), DSERR_INVALIDPARAM);
++        CHECK_EQ(rd32(params + 64), 0xdeadbeefu);
++        call_method(listener, 2);
++    }
++    // A secondary buffer must refuse the listener even through another view.
++    ComObj *secondary = com_new(K_DSBUFFER);
++    secondary->buf_flags = DSBCAPS_CTRL3D;
++    uint32_t secondary_view = com_view(secondary, IF_DSBUFFER);
++    CHECK_EQ(call_method(secondary_view, 0, {iid, out}), E_NOINTERFACE);
++    CHECK_EQ(rd32(out), 0u);
++    uint32_t spatial = com_view(secondary, IF_DS3DBUFFER);
++    CHECK_EQ(call_method(spatial, 0, {iid, out}), E_NOINTERFACE);
++    CHECK_EQ(rd32(out), 0u);
++    call_method(secondary_view, 2);
++    call_method(ds, 2);
++}
++
+ static void test_cocreate_directsound() {
+     static const uint8_t clsid_dsound[16] = {0x46, 0xd9, 0xd4, 0x47, 0xe8, 0x62, 0xcf, 0x11,
+                                              0x93, 0xbc, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00};
+@@ -3154,6 +3210,28 @@ static void test_cocreate_directsound() {
+         CHECK_EQ(call_method(ds, 10, {0}), DS_OK); // Initialize(NULL): the default device
+         call_method(ds, 2);                        // Release
+     }
++    static const uint8_t clsid_dsound8[16] = {0x3f, 0xcc, 0x01, 0x39, 0xb5, 0x84, 0xa4, 0x4f,
++                                              0xba, 0x35, 0xaa, 0x81, 0x72, 0xb8, 0xa0, 0x9b};
++    static const uint8_t iid_dsound8[16] = {0x93, 0x7e, 0x0a, 0xc5, 0x95, 0xf3, 0x34, 0x48,
++                                            0x9e, 0xf6, 0x7f, 0xa9, 0x9d, 0xe5, 0x09, 0x66};
++    memcpy(g_mem + clsid, clsid_dsound8, 16);
++    memcpy(g_mem + iid, iid_dsound8, 16);
++    CHECK_EQ(call_shim(cocreate, {clsid, 0, 1, iid, ppv}), DS_OK);
++    ds = rd32(ppv);
++    CHECK(ds != 0);
++    if (ds) {
++        CHECK_EQ(call_method(ds, 10, {0}), DS_OK);
++        uint32_t caps = sc(0x1d40);
++        memset(g_mem + caps, 0, 96);
++        wr32(caps, 96);
++        CHECK_EQ(call_method(ds, 4, {caps}), DS_OK);
++        CHECK_EQ(call_method(ds, 0, {iid, ppv}), DS_OK);
++        CHECK_EQ(rd32(ppv), ds);
++        call_method(rd32(ppv), 2);
++        call_method(ds, 2);
++    }
++    CHECK_EQ(call_shim(cocreate, {clsid, 1, 1, iid, ppv}), 0x80040110u);
++    CHECK_EQ(rd32(ppv), 0u);
+     wr8(clsid, 0xff);
+     CHECK_EQ(call_shim(cocreate, {clsid, 0, 1, iid, ppv}), 0x80040154u); // REGDB_E_CLASSNOTREG
+ }
+@@ -5248,8 +5326,10 @@ static void test_mouse_motion_survives_keyboard_poll() {
+     dinput_reset();
+ }
+ 
+-// A caller can resolve the DirectX 7 factory, observe that version 7 is
+-// unsupported, then create a legacy object and query its version 4 interface.
++// The version 7 factory hands out the v7 view of a fresh DirectDraw object,
++// so a caller that resolves DirectDrawCreateEx goes straight to v7; the
++// legacy factory still serves the v4 route used by code in the corpus that
++// resolves Ex, observes the shape it needs, and queries the old interface.
+ static void test_directdraw_create_ex_fallback() {
+     cpu_reset();
+     const uint32_t create_ex = tramp("DDRAW.dll", "DirectDrawCreateEx");
+@@ -5265,17 +5345,19 @@ static void test_directdraw_create_ex_fallback() {
+     wr32(out, 0xdeadbeef);
+     wr32(out + 4, 0xcafebabe);
+     const uint32_t live = com_live_count();
+-    CHECK_EQ(call_shim(create_ex, {0, out, iid, 0}), DDERR_UNSUPPORTED);
+-    CHECK_EQ(rd32(out), 0);
+-    CHECK_EQ(rd32(out + 4), 0xcafebabe);
+-    CHECK_EQ(com_live_count(), live);
++    CHECK_EQ(call_shim(create_ex, {0, out, iid, 0}), DD_OK);
++    const uint32_t dd7v = rd32(out);
++    CHECK(dd7v != 0);
++    CHECK_EQ(rd32(out + 4), 0xcafebabe); // neighbours stay untouched
++    CHECK(com_live_count() > live);      // the fresh object reaches the caller
++    // Aggregation stays refused and DirectDrawCreateEx still only accepts
++    // IID_IDirectDraw7; older interfaces must go through DirectDrawCreate.
++    CHECK_EQ(call_shim(create_ex, {0, out, iid, 1}), CLASS_E_NOAGGREGATION);
+     CHECK_EQ(call_shim(create_ex, {0, 0, iid, 0}), DDERR_INVALIDPARAMS);
+     CHECK_EQ(call_shim(create_ex, {0, out, 0, 0}), DDERR_INVALIDPARAMS);
+-    CHECK_EQ(call_shim(create_ex, {0, out, iid, 1}), CLASS_E_NOAGGREGATION);
+     memcpy(gm_ptr(iid), dd4, sizeof(dd4));
+-    // DirectDrawCreateEx only accepts IID_IDirectDraw7; older interfaces use
+-    // DirectDrawCreate followed by QueryInterface.
+     CHECK_EQ(call_shim(create_ex, {0, out, iid, 0}), DDERR_INVALIDPARAMS);
++    CHECK_EQ(rd32(out), 0); // the refused call clears the out-slot first
+     CHECK_EQ(call_shim(tramp("DDRAW.dll", "DirectDrawCreate"), {0, out, 0}), DD_OK);
+     const uint32_t dd = rd32(out);
+     CHECK(dd != 0);
+@@ -5285,6 +5367,8 @@ static void test_directdraw_create_ex_fallback() {
+     CHECK_EQ(call_method(view4, DD_SetCooperativeLevel, {0, 8}), DD_OK);
+     CHECK_EQ(call_method(view4, DD_Release, {}), 1);
+     CHECK_EQ(call_method(dd, DD_Release, {}), 0);
++    CHECK(com_live_count() > live);                 // the v7 object from above is still held
++    CHECK_EQ(call_method(dd7v, DD_Release, {}), 0); // its only view releases
+     CHECK_EQ(com_live_count(), live);
+ }
+ 
+@@ -12691,6 +12775,7 @@ int main() {
+         {"DC write diff", test_getdc_releasedc},
+         {"GDI primary blit", test_gdi_primary_blit},
+         {"CoCreateInstance DirectSound", test_cocreate_directsound},
++        {"primary sound listener", test_primary_sound_listener},
+         {"DirectShow audio stream", test_dshow_audio_stream},
+         {"DirectShow graph playback", test_dshow_graph_playback},
+         {"palette versions", test_palette_versions},
+diff --git a/host/CMakeLists.txt b/host/CMakeLists.txt
+index 58e79fd..6179fe5 100644
+--- a/host/CMakeLists.txt
++++ b/host/CMakeLists.txt
+@@ -266,7 +266,13 @@ if(TARGET recomp_gen)
+     file(REMOVE_RECURSE ${web_resources})
+     file(MAKE_DIRECTORY ${web_resources})
+     file(COPY ${POP_ROOT}/tools/recomp/baseline/classic-modes.json DESTINATION ${web_resources})
+-    if(EXISTS ${POP_BUILD_ROOT}/recomp/symbols.json)
++    # Direct translator runs publish beside table.c; build.py also maintains
++    # a convenience copy one directory up. Prefer the current source tree.
++    if(EXISTS ${POP_BUILD_ROOT}/recomp/gen/symbols.json)
++      set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
++        ${POP_BUILD_ROOT}/recomp/gen/symbols.json)
++      file(COPY ${POP_BUILD_ROOT}/recomp/gen/symbols.json DESTINATION ${web_resources})
++    elseif(EXISTS ${POP_BUILD_ROOT}/recomp/symbols.json)
+       file(COPY ${POP_BUILD_ROOT}/recomp/symbols.json DESTINATION ${web_resources})
+     endif()
+     if(EXISTS ${RECOMP_GAME_DIR}/mods/core)
+diff --git a/host/gpu/metal/d3d9_metal.mm b/host/gpu/metal/d3d9_metal.mm
+index 3e94e82..75c5bff 100644
+--- a/host/gpu/metal/d3d9_metal.mm
++++ b/host/gpu/metal/d3d9_metal.mm
+@@ -637,6 +637,15 @@ class Renderer final : public D9Backend {
+                         d.label ? d.label : "no label");
+             return;
+         }
++        // Flat-shaded fixed-function draws are refused rather than rendered
++        // with the wrong interpolation; the Metal generator has no flat-varying
++        // variant yet (the WebGPU renderer implements it).
++        if (d.flat_colors) {
++            skip("flat colours");
++            if (undecoded_.insert("flat colours").second)
++                fprintf(stderr, "d3d9 metal: skipping draws: flat shading\n");
++            return;
++        }
+         d9msl::PixelVariant variant;
+         Tex *bound[16];
+         for (uint32_t s = 0; s < 16; ++s) {
+diff --git a/host/gpu/vulkan/d3d9_vulkan.cpp b/host/gpu/vulkan/d3d9_vulkan.cpp
+index cae581c..5264e4e 100644
+--- a/host/gpu/vulkan/d3d9_vulkan.cpp
++++ b/host/gpu/vulkan/d3d9_vulkan.cpp
+@@ -686,6 +686,15 @@ class VkRenderer final : public D9Backend {
+                         d.label ? d.label : "no label");
+             return;
+         }
++        // Flat-shaded fixed-function draws are refused rather than rendered
++        // with the wrong interpolation; the GLSL generator has no
++        // flat-varying variant yet (the WebGPU renderer implements it).
++        if (d.flat_colors) {
++            skip("flat colours");
++            if (undecoded_.insert("flat colours").second)
++                fprintf(stderr, "d3d9 vulkan: skipping draws: flat shading\n");
++            return;
++        }
+         d9msl::PixelVariant variant;
+         Tex *bound[16];
+         for (uint32_t s = 0; s < 16; ++s) {
+diff --git a/host/gpu/webgpu/d3d9_webgpu.cpp b/host/gpu/webgpu/d3d9_webgpu.cpp
+index 03c2df2..bf7bc85 100644
+--- a/host/gpu/webgpu/d3d9_webgpu.cpp
++++ b/host/gpu/webgpu/d3d9_webgpu.cpp
+@@ -576,8 +576,8 @@ class WebGpuRenderer final : public D9Backend {
+             }
+             slot_key = slot_key << 2 | (uint64_t)slots[s];
+         }
+-        WGPUShaderModule vmod = module(vs_key, vp, variant, false);
+-        WGPUShaderModule fmod = module(ps_key, pp, variant, true);
++        WGPUShaderModule vmod = module(vs_key, vp, variant, false, d.flat_colors);
++        WGPUShaderModule fmod = module(ps_key, pp, variant, true, d.flat_colors);
+         if (!vmod || !fmod) {
+             skip("untranslated shader");
+             return;
+@@ -1429,14 +1429,15 @@ class WebGpuRenderer final : public D9Backend {
+ 
+     // ---- shaders and pipelines ---------------------------------------------------
+     WGPUShaderModule module(uint64_t code_key, const d9sh::Program &p, const d9msl::PixelVariant &v,
+-                            bool pixel) {
+-        uint64_t key = mix(code_key, pixel ? v.key() + 1 : 0);
++                            bool pixel, bool flat_colors) {
++        uint64_t key = mix(code_key, (uint64_t)(pixel ? v.key() + 1 : 0) |
++                                         (flat_colors ? 0x8000000000000000ull : 0));
+         auto it = modules_.find(key);
+         if (it != modules_.end())
+             return it->second;
+         std::string src, why;
+-        bool ok =
+-            pixel ? d9wgsl::pixel_source(p, v, &src, &why) : d9wgsl::vertex_source(p, &src, &why);
++        bool ok = pixel ? d9wgsl::pixel_source(p, v, &src, &why, flat_colors)
++                        : d9wgsl::vertex_source(p, &src, &why, flat_colors);
+         WGPUShaderModule m = nullptr;
+         if (ok) {
+             WGPUShaderSourceWGSL s = WGPU_SHADER_SOURCE_WGSL_INIT;
 diff --git a/host/input_gate.cpp b/host/input_gate.cpp
 index 2dd011b..49f466a 100644
 --- a/host/input_gate.cpp
@@ -1067,7 +2332,7 @@ index d983f15..d23a6e4 100644
                  "[pointer-game] drawable %d,%d hit %d at %d,%d delivered %d guest %d,%d bounds "
                  "%d,%d,%d,%d\n",
 diff --git a/runtime/CMakeLists.txt b/runtime/CMakeLists.txt
-index 10a5e39..d7dd40d 100644
+index 10a5e39..64e757a 100644
 --- a/runtime/CMakeLists.txt
 +++ b/runtime/CMakeLists.txt
 @@ -23,6 +23,12 @@ add_custom_command(
@@ -1135,6 +2400,34 @@ index 10a5e39..d7dd40d 100644
    # The headless parity fixture: null host, real generated code, core mods installed.
    add_executable(pop_fixture fixture.cpp)
    target_link_libraries(pop_fixture PRIVATE recomp_platform recomp_runtime recomp_snapshot recomp_dx_null recomp_mods lua)
+@@ -119,6 +156,12 @@ if(POP_REAL_GEN AND NOT IOS AND NOT ANDROID)
+     pop_optimize(profile_tests 1)
+     pop_link_gen(profile_tests)
+     pop_test_binary(profile_tests)
++    if(EMSCRIPTEN)
++      target_link_options(profile_tests PRIVATE -pthread -sPTHREAD_POOL_SIZE=24
++        -sNODERAWFS=1 -sENVIRONMENT=node -sEXIT_RUNTIME=1
++        -sINITIAL_MEMORY=1073741824 -sALLOW_MEMORY_GROWTH=1
++        -sSTACK_SIZE=8388608 -sDEFAULT_PTHREAD_STACK_SIZE=16777216)
++    endif()
+     add_test(NAME profile_tests_disabled COMMAND profile_tests disabled WORKING_DIRECTORY ${POP_ROOT})
+     set_tests_properties(profile_tests_disabled PROPERTIES LABELS game ENVIRONMENT RECOMP_PROFILE=0)
+     add_test(NAME profile_tests_enabled COMMAND profile_tests enabled WORKING_DIRECTORY ${POP_ROOT})
+diff --git a/runtime/README.md b/runtime/README.md
+index 85b7a4b..ec2341a 100644
+--- a/runtime/README.md
++++ b/runtime/README.md
+@@ -116,6 +116,10 @@ here, so continuing would run the guest past a point Windows never reaches.
+   SHA-256 is not the expected one, with no override, because everything after
+   it trusts that exact layout. PE parsing bounds-checks the headers, the
+   section table and every import RVA against the image.
++- **Mapped DLL imports bind after all images are mapped.** Main-image and
++  auxiliary IATs resolve named/ordinal exports against the complete verified
++  module set, including dependencies listed later in configuration. Reload
++  snapshots retain those bound guest addresses.
+ - **`GetMessageA` blocks, and owns the wait.** It drives the multimedia
+   timers, calls the host's pump, and yields the scheduler baton, round and
+   round until a message matching the filter arrives. The host's pump services
 diff --git a/runtime/cpu.cpp b/runtime/cpu.cpp
 index 06d5e2b..c57d587 100644
 --- a/runtime/cpu.cpp
@@ -1365,24 +2658,44 @@ index d01eb0a..1e8b7dc 100644
 +// Called synchronously on the guest baton holder; it must not mutate guest state.
 +extern "C" void recomp_unknown_diagnostic(X86 *c, uint32_t target);
 diff --git a/runtime/interp.cpp b/runtime/interp.cpp
-index b210e66..2398fee 100644
+index b210e66..158239a 100644
 --- a/runtime/interp.cpp
 +++ b/runtime/interp.cpp
-@@ -1,9 +1,13 @@
+@@ -1,9 +1,15 @@
  // interp.cpp - see interp.h.
  #include "interp.h"
++#include "guest.h"
 +#include "imports.h"
 +#include "../platform/os.h"
  
  #include "thunks.h"
  
++#include <algorithm>
  #include <cstdio>
 +#include <cstdlib>
 +#include <cstring>
  #include <memory>
  #include <mutex>
  #include <unordered_map>
-@@ -28,6 +32,11 @@ enum Op : uint8_t {
+@@ -13,8 +19,15 @@ namespace {
+ 
+ enum Op : uint8_t {
+     NOP,
+-    MOV,  // dst = src
+-    MOV8, // byte [mem] = imm
++    MOV, // dst = src
++    MOVSX,
++    MOVZX,
++    XCHG,
++    SHL,
++    SHR,
++    SAR,
++    IMUL1, // signed EDX:EAX = EAX * src
++    MOV8,  // byte [mem] = imm
+     LEA,
+     ADD,
+     OR,
+@@ -28,6 +41,11 @@ enum Op : uint8_t {
      DEC,
      PUSH,
      POP,
@@ -1394,7 +2707,7 @@ index b210e66..2398fee 100644
      CALL, // direct: target; indirect: src
      RET,
      JMP,
-@@ -35,6 +44,8 @@ enum Op : uint8_t {
+@@ -35,6 +53,8 @@ enum Op : uint8_t {
      // A JMP whose target is a translated entry: a tail call out of this
      // routine, which the address table places rather than this interpreter.
      JMPOUT,
@@ -1403,7 +2716,7 @@ index b210e66..2398fee 100644
  };
  
  // A register or memory operand. kind 0: none, 1: register, 2: memory,
-@@ -52,6 +63,10 @@ struct Ins {
+@@ -52,6 +72,10 @@ struct Ins {
      uint8_t len = 0;
      Op op = NOP;
      uint8_t cond = 0;
@@ -1414,7 +2727,7 @@ index b210e66..2398fee 100644
      Operand dst, src;
      int32_t imm3 = 0; // IMUL r, r/m, imm
      bool has_imm3 = false;
-@@ -59,6 +74,8 @@ struct Ins {
+@@ -59,6 +83,8 @@ struct Ins {
      uint32_t target_index = 0; // JMP, Jcc: `target`'s index in Routine::code
      bool indirect = false;
      uint16_t ret_pop = 0;
@@ -1423,7 +2736,24 @@ index b210e66..2398fee 100644
  };
  
  // How far the decoder reads before it gives up looking for the last RET.
-@@ -159,6 +176,44 @@ bool decode(uint32_t a, Ins &in) {
+@@ -156,9 +182,83 @@ bool decode(uint32_t a, Ins &in) {
+     uint8_t reg = 0;
+     unsigned n;
+     switch (b) {
++    case 0x66: {
++        // Admit only register/memory MOV for this operand-size override.
++        // Other prefixed opcodes must never silently become 32-bit operations.
++        uint8_t opcode = rd8(p++);
++        Operand rm;
++        if ((opcode != 0x89 && opcode != 0x8b) || !(n = modrm(p, rm, reg)))
++            return false;
++        p += n;
++        in.op = MOV;
++        in.width = 2;
++        in.dst = opcode == 0x8b ? reg_operand(reg) : rm;
++        in.src = opcode == 0x8b ? rm : reg_operand(reg);
++        break;
++    }
      case 0x90:
          in.op = NOP;
          break;
@@ -1465,10 +2795,32 @@ index b210e66..2398fee 100644
 +        }
 +        break;
 +    }
++    case 0x87: {
++        Operand rm;
++        if (!(n = modrm(p, rm, reg)))
++            return false;
++        p += n;
++        in.op = XCHG;
++        in.dst = rm;
++        in.src = reg_operand(reg);
++        break;
++    }
++    case 0xc1:
++    case 0xd1:
++    case 0xd3: {
++        Operand rm;
++        if (!(n = modrm(p, rm, reg)) || (reg != 4 && reg != 5 && reg != 7))
++            return false;
++        p += n;
++        in.op = reg == 4 ? SHL : reg == 5 ? SHR : SAR;
++        in.dst = rm;
++        in.src = b == 0xd3 ? reg_operand(R_ECX) : imm_operand(b == 0xd1 ? 1 : rd8(p++));
++        break;
++    }
      case 0x01:
      case 0x09:
      case 0x21:
-@@ -192,6 +247,45 @@ bool decode(uint32_t a, Ins &in) {
+@@ -192,6 +292,45 @@ bool decode(uint32_t a, Ins &in) {
          in.src = to_reg ? rm : reg_operand(reg);
          break;
      }
@@ -1504,7 +2856,7 @@ index b210e66..2398fee 100644
 +                : kind == 0x20           ? AND
 +                : kind == 0x28           ? SUB
 +                : kind == 0x30           ? XOR
-+                                          : CMP;
++                                         : CMP;
 +        bool to_reg = (b & 2) && b != 0x84;
 +        in.dst = to_reg ? reg_operand(reg) : rm;
 +        in.src = to_reg ? rm : reg_operand(reg);
@@ -1514,7 +2866,87 @@ index b210e66..2398fee 100644
      case 0x05:
      case 0x0d:
      case 0x25:
-@@ -522,6 +616,40 @@ void store_mem(X86 *c, const Operand &o, uint32_t v) {
+@@ -209,11 +348,36 @@ bool decode(uint32_t a, Ins &in) {
+         in.src = imm_operand((int32_t)rd32(p));
+         p += 4;
+         break;
+-    case 0xf7: { // group 3, of which only TEST r/m32,imm32 is modelled
++    case 0xa1: { // MOV EAX,moffs32 (absolute load the CRT uses for globals)
++        Operand o;
++        o.kind = 2;
++        o.disp = (int32_t)rd32(p);
++        p += 4;
++        in.op = MOV;
++        in.dst = reg_operand(R_EAX);
++        in.src = o;
++        break;
++    }
++    case 0xa3: { // MOV moffs32,EAX
++        Operand o;
++        o.kind = 2;
++        o.disp = (int32_t)rd32(p);
++        p += 4;
++        in.op = MOV;
++        in.dst = o;
++        in.src = reg_operand(R_EAX);
++        break;
++    }
++    case 0xf7: { // group 3: TEST and signed one-operand IMUL
+         Operand rm;
+-        if (!(n = modrm(p, rm, reg)) || reg > 1)
++        if (!(n = modrm(p, rm, reg)) || (reg > 1 && reg != 5))
+             return false;
+         p += n;
++        if (reg == 5) {
++            in.op = IMUL1;
++            in.src = rm;
++            break;
++        }
+         in.op = TEST;
+         in.dst = rm;
+         in.src = imm_operand((int32_t)rd32(p));
+@@ -338,6 +502,15 @@ bool decode(uint32_t a, Ins &in) {
+             in.cond = b2 & 15;
+             in.target = p + 4 + rd32(p);
+             p += 4;
++        } else if (b2 == 0xbe || b2 == 0xbf || b2 == 0xb6 || b2 == 0xb7) {
++            Operand rm;
++            if (!(n = modrm(p, rm, reg)))
++                return false;
++            p += n;
++            in.op = (b2 & 8) ? MOVSX : MOVZX;
++            in.width = (b2 & 1) ? 2 : 1;
++            in.dst = reg_operand(reg);
++            in.src = rm;
+         } else if (b2 == 0xaf) {
+             Operand rm;
+             if (!(n = modrm(p, rm, reg)))
+@@ -352,7 +525,11 @@ bool decode(uint32_t a, Ins &in) {
+         break;
+     }
+     default:
+-        if (b >= 0x40 && b <= 0x4f) {
++        if (b >= 0x91 && b <= 0x97) {
++            in.op = XCHG;
++            in.dst = reg_operand(R_EAX);
++            in.src = reg_operand(b & 7);
++        } else if (b >= 0x40 && b <= 0x4f) {
+             in.op = b < 0x48 ? INC : DEC;
+             in.dst = reg_operand(b & 7);
+         } else if (b >= 0x50 && b <= 0x57) {
+@@ -366,6 +543,11 @@ bool decode(uint32_t a, Ins &in) {
+             in.cond = b & 15;
+             in.target = p + 1 + (int8_t)rd8(p);
+             p += 1;
++        } else if (b >= 0xb0 && b <= 0xb7) {
++            in.op = MOV;
++            in.width = 1;
++            in.dst = reg_operand(b & 7);
++            in.src = imm_operand(rd8(p++));
+         } else if (b >= 0xb8 && b <= 0xbf) {
+             in.op = MOV;
+             in.dst = reg_operand(b & 7);
+@@ -522,6 +704,64 @@ void store_mem(X86 *c, const Operand &o, uint32_t v) {
      wr32(a, v);
  }
  
@@ -1536,6 +2968,30 @@ index b210e66..2398fee 100644
 +    return rd8(a);
 +}
 +
++inline uint32_t load16(const X86 *c, const Operand &o) {
++    if (o.kind == 1)
++        return c->r[o.reg] & 0xffffu;
++    uint32_t a = address_of(c, o);
++    if (!readable(a, 2)) {
++        snprintf(g_error, sizeof g_error, "word read of %08x outside guest memory", a);
++        throw Fault{};
++    }
++    return rd16(a);
++}
++
++inline void store16(X86 *c, const Operand &o, uint32_t value) {
++    if (o.kind == 1) {
++        c->r[o.reg] = (c->r[o.reg] & 0xffff0000u) | (value & 0xffffu);
++        return;
++    }
++    uint32_t a = address_of(c, o);
++    if (!readable(a, 2)) {
++        snprintf(g_error, sizeof g_error, "word write of %08x outside guest memory", a);
++        throw Fault{};
++    }
++    wr16(a, uint16_t(value));
++}
++
 +inline void store8(X86 *c, const Operand &o, uint32_t v) {
 +    if (o.kind == 1) {
 +        if (o.reg < 4)
@@ -1555,7 +3011,7 @@ index b210e66..2398fee 100644
  void push(X86 *c, uint32_t v) {
      c->r[R_ESP] -= 4;
      if (!readable(c->r[R_ESP], 4)) {
-@@ -561,13 +689,14 @@ struct Flags {
+@@ -561,13 +801,14 @@ struct Flags {
      Op op = NOP; // NOP: nothing pending, c->eflags_* are current
      uint32_t a = 0, b = 0, res = 0;
      uint8_t cf = 0, of = 0; // IMUL computes these itself
@@ -1571,7 +3027,7 @@ index b210e66..2398fee 100644
  }
  uint32_t flag_pf(const Flags &f) {
      return parity(f.res);
-@@ -589,18 +718,19 @@ uint32_t flag_cf(const X86 *c, const Flags &f) {
+@@ -589,18 +830,19 @@ uint32_t flag_cf(const X86 *c, const Flags &f) {
      }
  }
  uint32_t flag_of(const X86 *c, const Flags &f) {
@@ -1595,7 +3051,60 @@ index b210e66..2398fee 100644
      default:
          (void)c;
          return 0;
-@@ -702,8 +832,17 @@ void run(X86 *c, const Routine &r) {
+@@ -672,6 +914,43 @@ bool condition(const X86 *c, const Flags &f, uint8_t cc) {
+     return (cc & 1) ? !v : v;
+ }
+ 
++// ---- optional instruction watch (?RECOMP_PC_TRACE=addr,addr,...) ----------
++// A startup path decides on results the host produced, so "which branch did
++// this take" is answered by watching the branch addresses rather than by
++// reading the whole startup listing. Each hit reports the registers as they
++// stand *before* the instruction, which is the decision's own inputs. The
++// addresses come from the URL, not from this file, so no game layout lives
++// here. Empty unless asked for: the test is one load and one compare.
++static std::vector<uint32_t> *g_pc_watch = nullptr;
++
++static const std::vector<uint32_t> &pc_watch() {
++    if (!g_pc_watch) {
++        g_pc_watch = new std::vector<uint32_t>();
++        if (const char *list = recomp_env("PC_TRACE")) {
++            for (const char *p = list; *p;) {
++                char *end = nullptr;
++                unsigned long v = strtoul(p, &end, 16);
++                if (end == p)
++                    break;
++                g_pc_watch->push_back((uint32_t)v);
++                p = end;
++                while (*p == ',' || *p == ' ')
++                    ++p;
++            }
++        }
++    }
++    return *g_pc_watch;
++}
++
++static inline void pc_watch_hit(const X86 *c, uint32_t addr) {
++    const std::vector<uint32_t> &w = pc_watch();
++    if (!w.empty() && std::find(w.begin(), w.end(), addr) != w.end()) {
++        LOGW("pc %08x eax=%08x ecx=%08x edx=%08x ebx=%08x esp=%08x ebp=%08x esi=%08x edi=%08x",
++             addr, c->r[R_EAX], c->r[R_ECX], c->r[R_EDX], c->r[R_EBX], c->r[R_ESP], c->r[R_EBP],
++             c->r[R_ESI], c->r[R_EDI]);
++    }
++}
++
+ // What is left of the outermost interp_call's step budget. A CALL inside a
+ // heap routine goes back through recomp_call and can land in the interpreter
+ // again, so the budget is shared across that nesting rather than renewed by
+@@ -692,6 +971,8 @@ void run(X86 *c, const Routine &r) {
+     Flags f;
+     for (;;) {
+         const Ins &in = *ip;
++        if (!g_pc_watch)
++            pc_watch_hit(c, in.addr);
+         if (g_steps_left == 0) {
+             snprintf(g_error, sizeof g_error, "no RET within %u instructions (at %08x)", kMaxSteps,
+                      in.addr);
+@@ -702,9 +983,29 @@ void run(X86 *c, const Routine &r) {
          switch (in.op) {
          case NOP:
              break;
@@ -1609,12 +3118,54 @@ index b210e66..2398fee 100644
 -            store(c, in.dst, load(c, in.src));
 +            if (in.width == 1)
 +                store8(c, in.dst, load8(c, in.src));
++            else if (in.width == 2)
++                store16(c, in.dst, load16(c, in.src));
 +            else
 +                store(c, in.dst, load(c, in.src));
++            break;
++        case MOVSX:
++        case MOVZX: {
++            uint32_t value = in.width == 1 ? load8(c, in.src) : load16(c, in.src);
++            if (in.op == MOVSX)
++                value = in.width == 1 ? uint32_t(int32_t(int8_t(value)))
++                                      : uint32_t(int32_t(int16_t(value)));
++            store(c, in.dst, value);
              break;
++        }
          case MOV8: {
              uint32_t a = address_of(c, in.dst);
-@@ -719,44 +858,74 @@ void run(X86 *c, const Routine &r) {
+             if (!readable(a, 1)) {
+@@ -714,49 +1015,104 @@ void run(X86 *c, const Routine &r) {
+             wr8(a, (uint8_t)in.src.disp);
+             break;
+         }
++        case XCHG: {
++            uint32_t a = load(c, in.dst), b = load(c, in.src);
++            // The ModRM source is a register. Store the memory destination
++            // before changing that register, which may also form its address.
++            store(c, in.dst, b);
++            store(c, in.src, a);
++            break;
++        }
++        case SHL:
++        case SHR:
++        case SAR: {
++            uint32_t a = load(c, in.dst), n = load(c, in.src);
++            flags_settle(c, f);
++            uint32_t value = in.op == SHL   ? shl32_f(c, a, n)
++                             : in.op == SHR ? shr32_f(c, a, n)
++                                            : sar32_f(c, a, n);
++            store(c, in.dst, value);
++            break;
++        }
++        case IMUL1: {
++            uint32_t value = load(c, in.src);
++            flags_settle(c, f);
++            imul32(c, value);
++            break;
++        }
+         case LEA:
+             store(c, in.dst, address_of(c, in.src));
              break;
          // One case per operation: the shape is decided when the routine is
          // decoded, so running an instruction is one dispatch, not two.
@@ -1708,7 +3259,7 @@ index b210e66..2398fee 100644
              break;
          }
          case IMUL: {
-@@ -788,11 +957,73 @@ void run(X86 *c, const Routine &r) {
+@@ -788,11 +1144,73 @@ void run(X86 *c, const Routine &r) {
              store(c, in.dst, v);
              break;
          }
@@ -1782,7 +3333,15 @@ index b210e66..2398fee 100644
              break;
          }
          case RET:
-@@ -821,8 +1052,12 @@ void run(X86 *c, const Routine &r) {
+@@ -818,11 +1236,20 @@ void run(X86 *c, const Routine &r) {
+ 
+ } // namespace
+ 
++extern "C" int interp_can_decode(uint32_t target) {
++    g_error[0] = 0;
++    return routine_at(target) ? 1 : 0;
++}
++
  extern "C" int interp_call(X86 *c, uint32_t target) {
      g_error[0] = 0;
      std::shared_ptr<Routine> r = routine_at(target);
@@ -1796,7 +3355,7 @@ index b210e66..2398fee 100644
      const uint32_t entry_esp = c->r[R_ESP];
      if (g_depth++ == 0)
          g_steps_left = kMaxSteps;
-@@ -834,6 +1069,17 @@ extern "C" int interp_call(X86 *c, uint32_t target) {
+@@ -834,6 +1261,17 @@ extern "C" int interp_call(X86 *c, uint32_t target) {
      try {
          run(c, *r);
      } catch (const Fault &) {
@@ -1815,12 +3374,15 @@ index b210e66..2398fee 100644
          fprintf(stderr, "[recomp] interp: routine %08x stopped: %s\n", target, g_error);
          c->r[R_EAX] = 0;
 diff --git a/runtime/interp.h b/runtime/interp.h
-index 0cefcbe..ca18d07 100644
+index 0cefcbe..8e0159e 100644
 --- a/runtime/interp.h
 +++ b/runtime/interp.h
-@@ -11,7 +11,9 @@
+@@ -9,9 +9,11 @@
+ // and nothing runs unless all of it decodes.
+ //
  // The instruction set is the integer subset such routines use: MOV, LEA,
- // ADD/SUB/CMP/AND/OR/XOR, TEST, IMUL, INC/DEC, PUSH/POP, CALL, RET, JMP and
+-// ADD/SUB/CMP/AND/OR/XOR, TEST, IMUL, INC/DEC, PUSH/POP, CALL, RET, JMP and
++// ADD/SUB/CMP/AND/OR/XOR, TEST, IMUL, XCHG, SHL/SHR/SAR, INC/DEC, PUSH/POP, CALL, RET, JMP and
  // Jcc, on 32-bit registers and memory, plus 8-bit immediates stored to
 -// memory. A CALL goes back through recomp_call, so the routine can call the
 +// memory. PUSHFD/POPFD and x87 real-memory FLD/FST/FSTP and arithmetic forms
@@ -1829,8 +3391,19 @@ index 0cefcbe..ca18d07 100644
  // executable's translated functions and other heap routines.
  //
  // Execution is bounded: a routine that never reaches its RET - code that
+@@ -31,6 +33,10 @@ extern "C" {
+ // then nothing ran and the guest state is unchanged.
+ int interp_call(X86 *c, uint32_t target);
+ 
++// Decode and validate a bounded routine without executing it or changing guest
++// registers/memory. Uses the same cache and refusal reason as interp_call.
++int interp_can_decode(uint32_t target);
++
+ // Why the last interp_call returned zero, for the log.
+ const char *interp_last_error(void);
+ 
 diff --git a/runtime/kernel32.cpp b/runtime/kernel32.cpp
-index 529d27d..3af0581 100644
+index 529d27d..0385d76 100644
 --- a/runtime/kernel32.cpp
 +++ b/runtime/kernel32.cpp
 @@ -98,8 +98,9 @@ struct HObj {
@@ -1845,7 +3418,55 @@ index 529d27d..3af0581 100644
      // H_FILE opened for writing on an existing file: the open went through
      // the read tier, and the write tier is resolved by the first write. See
      // file_promote_for_write.
-@@ -805,9 +806,28 @@ void k_CreateFileA(X86 *c) {
+@@ -313,9 +314,23 @@ void win32_set_file_ops(int (*resolve)(const char *, int, char *, size_t),
+     win32_invalidate_dir_cache();
+ }
+ 
++// Win32 drops the trailing spaces and periods of every component before a name
++// reaches the file system, so CreateFileA on "DATA\DEFAULT.IDE " opens
++// DATA\DEFAULT.IDE. Legacy parsers built on formatted reads hand out names with
++// that suffix as a matter of course - the original game's IDE, IPL and ZON
++// lines all carry a trailing space - and Windows answers with the real file.
++// A resolver that keeps the suffix instead reports the file missing.
++static void strip_win32_name_suffix(std::string &component) {
++    size_t n = component.size();
++    while (n && (component[n - 1] == ' ' || component[n - 1] == '.'))
++        --n;
++    component.resize(n);
++}
++
+ // The path a guest gave, reduced to components: drive stripped, the current
+-// directory applied when it was relative, "." and ".." resolved, and a leading
+-// root component dropped so <root>\data\x and \data\x are the same file.
++// directory applied when it was relative, "." and ".." resolved, a leading
++// root component dropped so <root>\data\x and \data\x are the same file, and
++// every component stripped of its Win32 trailing spaces and periods.
+ static std::vector<std::string> normalise_components(const std::string &guest_path) {
+     std::string p = guest_path;
+     bool absolute = false;
+@@ -337,14 +352,18 @@ static std::vector<std::string> normalise_components(const std::string &guest_pa
+         comps.push_back(c);
+ 
+     std::vector<std::string> norm;
+-    for (const std::string &c : comps) {
+-        if (c == ".")
++    for (const std::string &raw : comps) {
++        if (raw == ".")
+             continue;
+-        if (c == "..") {
++        if (raw == "..") {
+             if (!norm.empty())
+                 norm.pop_back();
+             continue;
+         }
++        std::string c = raw;
++        strip_win32_name_suffix(c);
++        if (c.empty())
++            continue; // a component of nothing but spaces or periods names nothing
+         norm.push_back(c);
+     }
+     // An absolute path spelled through the guest root - which GetModuleFileNameA
+@@ -805,9 +824,28 @@ void k_CreateFileA(X86 *c) {
      create_file_named(c, gm_str(arg(c, 0)));
  }
  
@@ -1875,7 +3496,7 @@ index 529d27d..3af0581 100644
      if (!o) {
          if (handle_get(arg(c, 0), H_STD)) {
              if (pread)
-@@ -824,21 +844,102 @@ void k_ReadFile(X86 *c) {
+@@ -824,21 +862,102 @@ void k_ReadFile(X86 *c) {
          set_eax(c, 0);
          return;
      }
@@ -1979,7 +3600,7 @@ index 529d27d..3af0581 100644
  void k_WriteFile(X86 *c) {
      uint32_t h = arg(c, 0), buf = arg(c, 1), want = arg(c, 2), pwrote = arg(c, 3);
      HObj *o = handle_any(h);
-@@ -1245,7 +1346,14 @@ void k_GetProcAddress(X86 *c) {
+@@ -1245,7 +1364,14 @@ void k_GetProcAddress(X86 *c) {
              dll = kv.first;
              break;
          }
@@ -1995,7 +3616,7 @@ index 529d27d..3af0581 100644
      if (!a) {
          log_once(("gpa:" + dll + "!" + proc).c_str(),
                   "GetProcAddress(%s, \"%s\") -> 0 (no shim registered)",
-@@ -1501,6 +1609,10 @@ void k_GetDriveTypeA(X86 *c) {
+@@ -1501,6 +1627,10 @@ void k_GetDriveTypeA(X86 *c) {
  // drives simulation: 004a5590 uses 005cd92c/005cd930 and the real clock.
  // Return the draw deadline to retire after reading the real host time.
  static uint32_t native_frame_clock(X86 *c) {
@@ -2006,7 +3627,7 @@ index 529d27d..3af0581 100644
      using Clock = std::chrono::steady_clock;
      static FrameDeadline deadline;
      static int active = 0;
-@@ -1537,6 +1649,12 @@ static uint32_t native_frame_clock(X86 *c) {
+@@ -1537,6 +1667,12 @@ static uint32_t native_frame_clock(X86 *c) {
          return RECOMP_HOOK_FRAME_CLOCK_WAIT_DEADLINE;
      }
      return 0;
@@ -2019,7 +3640,7 @@ index 529d27d..3af0581 100644
  }
  void k_GetTickCount(X86 *c) {
      const uint32_t draw_deadline = native_frame_clock(c);
-@@ -1728,6 +1846,26 @@ void k_InitializeCriticalSection(X86 *c) {
+@@ -1728,6 +1864,26 @@ void k_InitializeCriticalSection(X86 *c) {
      }
      set_eax(c, 0);
  }
@@ -2046,7 +3667,37 @@ index 529d27d..3af0581 100644
  void k_EnterCriticalSection(X86 *c) {
      imports_call_leaves_surfaces();
      sched_enter_critsec(arg(c, 0));
-@@ -4218,6 +4356,7 @@ void create_file_named(X86 *c, const std::string &name) {
+@@ -1775,6 +1931,11 @@ void k_ReleaseSemaphore(X86 *c) {
+     }
+     o->count += n;
+     set_eax(c, 1);
++    // Windows wakes waiters when a release makes the count nonzero; without
++    // the wake a thread blocked in WaitForSingleObject sleeps on even though
++    // object_available would now succeed. The streaming worker waits on such
++    // a semaphore, so a missing wake stalls all streaming behind it.
++    sched_wake_all();
+ }
+ 
+ void k_CreateEventA(X86 *c) {
+@@ -3373,7 +3534,16 @@ void k_SetThreadPriority(X86 *c) {
+ }
+ 
+ void k_ExitProcess(X86 *c) {
+-    LOGW("ExitProcess(%u)", arg(c, 0));
++    // The guest return address names the exit path (menu quit, init failure,
++    // missing-prerequisite hop); without it a clean exit(0) is a mystery.
++    // The words above it are the rest of the guest return chain.
++    uint32_t esp = c->r[R_ESP];
++    uint32_t ret = rd32(esp);
++    char chain[320];
++    size_t n = 0;
++    for (int i = 0; i < 16 && n < sizeof(chain) - 10; ++i)
++        n += (size_t)snprintf(chain + n, sizeof(chain) - n, "%08x ", rd32(esp + 4u * (uint32_t)i));
++    LOGW("ExitProcess(%u) esp=%08x from %08x chain: %s", arg(c, 0), esp, ret, chain);
+     if (request_process_exit(arg(c, 0)))
+         return; // never returns
+     publish_process_exit(arg(c, 0));
+@@ -4218,6 +4388,7 @@ void create_file_named(X86 *c, const std::string &name) {
      uint32_t h = handle_new(H_FILE);
      handles()[h].fd = fd;
      handles()[h].path = host;
@@ -2054,7 +3705,7 @@ index 529d27d..3af0581 100644
      if (deferred) {
          handles()[h].write_pending = true;
          handles()[h].write_flags = wanted;
-@@ -4849,7 +4988,7 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4849,7 +5020,7 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "GetTimeFormatA", 6, nullptr},
      {"KERNEL32.dll", "GetDiskFreeSpaceExA", 4, nullptr},
      {"KERNEL32.dll", "GetLongPathNameA", 3, nullptr},
@@ -2063,7 +3714,7 @@ index 529d27d..3af0581 100644
      {"KERNEL32.dll", "HeapValidate", 3, nullptr},
      {"KERNEL32.dll", "QueueUserAPC", 3, nullptr},
      {"KERNEL32.dll", "SetConsoleCtrlHandler", 2, nullptr},
-@@ -4864,6 +5003,9 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4864,6 +5035,9 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "InterlockedDecrement", 1, k_InterlockedDecrement},
      {"KERNEL32.dll", "InterlockedExchange", 2, k_InterlockedExchange},
      {"KERNEL32.dll", "InitializeCriticalSection", 1, k_InitializeCriticalSection},
@@ -2073,8 +3724,178 @@ index 529d27d..3af0581 100644
      {"KERNEL32.dll", "EnterCriticalSection", 1, k_EnterCriticalSection},
      {"KERNEL32.dll", "LeaveCriticalSection", 1, k_LeaveCriticalSection},
      {"KERNEL32.dll", "DeleteCriticalSection", 1, k_DeleteCriticalSection},
+diff --git a/runtime/loader.cpp b/runtime/loader.cpp
+index 75269f0..da96aba 100644
+--- a/runtime/loader.cpp
++++ b/runtime/loader.cpp
+@@ -305,7 +305,16 @@ struct AuxSpec {
+ const AuxSpec g_aux_specs[] = RECOMP_AUX_MODULES;
+ std::vector<LoaderModule> g_aux;
+ 
+-bool load_aux_module(const AuxSpec &spec) {
++// Retain validated file headers until every image is mapped. Binding imports
++// while mapping would turn references to later modules into missing host shims.
++struct PendingImports {
++    std::vector<uint8_t> file;
++    size_t opt_off;
++    uint16_t opt_magic;
++    uint32_t image_size;
++};
++
++bool load_aux_module(const AuxSpec &spec, PendingImports &pending) {
+     LoaderModule m;
+     m.name = spec.name;
+     m.path = dirname_of(g_exe_path) + "/" + spec.name;
+@@ -424,11 +433,7 @@ bool load_aux_module(const AuxSpec &spec) {
+             memcpy(g_mem + va, file.data() + raw_ptr, copy);
+         }
+     }
+-    if (!patch_iat(file, opt_off, opt_magic, image_base, size_image)) {
+-        g_error = std::string(spec.name) + ": " + g_error;
+-        return false;
+-    }
+-    m.initial_image.assign(g_mem + image_base, g_mem + image_base + m.size);
++    pending = {std::move(file), opt_off, opt_magic, size_image};
+     g_aux.push_back(m);
+     LOGV("mapped auxiliary module %s: base %08x size %08x entry %08x", spec.name, m.base,
+          size_image, m.entry);
+@@ -749,11 +754,25 @@ bool loader_load(const char *exe_path) {
+         }
+     }
+ 
++    std::vector<PendingImports> pending(RECOMP_AUX_MODULE_COUNT);
++    for (uint32_t i = 0; i < RECOMP_AUX_MODULE_COUNT; ++i)
++        if (!load_aux_module(g_aux_specs[i], pending[i]))
++            return false;
++
++    // Resolve named and ordinal exports against the complete mapped module set,
++    // including forward references and cycles. Snapshot only after IAT binding
++    // so unloading/reloading a module restores executable guest addresses.
+     if (!patch_iat(file, opt_off, opt_magic, g_base, g_size))
+         return false;
+-    for (uint32_t i = 0; i < RECOMP_AUX_MODULE_COUNT; ++i)
+-        if (!load_aux_module(g_aux_specs[i]))
++    for (uint32_t i = 0; i < RECOMP_AUX_MODULE_COUNT; ++i) {
++        LoaderModule &m = g_aux[i];
++        const PendingImports &p = pending[i];
++        if (!patch_iat(p.file, p.opt_off, p.opt_magic, m.base, p.image_size)) {
++            g_error = m.name + ": " + g_error;
+             return false;
++        }
++        m.initial_image.assign(g_mem + m.base, g_mem + m.base + m.size);
++    }
+ 
+     if (g_entry != LOADER_EXPECTED_ENTRY)
+         LOGW("entry point is %08x, expected %08x", g_entry, LOADER_EXPECTED_ENTRY);
+diff --git a/runtime/profile.cpp b/runtime/profile.cpp
+index 9c58dda..299f4c4 100644
+--- a/runtime/profile.cpp
++++ b/runtime/profile.cpp
+@@ -22,6 +22,8 @@ namespace {
+ struct ThreadState {
+     ProfileSlot slot;
+     std::vector<uint32_t> stack;
++    uint32_t next_depth_report = 128;
++    bool live_depth = false;
+ };
+ // Intentionally process-lifetime: a sampler snapshot can outlive thread exit.
+ thread_local ThreadState *local = nullptr;
+@@ -72,18 +74,61 @@ void start() {
+         state().sampler = std::thread([] {
+             auto &s = state();
+             auto next = std::chrono::steady_clock::now();
++            // Optional live windows diagnose a guest that never reaches exit.
++            // Read only atomic scheduler slots; never inspect another thread's
++            // guest registers or mutable stack from this sampler.
++            const char *configured = recomp_env("PROFILE_INTERVAL_MS");
++            unsigned long interval = configured ? strtoul(configured, nullptr, 10) : 0;
++            if (interval < 1000 || interval > 60000)
++                interval = 0;
++            auto window_start = next;
++            std::map<uint32_t, uint64_t> window;
++            uint64_t idle = 0;
+             while (!s.stop.load(std::memory_order_relaxed)) {
+                 next += std::chrono::milliseconds(1);
+                 std::this_thread::sleep_until(next);
+                 auto *slot = sched_current_holder_slot();
+                 uint32_t top = slot ? slot->top.load(std::memory_order_relaxed) : PROFILE_IDLE;
+-                std::lock_guard<std::mutex> lock(s.mutex);
+-                if (top == PROFILE_IDLE)
+-                    ++s.idle;
+-                else
+-                    ++s.counts[top];
++                {
++                    std::lock_guard<std::mutex> lock(s.mutex);
++                    if (top == PROFILE_IDLE)
++                        ++s.idle;
++                    else
++                        ++s.counts[top];
++                }
++                if (interval) {
++                    if (top == PROFILE_IDLE)
++                        ++idle;
++                    else
++                        ++window[top];
++                }
+                 // A stalled sampler must not manufacture catch-up samples.
+                 auto now = std::chrono::steady_clock::now();
++                if (interval && now - window_start >= std::chrono::milliseconds(interval)) {
++                    std::vector<ProfileSample> rows;
++                    uint64_t total = idle;
++                    for (auto [index, samples] : window) {
++                        rows.push_back({index, samples});
++                        total += samples;
++                    }
++                    std::sort(rows.begin(), rows.end(), [](auto a, auto b) {
++                        return a.samples != b.samples ? a.samples > b.samples : a.index < b.index;
++                    });
++                    fprintf(stderr,
++                            "profile live: %lu ms window, %llu samples, %llu idle; "
++                            "shims/host waits are attributed to their caller\n",
++                            interval, (unsigned long long)total, (unsigned long long)idle);
++                    for (size_t i = 0; i < rows.size() && i < 3; ++i) {
++                        const char *name = recomp_profile_name(rows[i].index);
++                        fprintf(stderr, "profile live: %s index=%u samples=%llu\n",
++                                name ? name : "unresolved", rows[i].index,
++                                (unsigned long long)rows[i].samples);
++                    }
++                    fflush(stderr);
++                    window.clear();
++                    idle = 0;
++                    window_start = now;
++                }
+                 if (now > next + std::chrono::milliseconds(1))
+                     next = now;
+             }
+@@ -107,10 +152,26 @@ extern "C" void recomp_profile_push(uint32_t index) {
+         return;
+     if (!local) {
+         local = new ThreadState;
++        local->live_depth = recomp_env("PROFILE_INTERVAL_MS") != nullptr;
+         sched_register_profile_slot(&local->slot);
+         start();
+     }
+     local->stack.push_back(index);
++    // Capture the chain on its owning thread before a browser stack overflow
++    // destroys it. Log at exponentially increasing depths, only when the live
++    // diagnostic was requested, without reading a guest register or stack.
++    if (local->live_depth && local->stack.size() >= local->next_depth_report) {
++        fprintf(stderr, "profile depth: %zu translated calls; tail follows\n", local->stack.size());
++        size_t begin = local->stack.size() > 12 ? local->stack.size() - 12 : 0;
++        for (size_t n = begin; n < local->stack.size(); ++n) {
++            const char *name = recomp_profile_name(local->stack[n]);
++            fprintf(stderr, "profile depth: %zu %s index=%u\n", n, name ? name : "unresolved",
++                    local->stack[n]);
++        }
++        fflush(stderr);
++        if (local->next_depth_report < (1u << 30))
++            local->next_depth_report *= 2;
++    }
+     local->slot.top.store(index, std::memory_order_relaxed);
+ }
+ extern "C" uint32_t recomp_profile_depth() {
 diff --git a/runtime/seh.cpp b/runtime/seh.cpp
-index ac94a12..3c7cb86 100644
+index ac94a12..88bafc2 100644
 --- a/runtime/seh.cpp
 +++ b/runtime/seh.cpp
 @@ -168,7 +168,7 @@ void finish_dispatch(SehDispatch *d) {
@@ -2130,7 +3951,7 @@ index ac94a12..3c7cb86 100644
  } // namespace
  
  extern "C" {
-@@ -291,6 +313,42 @@ jmp_buf *recomp_seh_frame_adopt(X86 *c) {
+@@ -291,6 +313,41 @@ jmp_buf *recomp_seh_frame_adopt(X86 *c) {
      return nullptr;
  }
  
@@ -2146,8 +3967,7 @@ index ac94a12..3c7cb86 100644
 +jmp_buf *recomp_seh_resume_frame(X86 *c) {
 +    for (size_t i = state.frames.size(); i-- > 0;) {
 +        SehFrame *f = state.frames[i];
-+        if (f->cpu != c || !f->orphan || f->retired ||
-+            f->callback_depth != recomp_callback_depth())
++        if (f->cpu != c || !f->orphan || f->retired || f->callback_depth != recomp_callback_depth())
 +            continue;
 +        // CONTEXT continuation may have abandoned several translated host
 +        // frames. Reanchor every still-linked registration, not just FS:[0].
@@ -2173,7 +3993,7 @@ index ac94a12..3c7cb86 100644
  void recomp_seh_frame_leave(X86 *c) {
      recomp_seh_validate_chain(c, "leave", "");
      bool removed = false;
-@@ -425,6 +483,35 @@ void recomp_seh_reset(X86 *c) {
+@@ -425,6 +482,35 @@ void recomp_seh_reset(X86 *c) {
      }
  }
  
@@ -2228,10 +4048,32 @@ index b457d2f..936e056 100644
                         uint32_t retval);
  
 diff --git a/runtime/tests/interp_tests.cpp b/runtime/tests/interp_tests.cpp
-index d20c50b..0514456 100644
+index d20c50b..3872e41 100644
 --- a/runtime/tests/interp_tests.cpp
 +++ b/runtime/tests/interp_tests.cpp
-@@ -24,7 +24,22 @@ uint8_t *g_mem;
+@@ -8,6 +8,7 @@
+ #include "interp.h"
+ 
+ #include <csignal>
++#include <cstdarg>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+@@ -18,13 +19,36 @@
+ #endif
+ 
+ uint8_t *g_mem;
++// The standalone suite owns the logger seam as well as guest memory.
++void log_msg(int, const char *fmt, ...) {
++    va_list args;
++    va_start(args, fmt);
++    vfprintf(stderr, fmt, args);
++    va_end(args);
++    fputc('\n', stderr);
++}
+ // This test links the interpreter alone, so it owns the definitions the
+ // runtime would otherwise supply: guest memory, and the dirty-region list
+ // x86.h's stores record.
  RecompDirty g_dirty[RECOMP_DIRTY_SLOTS];
  uint32_t g_dirty_count;
  uint32_t g_watch_base, g_watch_len; // the memory watch, never armed here
@@ -2254,7 +4096,7 @@ index d20c50b..0514456 100644
  
  // The interpreter tests link neither cpu.cpp nor a guest with handlers, so a
  // null dereference has nowhere to raise to: report it and stop, which is what
-@@ -46,11 +61,24 @@ static int g_checks = 0, g_failures = 0;
+@@ -46,11 +70,24 @@ static int g_checks = 0, g_failures = 0;
  
  const uint32_t CODE = 0x01000000, HELPER = 0x01001000, DATA = 0x02000000, STACK = 0x0e000000;
  const uint32_t NATIVE = 0x00401000, RETURN = 0x00400ff0;
@@ -2279,7 +4121,7 @@ index d20c50b..0514456 100644
      if (target == NATIVE) {
          ++g_native_calls;
          g_native_arg = rd32(c->r[R_ESP] + 4);
-@@ -92,6 +120,222 @@ static X86 fresh() {
+@@ -92,6 +129,238 @@ static X86 fresh() {
      return c;
  }
  
@@ -2451,19 +4293,19 @@ index d20c50b..0514456 100644
 +    // CMP [ESI],BL with [ESI]=0x09, BL=0x09 -> ZF; then JZ taken.
 +    // MOV AL,[ESI]; ADD AL,BL with carry out of bit 7 -> CF/ZF/AF/SF/OF/PF.
 +    // CLD clears DF; STD sets it back.
-+    put(CODE, {0x38, 0x1e,             // cmp byte ptr [esi], bl
-+               0x74, 0x02,             // jz +2
-+               0xb0, 0xff,             // mov al, 0xff (skipped)
-+               0x8a, 0x06,             // mov al, [esi]
-+               0x00, 0xd8,             // add al, bl
-+               0x88, 0x07,             // mov [edi], al
-+               0xfc,                   // cld
-+               0xfd,                   // std
-+               0xc3});                // ret
++    put(CODE, {0x38, 0x1e, // cmp byte ptr [esi], bl
++               0x74, 0x02, // jz +2
++               0xb0, 0xff, // mov al, 0xff (skipped)
++               0x8a, 0x06, // mov al, [esi]
++               0x00, 0xd8, // add al, bl
++               0x88, 0x07, // mov [edi], al
++               0xfc,       // cld
++               0xfd,       // std
++               0xc3});     // ret
 +    X86 c = fresh();
 +    c.r[R_ESI] = DATA + 0x40;
 +    c.r[R_EDI] = DATA + 0x50;
-+    c.r[R_EBX] = 0x12340900u; // BL=0x09, high bytes must survive
++    c.r[R_EBX] = 0x12340009u; // BL=0x09, high bytes must survive
 +    c.r[R_EAX] = 0xdeadbe00u;
 +    wr8(DATA + 0x40, 0x09);
 +    wr32(c.r[R_ESP], RETURN);
@@ -2475,19 +4317,19 @@ index d20c50b..0514456 100644
 +    CHECK(c.eflags_cf == 0 && c.eflags_zf == 0 && c.eflags_sf == 0);
 +    CHECK(c.eflags_pf == 1 && c.eflags_af == 1 && c.eflags_of == 0);
 +    CHECK(c.eflags_df == 1); // STD last
-+    CHECK(c.r[R_EBX] == 0x12340900u);
++    CHECK(c.r[R_EBX] == 0x12340009u);
 +    CHECK(c.eip == RETURN);
 +
 +    // Carry out of the byte: 0xf7+0x09=0x00 with CF/ZF/AF/PF, SF=0, OF=0.
 +    // AH (high byte) load/store round-trips without touching AL.
-+    put(CODE, {0x8a, 0x26,             // mov ah, [esi]
-+               0x00, 0xdc,             // add ah, bl
-+               0x88, 0x27,             // mov [edi], ah
-+               0xc3});                // ret
++    put(CODE, {0x8a, 0x26, // mov ah, [esi]
++               0x00, 0xdc, // add ah, bl
++               0x88, 0x27, // mov [edi], ah
++               0xc3});     // ret
 +    c = fresh();
 +    c.r[R_ESI] = DATA + 0x40;
 +    c.r[R_EDI] = DATA + 0x50;
-+    c.r[R_EBX] = 0x00000900u; // BL=0x09
++    c.r[R_EBX] = 0x00000009u; // BL=0x09
 +    c.r[R_EAX] = 0x000000f7u; // AL=0xf7 must survive AH writes
 +    wr8(DATA + 0x40, 0xf7);
 +    wr32(c.r[R_ESP], RETURN);
@@ -2499,11 +4341,134 @@ index d20c50b..0514456 100644
 +    CHECK(c.eip == RETURN);
 +}
 +
++// Absolute-address MOV through EAX (moffs32): the CRT and game methods use
++// MOV EAX,[addr] / MOV [addr],EAX for globals. Both round-trip one dword.
++static void test_moffs_absolute() {
++    put(CODE, {0xa1, 0x40, 0x00, 0x00, 0x02, // mov eax, [DATA+0x40]
++               0x83, 0xc0, 0x01,             // add eax, 1
++               0xa3, 0x50, 0x00, 0x00, 0x02, // mov [DATA+0x50], eax
++               0xc3});                       // ret
++    X86 c = fresh();
++    wr32(DATA + 0x40, 0x11223344);
++    wr32(c.r[R_ESP], RETURN);
++    CHECK(interp_call(&c, CODE) == 1);
++    CHECK(c.r[R_EAX] == 0x11223345u);
++    CHECK(rd32(DATA + 0x50) == 0x11223345u);
++    CHECK(c.eip == RETURN);
++}
++
  static void test_bank_routine() {
      // The shape of an audio bank routine: fetch values through helpers and
      // store them into the parameter block the caller passes.
-@@ -180,10 +424,14 @@ static void test_tail_call_out() {
+@@ -178,12 +447,121 @@ static void test_tail_call_out() {
+     CHECK(c.eip == RETURN);
+ }
  
++static void test_exchange_shift_and_wide_multiply() {
++    // A stack-addressed exchange must capture both operands before writing,
++    // and must preserve the flags settled by the preceding comparison.
++    put(CODE, {0x39, 0xc0, 0x87, 0x14, 0x24, 0x87, 0x14, 0x24, 0xc3});
++    X86 c = fresh();
++    c.r[R_EDX] = 0x12345678;
++    wr32(c.r[R_ESP], RETURN);
++    CHECK(interp_can_decode(CODE));
++    CHECK(interp_call(&c, CODE));
++    CHECK(c.eip == RETURN && c.r[R_EDX] == 0x12345678);
++    CHECK(c.eflags_zf && !c.eflags_cf && !c.eflags_of);
++    // XCHG [EDX],EDX must write at the old address, not at its new value.
++    put(CODE, {0x87, 0x12, 0x91, 0xc3});
++    c = fresh();
++    c.r[R_EDX] = DATA;
++    c.r[R_EAX] = 12;
++    c.r[R_ECX] = 24;
++    wr32(DATA, 0x87654321);
++    wr32(c.r[R_ESP], RETURN);
++    CHECK(interp_call(&c, CODE));
++    CHECK(rd32(DATA) == DATA && c.r[R_EDX] == 0x87654321);
++    CHECK(c.r[R_EAX] == 24 && c.r[R_ECX] == 12);
++    // Return-address thunk: restore EDX by exchanging the stack temporary,
++    // redirect RET to the computed target and adjust the caller continuation.
++    put(CODE,
++        {0x52, 0xba, 0x00, 0x10, 0x40, 0x00, 0x87, 0x14, 0x24, 0x83, 0x44, 0x24, 0x04, 0x19, 0xc3});
++    c = fresh();
++    c.r[R_EDX] = 0x98765432;
++    uint32_t saved_esp = c.r[R_ESP];
++    wr32(saved_esp, RETURN);
++    CHECK(interp_call(&c, CODE));
++    CHECK(c.eip == NATIVE && c.r[R_EDX] == 0x98765432);
++    CHECK(c.r[R_ESP] == saved_esp && rd32(saved_esp) == RETURN + 0x19);
++    // Zero and masked-zero shift counts preserve all pending flags.
++    for (uint8_t op : {0xe0, 0xe8, 0xf8}) {
++        for (uint8_t count : {0, 32}) {
++            put(CODE, {0x39, 0xc0, 0xc1, op, count, 0xc3});
++            c = fresh();
++            c.r[R_EAX] = 0x80000001;
++            wr32(c.r[R_ESP], RETURN);
++            CHECK(interp_call(&c, CODE));
++            CHECK(c.r[R_EAX] == 0x80000001 && c.eflags_zf && !c.eflags_cf && !c.eflags_of);
++        }
++    }
++    put(CODE, {0xd1, 0xe0, 0xc3}); // SHL EAX,1
++    c = fresh();
++    c.r[R_EAX] = 0x80000001;
++    wr32(c.r[R_ESP], RETURN);
++    CHECK(interp_call(&c, CODE));
++    CHECK(c.r[R_EAX] == 2 && c.eflags_cf && c.eflags_of);
++    put(CODE, {0xd3, 0xf8, 0xc3}); // SAR EAX,CL
++    c = fresh();
++    c.r[R_EAX] = 0x80000000;
++    c.r[R_ECX] = 31;
++    wr32(c.r[R_ESP], RETURN);
++    CHECK(interp_call(&c, CODE));
++    CHECK(c.r[R_EAX] == 0xffffffff && c.eflags_sf && !c.eflags_zf);
++    put(CODE, {0xf7, 0xe9, 0xc3}); // IMUL ECX: EDX:EAX
++    c = fresh();
++    c.r[R_EAX] = 0x80000000;
++    c.r[R_ECX] = 0xffffffff;
++    wr32(c.r[R_ESP], RETURN);
++    CHECK(interp_call(&c, CODE));
++    CHECK(c.r[R_EAX] == 0x80000000 && c.r[R_EDX] == 0 && c.eflags_cf && c.eflags_of);
++    c = fresh();
++    c.r[R_EAX] = 5;
++    c.r[R_ECX] = uint32_t(-3);
++    wr32(c.r[R_ESP], RETURN);
++    CHECK(interp_call(&c, CODE));
++    CHECK(c.r[R_EAX] == uint32_t(-15) && c.r[R_EDX] == 0xffffffff && !c.eflags_cf && !c.eflags_of);
++}
++
++static void test_narrow_moves() {
++    for (uint32_t value : {0x7fu, 0x80u, 0xffu}) {
++        put(CODE, {0x39, 0xd2, 0x0f, 0xbe, 0xc4, 0x0f, 0xb6, 0xd0, 0xc3});
++        X86 c = fresh();
++        c.r[R_EAX] = value << 8;
++        wr32(c.r[R_ESP], RETURN);
++        CHECK(interp_call(&c, CODE));
++        CHECK(c.r[R_EAX] == (value < 128 ? value : value | 0xffffff00u));
++        CHECK(c.r[R_EDX] == value);
++        CHECK(c.eflags_zf && !c.eflags_cf && !c.eflags_of);
++    }
++    // Narrow loads at the arena boundary must require only two valid bytes.
++    put(CODE,
++        {0x39, 0xd2, 0x0f, 0xbf, 0x06, 0x0f, 0xb7, 0x16, 0x66, 0x89, 0x03, 0x66, 0x8b, 0x0b, 0xc3});
++    X86 c = fresh();
++    c.r[R_ESI] = GUEST_SIZE - 2;
++    c.r[R_EBX] = DATA + 4;
++    c.r[R_ECX] = 0x12340000;
++    wr16(GUEST_SIZE - 2, 0xff80);
++    wr32(DATA + 4, 0xaabbccdd);
++    wr32(c.r[R_ESP], RETURN);
++    CHECK(interp_call(&c, CODE));
++    CHECK(c.r[R_EAX] == 0xffffff80 && c.r[R_EDX] == 0xff80);
++    CHECK(rd32(DATA + 4) == 0xaabbff80 && c.r[R_ECX] == 0x1234ff80);
++    CHECK(c.eflags_zf && !c.eflags_cf && !c.eflags_of);
++    put(CODE, {0x66, 0x01, 0xc0, 0xc3}); // unsupported 16-bit ADD stays refused
++    c = fresh();
++    X86 before = c;
++    CHECK(!interp_can_decode(CODE));
++    CHECK(!interp_call(&c, CODE));
++    CHECK(!memcmp(&c, &before, sizeof c));
++}
++
  static void test_refusals() {
      // An instruction outside the set: nothing runs.
 -    put(CODE, {0x56, 0xd9, 0x46, 0x04, 0x5e, 0xc3}); // push esi; fld [esi+4]; pop esi; ret
@@ -2518,7 +4483,7 @@ index d20c50b..0514456 100644
      CHECK(memcmp(&c, &before, sizeof c) == 0);
      CHECK(strstr(interp_last_error(), "unsupported") != nullptr);
      // A branch into the middle of an instruction.
-@@ -310,6 +558,15 @@ int main(int argc, char **argv) {
+@@ -310,6 +688,15 @@ int main(int argc, char **argv) {
          return 1;
      if (argc == 3 && !strcmp(argv[1], "--run"))
          return run_hex(argv[2]);
@@ -2534,19 +4499,104 @@ index d20c50b..0514456 100644
      // Without the interpreter's step budget the checks in test_step_budget do
      // not fail, they never come back; the watchdog turns that into a failure.
      // The whole suite inside the budget is a fraction of a second.
-@@ -318,6 +575,10 @@ int main(int argc, char **argv) {
+@@ -318,7 +705,14 @@ int main(int argc, char **argv) {
      alarm(30);
  #endif
      test_bank_routine();
 +    test_byte_alu_and_direction();
++    test_moffs_absolute();
 +    test_call_redirected_state();
 +    test_stack_flags_thunk();
 +    test_x87_memory();
      test_tail_call_out();
++    test_exchange_shift_and_wide_multiply();
++    test_narrow_moves();
      test_refusals();
      test_step_budget();
+     printf("interp: %d checks, %d failures\n", g_checks, g_failures);
+diff --git a/runtime/tests/profile_tests.cpp b/runtime/tests/profile_tests.cpp
+index 9d2eb5a..04daff5 100644
+--- a/runtime/tests/profile_tests.cpp
++++ b/runtime/tests/profile_tests.cpp
+@@ -121,6 +121,18 @@ int main(int argc, char **argv) {
+     if (found < 0)
+         return 1;
+     index_ = uint32_t(found);
++    if (enabled) {
++        // Exercise bounded depth reporting on the publishing thread, without
++        // recursively executing the guest or risking a native stack overflow.
++        for (uint32_t n = 0; n < 512; ++n)
++            recomp_profile_push(index_);
++        CHECK(recomp_profile_depth() == 512);
++        CHECK(sched_current_holder_slot()->top.load() == index_);
++        for (uint32_t n = 0; n < 512; ++n)
++            recomp_profile_pop();
++        CHECK(recomp_profile_depth() == 0);
++        CHECK(sched_current_holder_slot()->top.load() == PROFILE_IDLE);
++    }
+     RecompHookFn saved_hook = recomp_hook_ptrs[index_];
+     uint8_t saved_hooked = recomp_hooked[index_];
+     recomp_hook_ptrs[index_] = copy_fixture;
+@@ -139,18 +151,28 @@ int main(int argc, char **argv) {
+         wr32(sp + 4, dst);
+         wr32(sp + 8, src);
+     };
+-    // Caller stays published across all 10,000 generated dispatches; gaps therefore
++    // Caller stays published across at least 10,000 generated dispatches; gaps therefore
+     // count against the >90% requirement instead of disappearing as idle time.
+     recomp_profile_push(0xfffffffe);
+-    for (int i = 0; i < 10000; ++i) {
++    uint32_t dispatches = 0;
++    // Timer granularity and loaded CI hosts can deliver far fewer than the
++    // requested 1000 samples/s. Bound real work by time, not an assumed rate.
++    uint64_t measured = 0, deadline = os_monotonic_ns() + 20000000000ull;
++    for (; dispatches < 10000 || (enabled && measured < 100 && os_monotonic_ns() < deadline);
++         ++dispatches) {
+         setup();
+-        if (i & 1)
++        if (dispatches & 1)
+             direct_call(&c);
+         else
+             recomp_call(&c, target);
++        if (enabled && (dispatches % 1024) == 0) {
++            measured = 0;
++            for (auto row : profile_snapshot())
++                measured += row.samples;
++        }
+     }
+     CHECK(memcmp(g_mem + src, g_mem + dst, n) == 0);
+-    CHECK(fixture_calls == 10000);
++    CHECK(fixture_calls == dispatches);
+     CHECK(recomp_profile_depth() == (enabled ? 1u : 0u));
+     if (enabled) {
+         auto rows = profile_snapshot();
+@@ -160,9 +182,9 @@ int main(int argc, char **argv) {
+             if (r.index == index_)
+                 hot = r.samples;
+         }
+-        printf("fixture: 10000 generated dispatches at %08x with a copy hook, "
++        printf("fixture: %u generated dispatches at %08x with a copy hook, "
+                "hot=%llu total=%llu share=%.2f%%\n",
+-               target, (unsigned long long)hot, (unsigned long long)total,
++               dispatches, target, (unsigned long long)hot, (unsigned long long)total,
+                total ? 100.0 * hot / total : 0);
+         CHECK(total >= 100);
+         CHECK(hot * 100 > total * 90);
+@@ -197,10 +219,11 @@ int main(int argc, char **argv) {
+         ProfileSlot *main_slot = sched_current_holder_slot();
+         recomp_hook_ptrs[index_] = worker;
+         recomp_hooked[index_] = 1;
+-        import_call(&c, "CreateThread", {0, 0, target, 0, 0, 0});
++        uint32_t worker_handle = import_call(&c, "CreateThread", {0, 0, target, 0, 0, 0});
+         for (int tries = 0; tries < 100 && !worker_ran; ++tries)
+             import_call(&c, "Sleep", {2});
+         CHECK(worker_ran);
++        CHECK(import_call(&c, "WaitForSingleObject", {worker_handle, 1000}) == 0);
+         CHECK(worker_slot && worker_slot != main_slot);
+         CHECK(worker_slot && worker_slot->top.load() == PROFILE_IDLE);
+         CHECK(sched_current_holder_slot() == main_slot);
 diff --git a/runtime/tests/runtime_tests.cpp b/runtime/tests/runtime_tests.cpp
-index 7016990..9444f6e 100644
+index 7016990..14be314 100644
 --- a/runtime/tests/runtime_tests.cpp
 +++ b/runtime/tests/runtime_tests.cpp
 @@ -2844,6 +2844,35 @@ static void creation_polling_wndproc(X86 *c) {
@@ -2594,6 +4644,51 @@ index 7016990..9444f6e 100644
      // --- a contended critical section really blocks -------------------------
      g_cs_addr = scratch_block(24);
      g_cs_order_n = 0;
+@@ -4300,6 +4331,36 @@ static void test_mod_seams(X86 *c) {
+           "the loader reports the digest of the image it actually mapped");
+ }
+ 
++// Win32 drops the trailing spaces and periods of each path component before
++// the file system sees the name. Legacy parsers hand out names like
++// "DATA\DEFAULT.IDE " as a matter of course - the original game's IDE, IPL and
++// ZON lines all carry that suffix - and on Windows they open the plain file.
++static void test_win32_path_component_stripping() {
++    section("win32 path component stripping");
++    std::string dir = win32_game_dir();
++    mkdir_p(dir + "/norm/xdir");
++    FILE *f = fopen((dir + "/norm/xdir/data.ide").c_str(), "wb");
++    check(f != nullptr, "created a file under a clean path");
++    if (f) {
++        fputs("x", f);
++        fclose(f);
++    }
++    win32_invalidate_dir_cache();
++    const std::string want = dir + "/norm/xdir/data.ide";
++    check(win32_host_path("norm\\xdir\\data.ide ") == want,
++          "an open with a trailing space resolves to the same file");
++    check(win32_host_path("norm\\xdir\\data.ide.") == want,
++          "an open with a trailing period resolves to the same file");
++    check(win32_host_path("norm\\xdir\\data.ide. . ") == want,
++          "mixed trailing periods and spaces resolve");
++    check(win32_host_path("norm \\xdir\\data.ide") == want,
++          "a directory component with a trailing space resolves");
++    check(win32_host_path("norm\\xdir\\nope.ide ").empty(),
++          "a name that is missing even after stripping still misses");
++    remove_tree(dir + "/norm");
++    win32_invalidate_dir_cache();
++}
++
+ // ---------------------------------------------------------------------------
+ // Queued input is runnable work, not something to sleep through.
+ //
+@@ -6738,6 +6799,7 @@ int main(int argc, char **argv) {
+     test_scheduling(c);
+     test_exit_process_stops_workers(c);
+     test_mod_seams(c);
++    test_win32_path_component_stripping();
+     test_input_wakes_a_parked_thread(c);
+     test_intrinsics(c);
+     test_undeliverable_calls(c);
 diff --git a/runtime/x86.h b/runtime/x86.h
 index 4dc8955..d60a757 100644
 --- a/runtime/x86.h
@@ -2658,6 +4753,41 @@ index 81654b4..7abbd88 100644
      flags = ["-i"] if args.write else ["--dry-run", "--Werror"]
      for offset in range(0, len(files), 50):
          subprocess.run([str(binary), *flags, *map(str, files[offset:offset + 50])],
+diff --git a/tools/recomp/tests/test_interp_unicorn.py b/tools/recomp/tests/test_interp_unicorn.py
+index 3108489..8a5176b 100644
+--- a/tools/recomp/tests/test_interp_unicorn.py
++++ b/tools/recomp/tests/test_interp_unicorn.py
+@@ -121,5 +121,29 @@ def test_random_routines_match_unicorn():
+     for i in range(300):
+         code = routine(rng)
+         want = run_unicorn(code)
+-        got = subprocess.run([str(BINARY), "--run", code.hex()], capture_output=True, text=True).stdout
++        command = (["node", str(BINARY)] if BINARY.suffix == ".js" else [str(BINARY)])
++        got = subprocess.run(command + ["--run", code.hex()], capture_output=True, text=True).stdout
+         assert got == want, "routine %d: %s" % (i, code.hex())
++
++
++@pytest.mark.skipif(not BINARY.exists(), reason="interp_tests is not built")
++@pytest.mark.parametrize("hexcode", [
++    "871424871424",  # stack exchange twice preserves the real return
++    "8716", "87ca", "91", "92", "97",  # memory/register exchange
++    "c1e000", "c1e020", "c1e001", "c1e01f",  # SHL, masked counts
++    "c1e801", "c1f81f", "d1e0", "d1e8", "d1f8",
++    "d3e0", "d3e8", "d3f8", "c12601",  # CL and memory shifts
++    "f7e9", "f7ee", "f72e",  # signed EDX:EAX multiplication
++    "b17fb4fe",  # MOV CL,imm8 / MOV AH,imm8
++    "b0ff0fbed0", "b4800fbec4", "0fbe4604", "0fb64604",
++    "0fbf4604", "0fb74604", "0fbfcd", "0fb7cd",
++    "668906", "668b0e", "6689c1", "6689447e02",  # 16-bit MOV
++])
++def test_extended_integer_forms_match_unicorn(hexcode):
++    # Final CMP gives both engines defined comparison flags; unit tests check
++    # the instruction-specific flags, including unchanged zero-count shifts.
++    code = bytes.fromhex(hexcode) + bytes.fromhex("3bc1c3")
++    command = (["node", str(BINARY)] if BINARY.suffix == ".js" else [str(BINARY)])
++    run = subprocess.run(command + ["--run", code.hex()], capture_output=True, text=True)
++    assert run.returncode == 0, run.stderr
++    assert run.stdout == run_unicorn(code)
 diff --git a/tools/recomp/tests/test_translate_config.py b/tools/recomp/tests/test_translate_config.py
 index 0dbb471..9105dc3 100644
 --- a/tools/recomp/tests/test_translate_config.py
@@ -2720,7 +4850,7 @@ index 0dbb471..9105dc3 100644
  if __name__ == "__main__":
      unittest.main()
 diff --git a/tools/recomp/tests/test_translate_driver.py b/tools/recomp/tests/test_translate_driver.py
-index 71465b7..567fee9 100644
+index 71465b7..fbe8cb1 100644
 --- a/tools/recomp/tests/test_translate_driver.py
 +++ b/tools/recomp/tests/test_translate_driver.py
 @@ -885,7 +885,7 @@ def test_bounded_continuation_recovery_rejects_incomplete_code(code, bound):
@@ -2764,6 +4894,26 @@ index 71465b7..567fee9 100644
  
  
  @pytest.mark.parametrize("relocated", [False, True])
+@@ -1441,7 +1452,9 @@ def test_auxiliary_module_emits_prefixed_tables_that_self_register(tmp_path, mon
+     curated.write_text("")
+     out = tmp_path / "gen"
+     monkeypatch.setattr(T, "configure", lambda cfg: None)
+-    monkeypatch.setattr(T.game_config, "load", lambda path: {})
++    monkeypatch.setattr(T.game_config, "load", lambda path: {
++        "dir": tmp_path, "translate": {"forget_bodies_file": "main-only-audit-must-not-be-read.json"}})
++    monkeypatch.setattr(T, "configure_module", lambda cfg, key: None)
+     for name, value in (("LISTINGS", listings), ("FUNCS_TSV", table),
+                         ("BINARY", binary), ("CURATED", curated)):
+         monkeypatch.setattr(T, name, str(value))
+@@ -1449,7 +1462,7 @@ def test_auxiliary_module_emits_prefixed_tables_that_self_register(tmp_path, mon
+     monkeypatch.setattr(T, "Image", lambda path: img)
+     monkeypatch.setattr(T, "SYMBOL_PREFIX", "recomp_blit_")
+     monkeypatch.setattr(T, "AUX_MODULE", {"key": "blit", "name": "Blit_p6.dll", "base": 0x10000000, "size": 0x1000})
+-    monkeypatch.setattr(sys, "argv", ["translate.py", "--game", str(tmp_path),
++    monkeypatch.setattr(sys, "argv", ["translate.py", "--game", str(tmp_path), "--module", "blit",
+                                      "--out", str(out), "--quiet"])
+     assert T.main() == 0
+     text = (out / "table.c").read_text()
 diff --git a/tools/recomp/tests/test_translate_insns.py b/tools/recomp/tests/test_translate_insns.py
 index 0aa877b..530744e 100644
 --- a/tools/recomp/tests/test_translate_insns.py
@@ -2848,7 +4998,7 @@ index 0aa877b..530744e 100644
           [(0x0, "CMPSD.REPE ES:EDI,ESI"), (0x2, "RET")],
           "F3 A7  C3", cmps_setup),
 diff --git a/tools/recomp/tests/test_translate_noreturn.py b/tools/recomp/tests/test_translate_noreturn.py
-index f569db1..abf04aa 100644
+index f569db1..bd161b4 100644
 --- a/tools/recomp/tests/test_translate_noreturn.py
 +++ b/tools/recomp/tests/test_translate_noreturn.py
 @@ -5,6 +5,8 @@
@@ -2860,7 +5010,7 @@ index f569db1..abf04aa 100644
  HERE = os.path.dirname(os.path.abspath(__file__))
  ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
  sys.path.insert(0, os.path.join(ROOT, "tools/recomp"))
-@@ -70,3 +72,214 @@ def test_a_popped_jump_goes_only_to_pushed_continuations():
+@@ -70,3 +72,235 @@ def test_a_popped_jump_goes_only_to_pushed_continuations():
      text = translate(listing)
      assert "L_0040110e:" in text
      assert "00401117" not in text
@@ -3075,6 +5225,27 @@ index f569db1..abf04aa 100644
 +        "00402000  CALL 0x00402005\n"))
 +    out = T.noreturn_callees_from([fn], {}, image)
 +    assert 0x00402000 not in out
++
++
++def test_a_cut_caller_does_not_make_a_tail_dispatcher_noreturn():
++    caller = make_noreturn_fn(0x00401000, "00401000  CALL 0x00402000\n")
++    dispatch = make_noreturn_fn(0x00402000,
++                               "00402000  MOV EAX,dword ptr [ESP + 0x4]\n"
++                               "00402004  JMP dword ptr [EAX + 0x1c]\n")
++    image = BytesImage(0x00401000, bytes.fromhex("E8FB0F0000 CC"))
++    inferred = T.noreturn_callees_from([caller, dispatch], {}, image)
++    assert dispatch.addr not in inferred
++    tr = T.Translator(NoImage(), {caller.addr, dispatch.addr}, Opts())
++    tr.noreturn_callees = inferred
++    fn = make_noreturn_fn(caller.addr,
++                         "00401000  CALL 0x00402000\n"
++                         "00401005  MOV EAX,0x1234\n"
++                         "0040100a  RET\n")
++    fn.measure(NoImage())
++    tr.prepare(fn)
++    emitted = "\n".join(tr.translate(fn))
++    assert "00401005 MOV EAX" in emitted
++    assert "recomp_unknown_call(c, 0x401005u)" not in emitted
 diff --git a/tools/recomp/tests/test_translate_seh.py b/tools/recomp/tests/test_translate_seh.py
 index e31c835..7c0fbff 100644
 --- a/tools/recomp/tests/test_translate_seh.py
@@ -3203,7 +5374,7 @@ index e31c835..7c0fbff 100644
                                                   ("ESP", True, False)])
  def test_frame_establishment_through_edx_needs_a_zero_base(reg, zeroed, checkpoint):
 diff --git a/tools/recomp/translate.py b/tools/recomp/translate.py
-index 944f2ca..25e8a9d 100644
+index 944f2ca..3d63a67 100644
 --- a/tools/recomp/translate.py
 +++ b/tools/recomp/translate.py
 @@ -18,13 +18,15 @@ are enabled by the native host, never by the baseline/differential build.
@@ -3742,7 +5913,19 @@ index 944f2ca..25e8a9d 100644
              if (not seh_chain_operand(dst, zero_base) or src.kind != "reg" or src.reg != 4
                      or src.size != 32 or not seh_chain_operand(parse_operand(push.ops[0]), zero_base)
                      or not fn.contiguous[i - 1]):
-@@ -1684,6 +1914,15 @@ def noreturn_callees_from(parsed, iat_names, image=None):
+@@ -1679,11 +1909,27 @@ def noreturn_callees_from(parsed, iat_names, image=None):
+ 
+     returns = {fn.addr for fn in parsed
+                if any(i.mnem == "RET" for i in fn.insns) and not ends_process(fn)}
++    # A dispatch thunk can return through its tail destination without owning
++    # a RET itself. A truncated caller ending at CALL does not prove otherwise,
++    # even if that caller's next byte is padding. Keep such continuations live.
++    tail_dispatch = {fn.addr for fn in parsed
++                     if fn.insns and fn.insns[-1].mnem == "JMP"
++                     and not Translator.closed_noreturn_loop(fn) and not ends_process(fn)}
++    returns.update(tail_dispatch)
+     out = set()
+     for fn in parsed:
          # A loop that cannot fall out of itself never returns either.
          if Translator.closed_noreturn_loop(fn):
              out.add(fn.addr)
@@ -3758,7 +5941,16 @@ index 944f2ca..25e8a9d 100644
          last = fn.insns[-1]
          if last.mnem == "CALL":
              target = Translator.branch_target(last)
-@@ -1734,6 +1973,9 @@ class Translator(object):
+@@ -1693,7 +1939,7 @@ def noreturn_callees_from(parsed, iat_names, image=None):
+             if image is not None:
+                 nxt = last.addr + 5 - image.base
+                 padded = 0 <= nxt < len(image.data) and image.data[nxt] == 0xCC
+-            if target not in returns or padded:
++            if target not in returns or (padded and target not in tail_dispatch):
+                 out.add(target)
+     return out
+ 
+@@ -1734,6 +1980,9 @@ class Translator(object):
          #: A CALL to one ends its block: the emitter leaves a trap in place of
          #: the fall-through instead of a jump onto the padding that follows.
          self.noreturn_callees = set()
@@ -3768,7 +5960,7 @@ index 944f2ca..25e8a9d 100644
          self.seh_helpers = set()
          #: Does a pointer to this address name data rather than code? The
          #: driver installs its judgement before the first translation pass
-@@ -1796,7 +2038,21 @@ class Translator(object):
+@@ -1796,7 +2045,21 @@ class Translator(object):
          if ins.mnem != "CALL":
              return False
          t = self.branch_target(ins)
@@ -3791,7 +5983,7 @@ index 944f2ca..25e8a9d 100644
  
      @staticmethod
      def closed_noreturn_loop(fn):
-@@ -1918,7 +2174,7 @@ class Translator(object):
+@@ -1918,7 +2181,7 @@ class Translator(object):
              writes = set()
              # Read-only instructions and calls do not explicitly redefine a
              # saved return register. All unmodelled forms invalidate the proof.
@@ -3800,7 +5992,7 @@ index 944f2ca..25e8a9d 100644
                          "PAUSE", "CLC", "STC", "CMC", "CLD", "STD", "SAHF", "CLI", "STI"}
              dest_write = {"MOV", "MOVZX", "MOVSX", "LEA", "POP", "ADD", "ADC", "SUB",
                            "SBB", "AND", "OR", "XOR", "INC", "DEC", "NEG", "NOT", "SHL",
-@@ -1944,6 +2200,9 @@ class Translator(object):
+@@ -1944,6 +2207,9 @@ class Translator(object):
                  writes.add(R_EDX)
              elif m in ("CBW", "CWDE", "LAHF", "XLAT"):
                  writes.add(R_EAX)
@@ -3810,7 +6002,7 @@ index 944f2ca..25e8a9d 100644
              else:
                  return unknown
              if m == "IMUL" and len(ops) == 1:
-@@ -1956,12 +2215,16 @@ class Translator(object):
+@@ -1956,12 +2222,16 @@ class Translator(object):
                  result.add(ops[0].reg)
              adjustment = None
              if m in ("PUSH", "POP"):
@@ -3828,7 +6020,7 @@ index 944f2ca..25e8a9d 100644
              elif (m in ("ADD", "SUB") and ops[0].kind == "reg"
                    and ops[0].reg == R_ESP and ops[0].size == 32 and ops[1].kind == "imm"):
                  immediate = ops[1].imm & 0xffffffff
-@@ -2011,6 +2274,8 @@ class Translator(object):
+@@ -2011,6 +2281,8 @@ class Translator(object):
          if t is not None and t not in fn.pushed_continuations:
              return [fn.index[t]] if t in fn.index else []
          nxt = i + 1 if (i + 1 < len(fn.insns) and fn.contiguous[i]) else None
@@ -3837,7 +6029,7 @@ index 944f2ca..25e8a9d 100644
          if m == "INT3":
              # MSVC pads between functions with INT3, and a listing cut at a
              # call that never returns runs that padding into the next
-@@ -2020,7 +2285,21 @@ class Translator(object):
+@@ -2020,7 +2292,21 @@ class Translator(object):
              return []
          if m == "RET":
              return [fn.index[t] for t in sorted(fn.pushed_continuations)]
@@ -3859,7 +6051,7 @@ index 944f2ca..25e8a9d 100644
              out = [nxt] if nxt is not None else []
              t = self.branch_target(ins)
              if t is not None and t in fn.index:
-@@ -2072,10 +2351,6 @@ class Translator(object):
+@@ -2072,10 +2358,6 @@ class Translator(object):
          """Indices control flow reaches from `roots` and the pushed
          continuations; every index if the body has a computed jump that is
          not POP reg; JMP reg. A call that never returns ends a path."""
@@ -3870,7 +6062,7 @@ index 944f2ca..25e8a9d 100644
          roots = set(roots) | set(fn.pushed_continuations)
          work = [fn.index[a] for a in roots if a in fn.index]
          live = set()
-@@ -2086,18 +2361,123 @@ class Translator(object):
+@@ -2086,18 +2368,123 @@ class Translator(object):
              live.add(i)
              if self.never_returns(fn.insns[i]):
                  continue
@@ -3996,7 +6188,7 @@ index 944f2ca..25e8a9d 100644
      @staticmethod
      def branch_target(ins):
          if ins.ops and ins.ops[0].startswith("0x"):
-@@ -2547,9 +2927,11 @@ class Translator(object):
+@@ -2547,9 +2934,11 @@ class Translator(object):
  
      @staticmethod
      def writes_reg32(ins, reg):
@@ -4009,7 +6201,7 @@ index 944f2ca..25e8a9d 100644
              return reg == 1                # ECX
          if ins.mnem in ("CMP", "TEST", "PUSH", "JMP") or ins.mnem in JCC:
              return False
-@@ -2571,8 +2953,10 @@ class Translator(object):
+@@ -2571,8 +2960,10 @@ class Translator(object):
          is strict and a target that is still not an instruction boundary is an
          error."""
          fn.index = {ins.addr: k for k, ins in enumerate(fn.insns)}
@@ -4021,7 +6213,7 @@ index 944f2ca..25e8a9d 100644
          fn.seh_restores = seh_restore_sites(fn)
          self.strict = strict
          for i, ins in enumerate(fn.insns):
-@@ -2595,6 +2979,17 @@ class Translator(object):
+@@ -2595,6 +2986,17 @@ class Translator(object):
          preceded by a dispatch switch, and every entry is a three-line wrapper,
          so no code is duplicated."""
          entries = sorted(set(entries))
@@ -4039,7 +6231,7 @@ index 944f2ca..25e8a9d 100644
          # An alternate entry must be an instruction in THIS body.  A block can
          # be re-recovered between the discovery rounds and the final pass -
          # recursive descent makes them grow - so an entry registered against
-@@ -2612,9 +3007,30 @@ class Translator(object):
+@@ -2612,9 +3014,30 @@ class Translator(object):
              live_out = [ALL_FLAGS] * len(fn.insns)
          else:
              live_out = self.liveness(fn)
@@ -4071,7 +6263,7 @@ index 944f2ca..25e8a9d 100644
  
          labels = set(fn.pushed_continuations)
          # RTL fill/move routines compute addresses within unrolled code rather
-@@ -2637,12 +3053,13 @@ class Translator(object):
+@@ -2637,12 +3060,13 @@ class Translator(object):
                      labels.add(t)
              # A listing gap or an end-of-block fall-through emits a transfer
              # too, and its target needs a label just as much as a branch's.
@@ -4087,7 +6279,7 @@ index 944f2ca..25e8a9d 100644
              t = fn.fallthrough[last] or fn.end
              if t in fn.index:
                  labels.add(t)
-@@ -2683,6 +3100,17 @@ class Translator(object):
+@@ -2683,6 +3107,17 @@ class Translator(object):
          prologue = len(out)          # everything emitted so far is dispatch
          for i, ins in enumerate(fn.insns):
              if i in dead:
@@ -4105,7 +6297,7 @@ index 944f2ca..25e8a9d 100644
                  continue
              if ins.addr in labels:
                  out.append("L_%08x: ;" % ins.addr)
-@@ -2693,7 +3121,8 @@ class Translator(object):
+@@ -2693,7 +3128,8 @@ class Translator(object):
              # functions: the byte after it belongs to whatever comes next, so
              # this body ends here rather than falling through into it.
              if (not fn.contiguous[i] and ins.mnem not in TERMINATORS
@@ -4115,7 +6307,7 @@ index 944f2ca..25e8a9d 100644
                  t = fn.fallthrough[i]
                  self.stats["_listing_gap"] += 1
                  self.notes.append(
-@@ -2705,7 +3134,7 @@ class Translator(object):
+@@ -2705,7 +3141,7 @@ class Translator(object):
          last_i = max(i for i in range(len(fn.insns)) if i not in dead)
          last = fn.insns[last_i]
          if (last.mnem not in TERMINATORS and last.mnem != "INT3"
@@ -4124,7 +6316,7 @@ index 944f2ca..25e8a9d 100644
              t = fn.fallthrough[last_i] or fn.end
              self.stats["_fallthrough_exit"] += 1
              out.append("    " + " ".join(self.goto_target(fn, t, last)))
-@@ -2829,13 +3258,50 @@ class Translator(object):
+@@ -2829,13 +3265,50 @@ class Translator(object):
              # before parsing refuses the whole function over a path CPUID
              # keeps the guest from taking.
              return ["recomp_unmodelled(c, %s); return;" % hexlit(ins.addr)]
@@ -4176,7 +6368,7 @@ index 944f2ca..25e8a9d 100644
          # ---------------------------------------------------------- data --
          if m == "MOV":
              size = operand_size(ops)
-@@ -2924,7 +3390,7 @@ class Translator(object):
+@@ -2924,7 +3397,7 @@ class Translator(object):
              return L
  
          if m == "PUSH":
@@ -4185,7 +6377,7 @@ index 944f2ca..25e8a9d 100644
              if size == 16:
                  L.append("uint32_t v_ = %s;" % read_op(ops[0], 16))
                  L.append("c->r[4] -= 2; wr16(c->r[4], (uint16_t)v_);")
-@@ -2942,6 +3408,20 @@ class Translator(object):
+@@ -2942,6 +3415,20 @@ class Translator(object):
              return L
  
          if m == "POP":
@@ -4206,7 +6398,7 @@ index 944f2ca..25e8a9d 100644
              size = operand_size(ops, hint=32)
              if size == 16:
                  L.append("uint32_t v_ = rd16(c->r[4]); c->r[4] += 2;")
-@@ -2955,12 +3435,36 @@ class Translator(object):
+@@ -2955,12 +3442,36 @@ class Translator(object):
                  L.append("c->eip = %s; recomp_seh_frame_leave(c);" % hexlit(ins.addr))
              return L
  
@@ -4244,7 +6436,7 @@ index 944f2ca..25e8a9d 100644
          if m == "POPFD":
              return ["x86_set_eflags(c, rd32(c->r[4])); c->r[4] += 4;"]
          if m == "PUSHF":
-@@ -2991,6 +3495,50 @@ class Translator(object):
+@@ -2991,6 +3502,50 @@ class Translator(object):
                      "((uint32_t)(int32_t)(int8_t)c->r[0] & 0xffffu);"]
          if m == "CWDE":
              return ["c->r[0] = (uint32_t)(int32_t)(int16_t)c->r[0];"]
@@ -4295,7 +6487,7 @@ index 944f2ca..25e8a9d 100644
          if m in ("LDMXCSR", "STMXCSR"):
              # The SSE control word. This kit models one rounding mode and
              # masks every exception, which is what a guest sets it to; a store
-@@ -3163,6 +3711,19 @@ class Translator(object):
+@@ -3163,6 +3718,19 @@ class Translator(object):
          # ---------------------------------------------------- control flow --
          if m in JCC:
              cond = JCC[m][0]
@@ -4315,7 +6507,7 @@ index 944f2ca..25e8a9d 100644
              t = self.branch_target(ins)
              if t is None:
                  raise TranslateError("indirect conditional jump")
-@@ -3178,7 +3739,7 @@ class Translator(object):
+@@ -3178,7 +3746,7 @@ class Translator(object):
              if ins.ops and ins.ops[0].startswith("0x"):
                  t = int(ins.ops[0], 16)
                  L.append("c->r[4] -= 4; wr32(c->r[4], %s);" % hexlit(nxt))
@@ -4324,7 +6516,7 @@ index 944f2ca..25e8a9d 100644
                      # The host jmp_buf has to belong to a frame that is still
                      # live when _longjmp fires, so setjmp is taken here rather
                      # than inside the runtime (runtime/intrinsics.h).
-@@ -3201,19 +3762,24 @@ class Translator(object):
+@@ -3201,19 +3769,24 @@ class Translator(object):
                      L.append("c->eip = %s;" % hexlit(ins.addr))
                      L.append("{ jmp_buf *b_ = recomp_seh_frame_adopt(c); "
                               "if (b_) { if (setjmp(*b_)) { recomp_seh_land(c); return; } } }")
@@ -4361,7 +6553,7 @@ index 944f2ca..25e8a9d 100644
              return L
  
          if m == "RET":
-@@ -3231,6 +3797,24 @@ class Translator(object):
+@@ -3231,6 +3804,24 @@ class Translator(object):
                  return L
              return ["c->eip = rd32(c->r[4]); c->r[4] += %du; " % (4 + n) +
                      orphan + "recomp_return(c); return;"]
@@ -4386,7 +6578,7 @@ index 944f2ca..25e8a9d 100644
  
          # ------------------------------------------------------------ SSE --
          # Data movement only, in dword lanes. A Delphi runtime's FillChar and
-@@ -3439,9 +4023,11 @@ class Translator(object):
+@@ -3439,9 +4030,11 @@ class Translator(object):
          if m == "HLT":
              return ["recomp_hlt(c);"]
          if m == "INT":
@@ -4399,7 +6591,7 @@ index 944f2ca..25e8a9d 100644
          if m == "IN":
              size = operand_size(ops[:1], hint=32)
              port = read_op(ops[1], 32) if len(ops) > 1 else "0u"
-@@ -3454,9 +4040,10 @@ class Translator(object):
+@@ -3454,9 +4047,10 @@ class Translator(object):
              return L
          if m in ("NOP", "WAIT", "PAUSE"):
              return [";"]
@@ -4412,7 +6604,7 @@ index 944f2ca..25e8a9d 100644
              return ["c->fpu_tag = 0xffffu;"]
          if m == "STMXCSR":
              # No translated SSE arithmetic changes MXCSR, so expose its reset value.
-@@ -3497,7 +4084,7 @@ class Translator(object):
+@@ -3497,7 +4091,7 @@ class Translator(object):
              return  # a translator built without bytes, as the unit tests are
          if self.image.base <= t < self.image.end:
              return
@@ -4421,7 +6613,20 @@ index 944f2ca..25e8a9d 100644
              return
          raise TranslateError("call to %08x, which is outside the image" % t)
  
-@@ -3901,6 +4488,15 @@ class Translator(object):
+@@ -3506,6 +4100,12 @@ class Translator(object):
+             return ["goto L_%08x;" % t]
+         if t in self.func_addrs:
+             self.stats["_tailcall"] += 1
++            if RESUMABLE_STACKS:
++                # A split loop can cross function/block owners on every
++                # iteration. Preserve JMP as a continuation instead of growing
++                # the native stack; generated CALLs propagate EIP mismatches
++                # back to recomp_run, which dispatches this exact target.
++                return ["c->eip = %s; return;" % hexlit(t)]
+             return ["CALL_FN(%08x); return;" % t]
+         self.stats["_tailcall_unknown"] += 1
+         self.notes.append("%08x: jump to %08x outside any known function" % (ins.addr, t))
+@@ -3901,6 +4501,15 @@ class Translator(object):
              return ["x87_set_cw(c, rd16(%s));" % addr_expr(ops[0])]
          if m == "FFREE":
              return [";"]
@@ -4437,7 +6642,7 @@ index 944f2ca..25e8a9d 100644
          if m in ("FSAVE", "FNSAVE"):
              return ["x87_fnsave(c, %s);" % addr_expr(ops[0])]
          if m == "FRSTOR":
-@@ -3962,19 +4558,22 @@ def retarget_withdrawn(body, pruned):
+@@ -3962,19 +4571,22 @@ def retarget_withdrawn(body, pruned):
      if not pruned:
          return body
      out = []
@@ -4472,7 +6677,7 @@ index 944f2ca..25e8a9d 100644
      return out
  
  
-@@ -3995,6 +4594,32 @@ def load_functions(only=None):
+@@ -3995,6 +4607,32 @@ def load_functions(only=None):
      return funcs
  
  
@@ -4505,7 +6710,7 @@ index 944f2ca..25e8a9d 100644
  def main():
      ap = argparse.ArgumentParser()
      ap.add_argument("--out", required=True, help="where the generated sources go (build/recomp/gen)")
-@@ -4045,6 +4670,49 @@ def main():
+@@ -4045,6 +4683,49 @@ def main():
          AUX_MODULE = {"name": args.as_module, "base": cfg["game"]["image_base"],
                        "size": 0}  # the image's extent, filled in once it is read
      image = Image(BINARY)
@@ -4555,7 +6760,7 @@ index 944f2ca..25e8a9d 100644
      discovered = []
      if args.discovered:
          global EXTRA_ENTRY_POINTS
-@@ -4072,11 +4740,17 @@ def main():
+@@ -4072,11 +4753,17 @@ def main():
  
      t0 = time.time()
      entries = load_functions(set(args.only) if args.only else None)
@@ -4573,7 +6778,7 @@ index 944f2ca..25e8a9d 100644
              listed_starts.append(a)
              p = os.path.join(LISTINGS, "%08x.asm" % a)
              if os.path.exists(p) and os.path.getsize(p) > 0:
-@@ -4102,6 +4776,7 @@ def main():
+@@ -4102,6 +4789,7 @@ def main():
      for addr, name, nbytes, path in entries:
          try:
              insns = parse_listing(path)
@@ -4581,7 +6786,7 @@ index 944f2ca..25e8a9d 100644
          except TranslateError as e:
              failures.append((addr, "parse: %s" % e))
              continue
-@@ -4195,6 +4870,13 @@ def main():
+@@ -4195,6 +4883,13 @@ def main():
  
      os.makedirs(args.out, exist_ok=True)
      chunks = []
@@ -4595,7 +6800,7 @@ index 944f2ca..25e8a9d 100644
  
      def accepts(fn, reached=False):
          """Can the emitter translate every instruction of this block?
-@@ -4488,7 +5170,7 @@ def main():
+@@ -4488,7 +5183,7 @@ def main():
              return True
          bounds = None
          boundaries = set()
@@ -4604,7 +6809,7 @@ index 944f2ca..25e8a9d 100644
          if protected and why == "config":
              # A configured entry states that this address IS a function, but
              # recovery still needs a ceiling. Unbounded, it runs past the body
-@@ -4543,7 +5225,7 @@ def main():
+@@ -4543,7 +5238,7 @@ def main():
                      owned.update(ins.addr for ins in block)
                      fragments.update((ins.addr, ins) for ins in block)
              if owned:
@@ -4613,7 +6818,7 @@ index 944f2ca..25e8a9d 100644
              lo_index, hi_index = bisect_right(candidate_starts, t), bisect_right(candidate_starts, bounds[1])
              boundaries = {a for a in candidate_starts[lo_index:hi_index]
                            if a not in owned and a not in finally_owners}
-@@ -4853,6 +5535,9 @@ def main():
+@@ -4853,6 +5548,9 @@ def main():
      seh_stubs = set()
      converged = False
      for _round in range(64):
@@ -4623,7 +6828,7 @@ index 944f2ca..25e8a9d 100644
          tr.func_addrs = all_addrs
          tr.all_insn_addrs = set(owner)
          tr.jumptables.clear()
-@@ -5276,14 +5961,82 @@ def main():
+@@ -5276,14 +5974,82 @@ def main():
      # after mismatched returns have unwound the native call stack.
      if RESUMABLE_STACKS:
          starts = {f.addr for f in parsed}
@@ -4711,7 +6916,7 @@ index 944f2ca..25e8a9d 100644
      for t, fn in extra.items():
          entries_by_fn[fn.addr].add(t)
  
-@@ -5306,13 +6059,16 @@ def main():
+@@ -5306,13 +6072,16 @@ def main():
      # came from Ghidra's listing are never dropped - a dangling target there is
      # a translator gap, and the invariant below turns it into a build failure.
      fn_ref = re.compile(r"FN\(([0-9a-f]{8})\)")
@@ -4731,7 +6936,7 @@ index 944f2ca..25e8a9d 100644
          out = []
          for line in body:
              for kind in ("recomp_call", "recomp_jump"):
-@@ -5331,6 +6087,10 @@ def main():
+@@ -5331,6 +6100,10 @@ def main():
                  target = int(hit, 16)
                  if target not in known:
                      out.append((target, line.strip()))
@@ -4742,15 +6947,18 @@ index 944f2ca..25e8a9d 100644
          return out
  
      # Entries the emitter had to drop are not entry points either.
-@@ -5343,6 +6103,7 @@ def main():
+@@ -5343,6 +6116,10 @@ def main():
      withdrawn = []
      recovered_addrs = prunable_blocks({f.addr for f in recovered}, provenance)
      pruned = []
-+    forget = forget | load_forget_bodies(cfg, image, listed_starts)
++    # Main-image pruning audits name executable addresses, never auxiliary
++    # DLL addresses. Keep their validation strict for the image they describe.
++    if not args.module:
++        forget = forget | load_forget_bodies(cfg, image, listed_starts)
      if forget:
          for a in sorted(forget):
              if a in bodies:
-@@ -5542,6 +6303,20 @@ def main():
+@@ -5542,6 +6319,20 @@ def main():
          tr.stats["_withdrawn_retargeted"] = len(gone)
  
      ok = [fn for fn in parsed if fn.addr in bodies]
@@ -4771,7 +6979,7 @@ index 944f2ca..25e8a9d 100644
      if args.as_module and (args.only or discovered):
          # Discovery ran over the whole image, as it must to recover a function
          # whole, but a module carries only the functions it was asked for:
-@@ -5589,6 +6364,25 @@ def main():
+@@ -5589,6 +6380,25 @@ def main():
                % (at, fn_addr, len(missing), total,
                   " ".join("%08x" % m for m in missing[:6])), file=sys.stderr)
      if (table_gaps or undecoded) and not args.allow_table_gaps:
@@ -4797,7 +7005,7 @@ index 944f2ca..25e8a9d 100644
          raise TranslateError(
              "%d jump tables have entries that dispatch nowhere (%d slots in "
              "total) and %d table sites decoded nothing; pass "
-@@ -5663,6 +6457,48 @@ def main():
+@@ -5663,6 +6473,48 @@ def main():
                   % (target, line[:110])))
          dangling = []
      if dangling:
@@ -4846,7 +7054,7 @@ index 944f2ca..25e8a9d 100644
          # A target that Ghidra listed but that failed to translate is the
          # usual cause, so name the failures first: they are what to fix.
          for a, why in failures[:40]:
-@@ -5782,7 +6618,8 @@ def main():
+@@ -5782,7 +6634,8 @@ def main():
      # neither another pop nor dispatching the continuation is correct here.
      call_returns = sorted({
          fn.fallthrough[i] or (fn.insns[i + 1].addr if i + 1 < len(fn.insns) else fn.end)
@@ -4857,7 +7065,7 @@ index 944f2ca..25e8a9d 100644
  
      # table.c ---------------------------------------------------------------
 diff --git a/web/player/index.html b/web/player/index.html
-index 66254e1..e78ec22 100644
+index 66254e1..343e5b9 100644
 --- a/web/player/index.html
 +++ b/web/player/index.html
 @@ -15,16 +15,25 @@
@@ -4886,7 +7094,7 @@ index 66254e1..e78ec22 100644
    statusEl.textContent = text;
    if (back) {
      const a = document.createElement("a");
-@@ -36,6 +45,23 @@ function status(text, back) {
+@@ -36,6 +45,24 @@ function status(text, back) {
  }
  const log = [];
  window.recompLog = log; // for tests
@@ -4900,6 +7108,7 @@ index 66254e1..e78ec22 100644
 +  record(text);
 +}
 +function fail(text) {
++  if (failed) { record(text); return; }
 +  failed = true;
 +  checkpoint(text);
 +  diagnostics.open = true;
@@ -4910,7 +7119,7 @@ index 66254e1..e78ec22 100644
  
  async function gameId() {
    const parts = location.pathname.split("/").filter(Boolean);
-@@ -56,10 +82,18 @@ async function start() {
+@@ -56,10 +83,18 @@ async function start() {
    let dir = await navigator.storage.getDirectory();
    try {
      for (const p of [id, "game"]) dir = await dir.getDirectoryHandle(p);
@@ -4931,7 +7140,7 @@ index 66254e1..e78ec22 100644
  
    const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
    if (!adapter) throw new Error("WebGPU gave no adapter.");
-@@ -75,18 +109,20 @@ async function start() {
+@@ -75,18 +110,20 @@ async function start() {
                     "maxInterStageShaderVariables"])
      if (k in adapter.limits) requiredLimits[k] = adapter.limits[k];
    const device = await adapter.requestDevice({ requiredFeatures, requiredLimits });
@@ -4957,7 +7166,7 @@ index 66254e1..e78ec22 100644
      preRun: [() => {
        const m = Module;
        m.ENV.RECOMP_PROFILE_DIR = `/opfs/${id}/profile`;
-@@ -94,21 +130,29 @@ async function start() {
+@@ -94,21 +131,29 @@ async function start() {
        for (const [k, v] of extra) if (k.startsWith("RECOMP_")) m.ENV[k] = v;
      }],
      onRuntimeInitialized() {
@@ -4993,10 +7202,10 @@ index 66254e1..e78ec22 100644
  </html>
 diff --git a/docs/d3d9-fixed-function.md b/docs/d3d9-fixed-function.md
 new file mode 100644
-index 0000000..3dcc4ca
+index 0000000..89621e4
 --- /dev/null
 +++ b/docs/d3d9-fixed-function.md
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,33 @@
 +# Bounded Direct3D 9 fixed-function support
 +
 +`dx/d3d9_ffp.cpp` prepares shader-model-2 bytecode for both existing rendering
@@ -5006,6 +7215,11 @@ index 0000000..3dcc4ca
 +The initial supported formats are XYZ or XYZRHW, optional normal (XYZ only),
 +packed diffuse/specular colours, and zero to eight float2 texture coordinate
 +sets. FVF layout follows Microsoft's [FVF-to-declaration mapping](https://learn.microsoft.com/en-us/windows/win32/direct3d9/mapping-fvf-codes-to-a-directx-9-declaration).
++An explicit declaration bound with SetVertexDeclaration also works when its
++stream, offsets, types, methods and order exactly match one of these layouts.
++The adapter derives the equivalent FVF for shader synthesis while retaining
++the original declaration for the draw. Padded, reordered, multi-stream or
++otherwise unsupported declarations are refused rather than rearranged.
 +XYZ uses row-vector world/view/projection multiplication. XYZRHW reconstructs
 +clip coordinates from the current viewport and reciprocal W, bypassing those
 +matrices and lighting. The GPU renderer applies its existing DX9 pixel-centre
@@ -5027,10 +7241,10 @@ index 0000000..3dcc4ca
 +playability or performance.
 diff --git a/dx/d3d9_ffp.cpp b/dx/d3d9_ffp.cpp
 new file mode 100644
-index 0000000..0456f0d
+index 0000000..8d102b9
 --- /dev/null
 +++ b/dx/d3d9_ffp.cpp
-@@ -0,0 +1,245 @@
+@@ -0,0 +1,280 @@
 +#include "d3d9_ffp.h"
 +#include "d3d9_shader.h"
 +#include <algorithm>
@@ -5176,6 +7390,37 @@ index 0000000..0456f0d
 +    return true;
 +}
 +
++bool d9_declaration_fvf(const std::vector<uint8_t> &declaration, uint32_t &fvf, std::string &why) {
++    uint32_t candidate = 0, textures = 0;
++    if (declaration.size() < 16 || declaration.size() % 8)
++        return fail(why, "missing or truncated fixed-function declaration");
++    for (size_t at = 0; at + 8 < declaration.size(); at += 8) {
++        const uint8_t *e = declaration.data() + at;
++        if (e[0] || e[1] || e[5])
++            return fail(why, "fixed-function declaration requires stream zero and default method");
++        if (e[6] == 0 && e[7] == 0 && e[4] == 2)
++            candidate |= 2; // FLOAT3 POSITION
++        else if (e[6] == 9 && e[7] == 0 && e[4] == 3)
++            candidate |= 4; // FLOAT4 POSITIONT
++        else if (e[6] == 3 && e[7] == 0 && e[4] == 2)
++            candidate |= 0x10;
++        else if (e[6] == 10 && e[7] < 2 && e[4] == 4)
++            candidate |= e[7] ? 0x80 : 0x40;
++        else if (e[6] == 5 && e[7] == textures && e[4] == 1)
++            ++textures;
++        else
++            return fail(why, "unsupported fixed-function declaration element");
++    }
++    candidate |= textures << 8;
++    D9FVF decoded;
++    if (!d9_fvf_decode(candidate, decoded, why))
++        return false;
++    if (decoded.declaration != declaration)
++        return fail(why, "fixed-function declaration offsets, order or terminator are unsupported");
++    fvf = candidate;
++    return true;
++}
++
 +bool d9_ffp_prepare(const D9Pipeline &p, uint32_t fvf, uint32_t width, uint32_t height,
 +                    D9FixedFunction &result, std::string &why) {
 +    D9FixedFunction out;
@@ -5187,8 +7432,12 @@ index 0000000..0456f0d
 +    if (p.rs[28] || p.rs[29] || p.rs[151] || p.rs[167])
 +        return fail(why,
 +                    "fixed-function fog, specular addition, or vertex blending is not implemented");
-+    if (p.rs[9] != 2)
-+        return fail(why, "fixed-function flat shading is not implemented");
++    // Flat (1) and gouraud (2) share this shader: the difference is purely
++    // how the raster stage interpolates the colour varyings, which the draw
++    // flags carry to the renderer (HostD9Draw.flat_colors). PHONG (3) has no
++    // implementation anywhere in the toolkit.
++    if (p.rs[9] != 2 && p.rs[9] != 1)
++        return fail(why, "fixed-function phong shading is not implemented");
 +    Code vs, ps;
 +    vs.word(0xfffe0200u);
 +    ps.word(0xffff0200u);
@@ -5278,10 +7527,10 @@ index 0000000..0456f0d
 +}
 diff --git a/dx/d3d9_ffp.h b/dx/d3d9_ffp.h
 new file mode 100644
-index 0000000..f7a4a14
+index 0000000..fb163f0
 --- /dev/null
 +++ b/dx/d3d9_ffp.h
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,32 @@
 +// A bounded Direct3D 9 fixed-function shader synthesis path. Unsupported state
 +// is rejected before either renderer sees a draw; the original device state
 +// and its programmable shader constants are never changed by this helper.
@@ -5305,6 +7554,9 @@ index 0000000..f7a4a14
 +// XYZ/XYZRHW, optional normal and packed colours, and 0..8 float2 UV sets.
 +// Vertex blending, point size, non-float2 UVs and reserved bits are rejected.
 +bool d9_fvf_decode(uint32_t fvf, D9FVF &format, std::string &why);
++// Recognize only declarations exactly representable by the supported FVF
++// subset. Preserve original offsets/types; never guess or rearrange vertices.
++bool d9_declaration_fvf(const std::vector<uint8_t> &declaration, uint32_t &fvf, std::string &why);
 +
 +// Synthesizes SM2 shaders shared by the existing CPU and GPU renderers.
 +// Initially supports unlit/prelit colour and select/modulate/add/subtract
@@ -5313,10 +7565,10 @@ index 0000000..f7a4a14
 +                    D9FixedFunction &result, std::string &why);
 diff --git a/dx/tests/d3d9_ffp_tests.cpp b/dx/tests/d3d9_ffp_tests.cpp
 new file mode 100644
-index 0000000..c8eb72a
+index 0000000..72659b5
 --- /dev/null
 +++ b/dx/tests/d3d9_ffp_tests.cpp
-@@ -0,0 +1,292 @@
+@@ -0,0 +1,451 @@
 +// Real SM2 decoder and software rasterizer tests, with owned COM surfaces.
 +// No game image, generated code, GPU, window or pretend successful draw.
 +#include "../com.h"
@@ -5326,6 +7578,7 @@ index 0000000..c8eb72a
 +#include "../d3d9_shader.h"
 +#include "../d3d9_wgsl.h"
 +#include "../../runtime/memory.h"
++#include "../../runtime/win32.h"
 +#include <cstdio>
 +#include <cstring>
 +#include <initializer_list>
@@ -5390,6 +7643,7 @@ index 0000000..c8eb72a
 +    call.stride = ff.format.stride;
 +    call.vertex_data = (const uint8_t *)vertices;
 +    call.vertex_bytes = bytes;
++    call.flat_colors = p.rs[9] == 1; // the same wiring the device applies
 +    d9_raster_draw(dev, target, ff.format.declaration, call);
 +    return true;
 +}
@@ -5544,6 +7798,28 @@ index 0000000..c8eb72a
 +    check(device_call(view, 83, {4, 1, vertices, sizeof(XYZColour)}) == 0,
 +          "real DrawPrimitiveUP executes fixed function");
 +    check(pixel(target, 12, 12) == 0xff0000ff, "COM fixed-function draw writes actual blue pixels");
++    uint32_t decl_input = heap_alloc(com_get(declaration)->blob.size(), false, 4);
++    memcpy(gm_ptr(decl_input), com_get(declaration)->blob.data(),
++           com_get(declaration)->blob.size());
++    check(device_call(view, 86, {decl_input, out}) == 0 && rd32(out),
++          "create explicit fixed-function vertex declaration");
++    uint32_t explicit_decl = rd32(out);
++    check(device_call(view, 87, {explicit_decl}) == 0 && p.fvf == 0,
++          "SetVertexDeclaration binds explicit layout and clears FVF");
++    memset(target->blob.data(), 0, target->blob.size());
++    check(device_call(view, 83, {4, 1, vertices, sizeof(XYZColour)}) == 0 &&
++              pixel(target, 12, 12) == 0xff0000ff,
++          "explicit declaration draws actual pixels without requiring SetFVF");
++    D9FVF transformed;
++    std::string declaration_error;
++    uint32_t inferred = 0;
++    check(d9_fvf_decode(0x144, transformed, declaration_error) &&
++              d9_declaration_fvf(transformed.declaration, inferred, declaration_error) &&
++              inferred == 0x144,
++          "recognize pretransformed coloured textured declaration");
++    transformed.declaration[2] = 4;
++    check(!d9_declaration_fvf(transformed.declaration, inferred, declaration_error),
++          "refuse padded layout instead of guessing vertex offsets");
 +    check(p.vs.empty() && p.ps.empty() && p.vconst[0][0] == 123 && p.pconst[0][0] == 456,
 +          "synthesized draw restores shader bindings and application constants");
 +    memset(target->blob.data(), 0, target->blob.size());
@@ -5559,6 +7835,128 @@ index 0000000..c8eb72a
 +          "NULL pixel shader really unbinds programmable state");
 +    check(device_call(view, 92, {1}) == 0x8876086c,
 +          "unsupported shader object rejected instead of fake success");
++    const uint32_t ps[] = {0xffff0200, 0x05000051, 0xa00f0000, 0x0000ffff,
++                           0,          0,          0x3f800000, // END-like immediate is not END
++                           0x02000001, 0x800f0800, 0xa0e40000, 0x0000ffff};
++    uint32_t tokens = heap_alloc(sizeof ps, false, 4);
++    memcpy(gm_ptr(tokens), ps, sizeof ps);
++    check(device_call(view, 106, {tokens, out}) == 0 && rd32(out),
++          "CreatePixelShader returns a real COM shader");
++    uint32_t shader = rd32(out), length = heap_alloc(4, true, 4);
++    check(device_call(shader, 4, {0, length}) == 0 && rd32(length) == sizeof ps,
++          "GetFunction reports full shader including END-like immediate");
++    uint32_t copy = heap_alloc(sizeof ps, false, 4);
++    check(device_call(shader, 4, {copy, length}) == 0 && !memcmp(gm_ptr(copy), ps, sizeof ps),
++          "GetFunction preserves exact original tokens");
++    check(device_call(view, 107, {shader}) == 0 && p.ps.size() == sizeof ps,
++          "binding a created shader installs real pipeline bytecode");
++    ComObj *object = com_this(shader);
++    uint32_t id = object->id;
++    check(device_call(shader, 2, {}) == 1 && com_get(id),
++          "device retains a shader after application releases its reference");
++    check(device_call(view, 108, {out}) == 0 && rd32(out) == shader,
++          "GetPixelShader returns the bound COM shader with a reference");
++    device_call(shader, 2, {});
++    auto snapshot = p.ps;
++    check(device_call(view, 107, {0}) == 0 && !com_get(id) && snapshot.size() == sizeof ps,
++          "unbinding releases COM ownership while sealed bytecode survives");
++    wr32(tokens, 0xfffe0200);
++    wr32(out, 0xdeadbeef);
++    check(device_call(view, 106, {tokens, out}) == 0x8876086c && rd32(out) == 0,
++          "pixel creation refuses vertex bytecode and clears output");
++    const uint32_t comment[] = {0xffff0200, 0x0001fffe, 0x0000ffff, 0x0000ffff};
++    check(d9sh::bytecode_size((const uint8_t *)comment, sizeof comment) == sizeof comment,
++          "shader length skips END-like comment payload");
++    check(!d9sh::bytecode_size((const uint8_t *)ps, sizeof ps - 4),
++          "unterminated shader is refused");
++}
++
++void flat_shading_cases() {
++    // D3DRS_SHADEMODE flat: the fixed-function gate accepts it into the same
++    // shaders, the WebGPU translation only differs in the varying struct, and
++    // the CPU raster draws every triangle in the provoking (first) vertex's
++    // colour. D3DSHADE_PHONG (3) stays refused.
++    D9Pipeline p;
++    defaults(p);
++    D9FixedFunction ff;
++    std::string why;
++    p.rs[9] = 1;
++    check(d9_ffp_prepare(p, 0x42, 64, 64, ff, why), "flat shading accepted by the FFP gate");
++    std::string src, src_why;
++    const d9sh::Program vs = d9sh::program_for(ff.vs.vec());
++    check(d9wgsl::vertex_source(vs, &src, &src_why, true) &&
++              src.find("V2FF") != std::string::npos &&
++              src.find("@interpolate(flat) d0") != std::string::npos &&
++              src.find("@interpolate(flat) d1") != std::string::npos,
++          "flat VS translation declares both colour varyings flat");
++    check(d9wgsl::vertex_source(vs, &src, &src_why, false) &&
++              src.find("@interpolate(flat)") == std::string::npos,
++          "gouraud VS translation interpolates colours as before");
++    const d9sh::Program ps = d9sh::program_for(ff.ps.vec());
++    check(d9wgsl::pixel_source(ps, {}, &src, &src_why, true) &&
++              src.find("@interpolate(flat) d1") != std::string::npos,
++          "flat PS translation reads the same flat varyings");
++    p.rs[9] = 3;
++    check(!d9_ffp_prepare(p, 0x42, 64, 64, ff, why), "phong shading refused");
++    p.rs[9] = 2;
++    ComObj *dev = com_new(K_D3D9DEVICE), *target = surface(64, 64);
++    // draw() works on the device's live pipeline, so the render-state setup
++    // below (lighting off, shade mode) must write into it, not into the
++    // pipeline used only for the gate checks above.
++    D9Pipeline &dp = d9_pipeline(dev->id);
++    defaults(dp);
++    dp.rs[9] = 2;
++    const XYZColour tri[] = {{-.75f, .75f, .5f, 0xffff0000},
++                             {.75f, .75f, .5f, 0xff00ff00},
++                             {-.75f, -.75f, .5f, 0xff0000ff}};
++    check(draw(dev, target, 0x42, tri, sizeof tri), "gouraud tri-coloured triangle accepted");
++    check(pixel(target, 12, 12) != 0xffff0000, "gouraud interior mixes the vertex colours");
++    defaults(dp);
++    dp.rs[9] = 1;
++    memset(target->blob.data(), 0, target->blob.size());
++    check(draw(dev, target, 0x42, tri, sizeof tri), "flat tri-coloured triangle accepted");
++    check(pixel(target, 12, 12) == 0xffff0000,
++          "flat raster paints the provoking vertex's colour everywhere covered");
++    check(pixel(target, 30, 30) == 0xffff0000, "flat colour reaches near the opposite edge");
++}
++
++uint32_t named_call(const char *dll, const char *name, std::initializer_list<uint32_t> args) {
++    X86 c = {};
++    c.r[R_ESP] = 0x0efff000;
++    wr32(c.r[R_ESP], 0x12345678);
++    uint32_t index = 1;
++    for (uint32_t value : args)
++        wr32(c.r[R_ESP] + 4 * index++, value);
++    uint32_t entry = imports_alloc_trampoline(dll, name, nullptr, 0);
++    check(imports_dispatch(&c, entry), "registered import dispatches");
++    return c.r[R_EAX];
++}
++
++void exclusive_client_area() {
++    uint32_t cls = heap_alloc(7, true, 1);
++    memcpy(gm_ptr(cls), "STATIC", 7);
++    uint32_t hwnd =
++        named_call("USER32.dll", "CreateWindowExA", {0, cls, cls, 0, 0, 0, 320, 240, 0, 0, 0, 0});
++    check(hwnd != 0, "synthetic window exists for swap-chain geometry test");
++    ComObj *factory = com_new(K_D3D9);
++    uint32_t view = com_view(factory, IF_D3D9);
++    uint32_t present = heap_alloc(56, true, 4), out = heap_alloc(4, true, 4);
++    wr32(present, 800);
++    wr32(present + 4, 600);
++    wr32(present + 8, 22);
++    check(device_call(view, 16, {0, 1, hwnd, 0, present, out}) == 0 && rd32(out),
++          "CreateDevice supports focus-window fallback for exclusive mode");
++    uint32_t device = rd32(out), rect = heap_alloc(16, true, 4);
++    named_call("USER32.dll", "GetClientRect", {hwnd, rect});
++    check(rd32(rect + 8) == 800 && rd32(rect + 12) == 600,
++          "exclusive client rect matches camera/back-buffer dimensions");
++    wr32(present + 32, 1);
++    check(device_call(device, 16, {present}) == 0, "Reset returns to windowed mode");
++    named_call("USER32.dll", "GetClientRect", {hwnd, rect});
++    check(rd32(rect + 8) == 320 && rd32(rect + 12) == 240,
++          "leaving exclusive mode restores original client geometry");
++    device_call(device, 2, {});
++    named_call("USER32.dll", "DestroyWindow", {hwnd});
 +}
 +
 +// Independent handwritten passthrough shader bytes cover the global DX9
@@ -5569,15 +7967,25 @@ index 0000000..c8eb72a
 +                               0x02000001, 0xd00f0000, 0x90e40001, 0x0000ffff};
 +    const uint32_t pixel_shader[] = {0xffff0200, 0x0200001f, 0x8000000a, 0x900f0000,
 +                                     0x02000001, 0x800f0800, 0x90e40000, 0x0000ffff};
-+    auto bytes = [](const void *data, size_t size) {
-+        const uint8_t *begin = (const uint8_t *)data;
-+        return D9ShaderBytes{std::make_shared<const std::vector<uint8_t>>(begin, begin + size)};
-+    };
 +    ComObj *dev = com_new(K_D3D9DEVICE), *target = surface(64, 64);
 +    D9Pipeline &p = d9_pipeline(dev->id);
 +    defaults(p);
-+    p.vs = bytes(vertex, sizeof vertex);
-+    p.ps = bytes(pixel_shader, sizeof pixel_shader);
++    uint32_t view = com_view(dev, IF_D3DDEVICE9), out = heap_alloc(4, true, 4);
++    uint32_t input = heap_alloc(sizeof vertex, false, 4);
++    memcpy(gm_ptr(input), vertex, sizeof vertex);
++    check(device_call(view, 91, {input, out}) == 0 && rd32(out),
++          "create programmable vertex shader through COM");
++    uint32_t vs = rd32(out);
++    check(device_call(view, 92, {vs}) == 0, "bind programmable vertex shader through COM");
++    memcpy(gm_ptr(input), pixel_shader, sizeof pixel_shader);
++    check(device_call(view, 106, {input, out}) == 0 && rd32(out),
++          "create programmable pixel shader through COM");
++    uint32_t ps = rd32(out);
++    check(device_call(view, 107, {ps}) == 0, "bind programmable pixel shader through COM");
++    // The application may free its input tokens and references before drawing.
++    memset(gm_ptr(input), 0, sizeof vertex);
++    device_call(vs, 2, {});
++    device_call(ps, 2, {});
 +    D9FVF f;
 +    std::string why;
 +    check(d9_fvf_decode(0x42, f, why), "programmable fixture has valid vertex declaration");
@@ -5595,6 +8003,7 @@ index 0000000..c8eb72a
 +    d9_raster_draw(dev, target, f.declaration, call);
 +    check(pixel(target, 8, 10) == 0, "programmable triangle honours DX9 integer pixel centres");
 +    check(pixel(target, 9, 10) == 0xffff0000, "programmable triangle retains next interior pixel");
++    device_call(view, 2, {});
 +}
 +} // namespace
 +
@@ -5604,21 +8013,25 @@ index 0000000..c8eb72a
 +    dx_register_shims();
 +    raster_cases();
 +    refusal_cases();
++    flat_shading_cases();
 +    device_cases();
++    exclusive_client_area();
 +    programmable_pixel_centres();
 +    printf("d3d9 fixed function: %u checks, %u failures\n", checks, failures);
 +    return failures ? 1 : 0;
 +}
 diff --git a/runtime/tests/game_boot_probe.cpp b/runtime/tests/game_boot_probe.cpp
 new file mode 100644
-index 0000000..0d9506b
+index 0000000..25a76b9
 --- /dev/null
 +++ b/runtime/tests/game_boot_probe.cpp
-@@ -0,0 +1,87 @@
+@@ -0,0 +1,241 @@
 +// A real PE startup probe: same verified loader, imports, scheduler and generated
 +// CPU code as the player, with a null graphics/audio host. No gameplay proof.
 +#include "loader.h"
 +#include "imports.h"
++#include "interp.h"
++#include "memory.h"
 +#include "win32.h"
 +#include "../dx/dx.h"
 +#include "../platform/os.h"
@@ -5628,6 +8041,113 @@ index 0000000..0d9506b
 +#include <string>
 +
 +namespace {
++// Check real PE import descriptors before executing guest code. Every import
++// from a mapped module must point at its export, never an OS-shim trampoline.
++bool verify_mapped_imports(const LoaderModule &image) {
++    uint32_t opt = image.base + rd32(image.base + 0x3c) + 24;
++    uint32_t imports = rd32(opt + 104), count = 0;
++    for (uint32_t d = image.base + imports; imports && rd32(d + 12); d += 20) {
++        std::string name = gm_str(image.base + rd32(d + 12));
++        const LoaderModule *dependency = loader_module_named(name.c_str());
++        if (!dependency)
++            continue;
++        uint32_t original = rd32(d), iat = rd32(d + 16);
++        if (!original) {
++            fprintf(stderr, "[boot-probe] cannot independently verify bound-only imports\n");
++            return false;
++        }
++        for (uint32_t n = 0; rd32(image.base + original + 4 * n); ++n) {
++            uint32_t t = rd32(image.base + original + 4 * n);
++            uint32_t expected =
++                (t & 0x80000000u)
++                    ? loader_module_export_ordinal(*dependency, t & 0xffff)
++                    : loader_module_export(*dependency, gm_str(image.base + t + 2).c_str());
++            uint32_t slot = image.base + iat + 4 * n;
++            if (!expected || rd32(slot) != expected ||
++                (!image.initial_image.empty() &&
++                 memcmp(image.initial_image.data() + slot - image.base, g_mem + slot, 4))) {
++                fprintf(stderr, "[boot-probe] incorrect mapped import: %s -> %s\n",
++                        image.name.c_str(), name.c_str());
++                return false;
++            }
++            ++count;
++        }
++    }
++    fprintf(stderr, "[boot-probe] %s: %u mapped imports and reload snapshot verified\n",
++            image.name.c_str(), count);
++    return true;
++}
++
++// Exercise primary-buffer listener ownership through the returned original DLL
++// vtables, not a host object fabricated by the test. Scratch is guest memory.
++bool probe_sound_listener(X86 *c, uint32_t device, uint32_t scratch) {
++    const uint8_t iid[16] = {0x84, 0xfa, 0x9a, 0x27, 0x81, 0x49, 0xce, 0x11,
++                             0xa5, 0x21, 0x00, 0x20, 0xaf, 0x0b, 0xe5, 0x60};
++    memset(g_mem + scratch, 0, 192);
++    uint32_t out = scratch + 40, guid = scratch + 48, params = scratch + 64;
++    memcpy(g_mem + guid, iid, 16);
++    wr32(scratch, 36);     // DSBUFFERDESC
++    wr32(scratch + 4, 17); // PRIMARYBUFFER | CTRL3D
++    uint32_t hr = guest_call(c, rd32(rd32(device) + 12), device, scratch, out, 0);
++    uint32_t primary = rd32(out), listener = 0;
++    bool ok = hr == 0 && primary && gm_valid(primary, 4);
++    if (ok) {
++        hr = guest_call(c, rd32(rd32(primary)), primary, guid, out);
++        listener = rd32(out);
++        ok = hr == 0 && listener && gm_valid(listener, 4);
++        guest_call(c, rd32(rd32(primary) + 8), primary);
++    }
++    // The queried listener reference must keep the buffer alive after Release.
++    if (ok) {
++        wr32(params, 64);
++        wr32(params + 64, 0x13579bdf);
++        hr = guest_call(c, rd32(rd32(listener) + 12), listener, params);
++        ok = hr == 0 && rd32(params + 64) == 0x13579bdf;
++        if (ok)
++            ok = guest_call(c, rd32(rd32(listener) + 40), listener, params, 0) == 0;
++        guest_call(c, rd32(rd32(listener) + 8), listener);
++    }
++    fprintf(stderr, "[boot-probe] original primary listener: %s hr=%08x\n", ok ? "PASS" : "FAIL",
++            hr);
++    return ok;
++}
++
++// Optional focused reproduction of a three-argument DirectSound factory,
++// GetCaps and primary listener calls, using the actual translated DLL.
++int probe_sound_factory(const char *module, const char *name) {
++    const LoaderModule *m = loader_module_named(module);
++    uint32_t fn = m ? loader_module_export(*m, name) : 0;
++    if (!fn)
++        return 2;
++    X86 *c = loader_context();
++    uint32_t saved_esp = c->r[R_ESP], out = saved_esp - 512, caps = out + 16;
++    memset(g_mem + out, 0, 128);
++    wr32(caps, 96);
++    c->r[R_ESP] = out - 16;
++    uint32_t before = c->r[R_ESP];
++    sched_set_guest_thread(true);
++    uint32_t hr = guest_call(c, fn, 0, out, 0), object = rd32(out);
++    bool ok = !(hr & 0x80000000u) && object && gm_valid(object, 4) && c->r[R_ESP] == before;
++    fprintf(stderr, "[boot-probe] factory %s!%s: hr=%08x object=%08x stack=%s\n", module, name, hr,
++            object, c->r[R_ESP] == before ? "preserved" : "BAD");
++    if (ok) {
++        uint32_t table = rd32(object);
++        ok = gm_valid(table, 20) && rd32(table + 16);
++        if (ok) {
++            hr = guest_call(c, rd32(table + 16), object, caps);
++            ok = !(hr & 0x80000000u) && c->r[R_ESP] == before;
++            fprintf(stderr, "[boot-probe] original factory GetCaps: hr=%08x stack=%s\n", hr,
++                    c->r[R_ESP] == before ? "preserved" : "BAD");
++            if (ok)
++                ok = probe_sound_listener(c, object, out + 128) && c->r[R_ESP] == before;
++            guest_call(c, rd32(table + 8), object);
++        }
++    }
++    sched_set_guest_thread(false);
++    c->r[R_ESP] = saved_esp;
++    return ok ? 0 : 1;
++}
++
 +bool write_region(const std::string &path, uint32_t base, uint32_t size) {
 +    if (base >= GUEST_SIZE || size > GUEST_SIZE - base)
 +        return false;
@@ -5681,18 +8201,63 @@ index 0000000..0d9506b
 +int main(int argc, char **argv) {
 +    // Strict policies prevent a missing routine or signature from fabricating a
 +    // zero result and displacing later returns. They are probe-only defaults.
-+    if (argc > 2) {
-+        fprintf(stderr, "usage: game_boot_probe [verified-executable]\n");
++    bool factory = argc == 5 && std::string(argv[2]) == "--sound-factory";
++    bool cstring = argc == 5 && std::string(argv[2]) == "--cstring";
++    bool decode = argc == 4 && std::string(argv[2]) == "--decode";
++    if (argc > 2 && !factory && !decode && !cstring) {
++        fprintf(stderr, "usage: game_boot_probe [verified-executable "
++                        "[--sound-factory module export | --decode hex-address | "
++                        "--cstring hex-address text]]\n");
 +        return 2;
 +    }
 +    if (os_setenv("RECOMP_STRICT_UNKNOWN", "1") || os_setenv("RECOMP_STRICT_IMPORTS", "1"))
 +        return 2;
-+    const char *exe = argc == 2 ? argv[1] : recomp_env("EXE");
++    const char *exe = argc >= 2 ? argv[1] : recomp_env("EXE");
 +    if (!loader_load(exe)) {
 +        fprintf(stderr, "[boot-probe] loader: %s\n", loader_error());
 +        return 2;
 +    }
 +    dx_register_shims();
++    if (!verify_mapped_imports(*loader_module_containing(loader_image_base())))
++        return 2;
++    for (uint32_t i = 0; i < loader_module_count(); ++i)
++        if (!verify_mapped_imports(*loader_module(i)))
++            return 2;
++    if (factory)
++        return probe_sound_factory(argv[3], argv[4]);
++    if (cstring) {
++        char *end = nullptr;
++        unsigned long address = strtoul(argv[3], &end, 16);
++        size_t length = strlen(argv[4]);
++        if (!end || *end || address > UINT32_MAX || !length || length > 4096 ||
++            !loader_in_image(uint32_t(address)))
++            return 2;
++        uint32_t input = heap_alloc(uint32_t(length + 1), true, 16);
++        if (!input)
++            return 2;
++        memcpy(g_mem + input, argv[4], length + 1);
++        X86 *c = loader_context();
++        uint32_t esp = c->r[R_ESP], esi = c->r[R_ESI];
++        sched_set_guest_thread(true);
++        uint32_t output = guest_call(c, uint32_t(address), input, 0);
++        sched_set_guest_thread(false);
++        bool ok = gm_valid(output, uint32_t(length + 1)) &&
++                  !memcmp(g_mem + output, argv[4], length + 1) && c->r[R_ESP] == esp &&
++                  c->r[R_ESI] == esi;
++        fprintf(stderr, "[boot-probe] cstring round trip %08x length=%zu: %s\n", uint32_t(address),
++                length, ok ? "PASS" : "FAIL");
++        return ok ? 0 : 1;
++    }
++    if (decode) {
++        char *end = nullptr;
++        unsigned long address = strtoul(argv[3], &end, 16);
++        if (!end || *end || address > UINT32_MAX || !loader_in_image(uint32_t(address)))
++            return 2;
++        bool ok = interp_can_decode(uint32_t(address));
++        fprintf(stderr, "[boot-probe] bounded decode %08x: %s %s\n", uint32_t(address),
++                ok ? "PASS" : "FAIL", interp_last_error());
++        return ok ? 0 : 1;
++    }
 +    fprintf(stderr, "[boot-probe] verified PE %s, entry=%08x, SHA-256=%s\n",
 +            loader_exe_path().c_str(), loader_entry_point(), loader_exe_sha256());
 +    fprintf(stderr, "[boot-probe] original entry begins; null graphics/audio host\n");

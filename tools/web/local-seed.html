@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><title>Importar GTA SA local</title>
+<style>body{background:#151515;color:#eee;font:16px system-ui;max-width:780px;margin:8vh auto;padding:24px}a{color:#9cf}pre{white-space:pre-wrap}progress{width:100%}</style>
+</head><body>
+<h1>Archivos del port original</h1>
+<p>Se copiarán al almacenamiento de este navegador los archivos locales preparados para este ejecutable. Las partidas guardadas se conservan. Mantén cerradas las otras pestañas del juego durante la importación.</p>
+<button id="import">Importar y comprobar archivos</button>
+<progress id="progress" value="0" max="1"></progress>
+<pre id="status">Preparando inventario…</pre>
+<a id="play" hidden>Iniciar port</a>
+<script type="module">
+import { importGame, Sha256, humanBytes } from "/core.js";
+const status = document.getElementById("status");
+const button = document.getElementById("import");
+const progress = document.getElementById("progress");
+const play = document.getElementById("play");
+button.disabled = true;
+async function fileFor(root, path, create = false) {
+  const parts = path.split("/");
+  const name = parts.pop();
+  for (const part of parts) root = await root.getDirectoryHandle(part, { create });
+  return root.getFileHandle(name, { create });
+}
+// Reuse the launcher's hashed import, completion stamp and resumable manifest.
+// Writable streams keep large IMG/audio archives out of JavaScript memory.
+function storeFor(root) {
+  return {
+    async readText(path) {
+      try { return await (await (await fileFor(root, path)).getFile()).text(); }
+      catch (e) { if (e.name === "NotFoundError") return null; throw e; }
+    },
+    async writeText(path, text) {
+      const w = await (await fileFor(root, path, true)).createWritable();
+      try { await w.write(text); await w.close(); } catch (e) { await w.abort(); throw e; }
+    },
+    async remove(path) {
+      try { await root.removeEntry(path); }
+      catch (e) { if (e.name !== "NotFoundError") throw e; }
+    },
+    async hash(path) {
+      const hash = new Sha256();
+      const reader = (await (await fileFor(root, path)).getFile()).stream().getReader();
+      for (;;) { const {done, value} = await reader.read(); if (done) break; hash.update(value); }
+      return hash.hex();
+    },
+    async createWriter(path) {
+      const writer = await (await fileFor(root, path, true)).createWritable();
+      return {write: bytes => writer.write(bytes), close: () => writer.close(), abort: () => writer.abort()};
+    },
+  };
+}
+try {
+  const response = await fetch("/seed-manifest");
+  if (!response.ok) throw new Error(`Inventario: HTTP ${response.status}`);
+  const manifest = await response.json();
+  status.textContent = `${manifest.files.length} archivos · ${humanBytes(manifest.files.reduce((n, f) => n + f.size, 0))}\nLa comprobación del ejecutable se hace antes de habilitar el inicio. Esto no verifica que el motor pueda dibujar el juego.`;
+  button.disabled = false;
+  button.onclick = async () => {
+    button.disabled = true;
+    play.hidden = true;
+    try {
+      const root = await navigator.storage.getDirectory();
+      const gameRoot = await root.getDirectoryHandle(manifest.game.id, {create: true});
+      const dir = await gameRoot.getDirectoryHandle("game", {create: true});
+      const estimate = await navigator.storage.estimate();
+      const source = {
+        list: async () => manifest.files,
+        stream: async entry => {
+          const r = await fetch("/install/" + entry.path.split("/").map(encodeURIComponent).join("/"));
+          if (!r.ok) throw new Error(`${entry.path}: HTTP ${r.status}`);
+          return r.body;
+        },
+      };
+      const result = await importGame(manifest.game, source, storeFor(dir), {
+        freeBytes: estimate.quota === undefined ? undefined : estimate.quota - estimate.usage,
+        onProgress: p => {
+          progress.max = p.bytesTotal || 1; progress.value = p.bytesDone;
+          status.textContent = `${p.filesDone}/${p.filesTotal} · ${humanBytes(p.bytesDone)} / ${humanBytes(p.bytesTotal)}\n${p.current}`;
+        },
+      });
+      if (result.result !== "done") throw new Error(JSON.stringify(result));
+      status.textContent = "Importación completa; ejecutable comprobado. Ya puedes probar el arranque del motor.";
+      play.href = `/${encodeURIComponent(manifest.game.id)}/`;
+      play.hidden = false;
+    } catch (e) { status.textContent = `No se completó la importación: ${e.message || e}`; }
+    finally { button.disabled = false; }
+  };
+} catch (e) { status.textContent = `Error: ${e.message || e}`; }
+</script></body></html>

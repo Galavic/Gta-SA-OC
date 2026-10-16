@@ -17,8 +17,8 @@ guest_size = 0x20000000
 windows_version = "5.1"
 
 [translate]
-listings = "analysis/curated-core-q10-dispatcher"
-globals = "analysis/curated-core-q10-dispatcher/globals.toml"
+listings = "analysis/curated-core-q11-dispatcher"
+globals = "analysis/curated-core-q11-dispatcher/globals.toml"
 entry_points = [0x00825330, 0x014deef0, 0x014cd7f0, 0x00572b80]
 # Disable visual clock substitutions until an actual GTA counter is audited.
 # The kit requires this key; no reads are marked volatile.
@@ -28,8 +28,8 @@ volatile_reads = []
 resumable_stacks = true
 # The kit's fixed setjmp/longjmp addresses describe another executable.
 legacy_address_intrinsics = false
-no_fallthrough_calls_file = "analysis/curated-core-q10-dispatcher/nonreturning-calls.json"
-data_regions_file = "analysis/curated-core-q10-dispatcher/inline-data.json"
+no_fallthrough_calls_file = "analysis/curated-core-q11-dispatcher/nonreturning-calls.json"
+data_regions_file = "analysis/curated-core-q11-dispatcher/inline-data.json"
 # Embedded PE file buffers, validated by their DOS/PE headers and stored
 # section extents. Keep bytes intact; they have their own preferred bases.
 # See analysis/embedded-images.json. The main entry point is unaffected.
