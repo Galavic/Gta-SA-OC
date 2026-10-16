@@ -30,3 +30,8 @@ startup-addon-manifest.json
 *.bin
 *.o
 *.obj
+web/recreation/node_modules/
+web/recreation/public/original-ui/
+web/recreation/public/original-audio/
+web/recreation/tools/txd-index.json
+web/recreation/checks/

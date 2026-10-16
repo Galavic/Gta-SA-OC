@@ -19,6 +19,10 @@ and original game materials retain the authorship and notices listed below.
   They are not distributed as game assets or presented as a complete port.
 - GTA San Andreas executables, data, artwork, audio, levels and generated
   translations retain their original ownership. They are not included here.
+- The local recreation uses Three.js 0.160.0 and three-mesh-bvh 0.7.8.
+  Their MIT licenses are preserved in `web/recreation/public/vendor/`.
+  The recreation code was continued from the user's local Three.js prototype;
+  its game-derived interface and audio exports remain ignored local files.
 
 The documentation records source provenance, test scope and limitations.
 No project-wide license is assigned to materials owned by third parties.

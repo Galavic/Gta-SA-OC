@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>San Andreas · Inicio original</title>
+<script type="importmap">{"imports":{"three":"/vendor/three/three.module.js","three-mesh-bvh":"/vendor/bvh/index.module.js"}}</script>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#080808;color:#eee;font:14px Arial,sans-serif}canvas{display:block;width:100%;height:calc(100vh - 130px)}footer{padding:15px 22px;min-height:130px}button,select,a{font:inherit;margin-right:12px;color:#eee;background:#222;border:1px solid #555;padding:9px 12px}a{display:inline-block;text-decoration:none}#status{margin:12px 0 0;color:#d6c489}#scope{color:#bbb;font-size:12px;line-height:1.5}button:disabled{opacity:.4}
+</style></head><body>
+<canvas id="cinematic" aria-label="Cinemática original de San Andreas"></canvas>
+<footer><select id="scene" aria-label="Escena"><option value="prolog3">CJ y la policía</option><option value="prolog1">Aeropuerto</option></select><button id="watch" disabled>Reproducir</button><button id="pause" disabled>Pausar</button><a href="/">Volver</a>
+<p id="status" role="status">Cargando escena original…</p>
+<p id="scope">Reproductor experimental de animaciones de tu instalación. Falta verificar imagen, cámara y audio. El trayecto del taxi y la primera misión completa aún están pendientes.</p>
+</footer><script type="module" src="/js/cinematic-player.mjs"></script></body></html>

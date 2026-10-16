@@ -17,7 +17,13 @@ for entry in filter(None, entries):
     if mode == "160000":
         assert name == "vendor/recomp-kit"
         continue
-    if Path(name).parts[0] in blocked_dirs or Path(name).suffix.lower() in blocked_ext:
+    local_recreation_asset = (
+        name.startswith("web/recreation/public/original-ui/")
+        or name.startswith("web/recreation/public/original-audio/")
+        or name.startswith("web/recreation/checks/")
+        or name == "web/recreation/tools/txd-index.json"
+    )
+    if local_recreation_asset or Path(name).parts[0] in blocked_dirs or Path(name).suffix.lower() in blocked_ext:
         errors.append(f"Private input or binary staged: {name}")
     data = subprocess.check_output(["git", "cat-file", "blob", object_id], cwd=ROOT)
     if len(data) > 2_000_000 or b"\0" in data:

@@ -1,0 +1,21 @@
+{
+  "name": "gtasa-oc-recreation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local San Andreas map streaming and playable browser prototype",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test tests/*.test.mjs",
+    "prepare:local": "node tools/prepare-local.mjs",
+    "test:local-assets": "node tools/verify-opening.mjs",
+    "test:cutscene-assets": "node tools/verify-cutscene.mjs",
+    "audit:opening-audio": "node tools/audit-opening-audio.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "three": "0.160.0",
+    "three-mesh-bvh": "0.7.8"
+  }
+}

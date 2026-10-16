@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Grand Theft Auto: San Andreas · Web</title>
+<link rel="stylesheet" href="/sa.css">
+<script type="importmap">{"imports":{"three":"/vendor/three/three.module.js","three-mesh-bvh":"/vendor/bvh/index.module.js"}}</script>
+</head>
+<body>
+<canvas id="game" tabindex="0" aria-label="Mundo de San Andreas"></canvas>
+<div id="hud">
+  <div id="brand"><span id="region-name">Grove Street</span></div>
+  <div id="stats"><span id="clock" class="hidden">13:00</span><span id="money" class="hidden">$00000000</span><canvas id="hud-numbers" width="680" height="380"></canvas><div id="health"><span></span></div><div id="speed"></div></div>
+  <canvas id="map" width="336" height="336"></canvas>
+  <div id="objective" role="status"></div><div id="prompt"></div>
+  <div id="controls">WASD: moverse / pedalear · Ratón: cámara · F: montar / bajar · Espacio: frenar / saltar · Esc: pausa</div>
+  <div id="stream" class="hidden"></div><div id="notice" class="hidden" role="status"></div>
+</div>
+<div id="menu">
+  <div class="menu-layout">
+    <h1 data-original-label data-label="san andreas" data-font="0" data-style="0" data-size="74">san andreas</h1>
+    <nav class="menu-buttons" aria-label="Menú principal">
+      <a class="cinematic-link" href="/cinematic.html">Inicio original · En desarrollo</a>
+      <button id="play" data-original-label data-label="DEMO BMX" disabled>Demo BMX</button>
+      <button id="restore" disabled>Continuar</button>
+      <button id="save" disabled>Guardar partida</button>
+      <button id="restart" disabled>Reiniciar El regreso</button>
+      <button id="map-toggle" data-original-label data-label="MAPA">Mapa</button>
+      <button id="options-toggle" data-original-label data-label="OPCIONES">Opciones</button>
+      <button id="exit-menu" data-original-label data-label="SALIR">Salir</button>
+    </nav>
+    <p class="mode-note">Recreación experimental · El regreso: vuelve a Grove Street en BMX.</p>
+    <div id="loading" role="status">Cargando Grove Street…</div>
+  </div>
+  <section id="options-panel" class="submenu hidden" aria-label="Opciones">
+    <h2 data-original-label data-label="OPCIONES" data-size="45">Opciones</h2>
+    <div class="row"><label for="distance">Distancia de dibujado</label><select id="distance"><option value="180">Baja</option><option value="260" selected>Media</option><option value="420">Alta</option></select></div>
+    <div class="row"><label>Efectos de sonido</label><button id="sound">Sonido: encendido</button></div>
+    <div class="hidden"><select id="vehicle"><option value="bmx">BMX</option><option value="greenwoo">Greenwood</option><option value="savanna">Savanna</option></select><button id="change-vehicle" disabled>Cambiar</button></div>
+    <button class="panel-back" data-original-label data-label="ATRÁS">Atrás</button>
+  </section>
+  <section id="map-panel" class="submenu map-panel hidden" aria-label="Mapa de San Andreas">
+    <h2 data-original-label data-label="SAN ANDREAS" data-size="40">San Andreas</h2>
+    <canvas id="full-map" width="768" height="768"></canvas>
+    <div class="hidden"><select id="region"><option value="grove">Grove Street</option><option value="beach">Santa Maria Beach</option><option value="sf">San Fierro</option><option value="lv">Las Venturas</option><option value="desert">Las Payasadas</option></select><button id="travel" disabled>Ir</button></div>
+    <button class="panel-back" data-original-label data-label="ATRÁS">Atrás</button>
+  </section>
+</div>
+<script type="module" src="/js/game.mjs"></script>
+<script>addEventListener('error',event=>{document.getElementById('loading').textContent='No se pudo iniciar: '+(event.message||'recurso no disponible');},true);</script>
+</body>
+</html>

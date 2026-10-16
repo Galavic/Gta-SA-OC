@@ -8,6 +8,21 @@ el navegador, conservando su lógica, misiones, animaciones, física y audio.
 **Estado: el motor original todavía no arranca ni es jugable en web.**
 No hay una conversión completa ni una versión 1:1 verificada.
 
+## Recreación Three.js
+
+Se continuó el prototipo local con **El regreso**: montar una BMX, seguir
+marcadores hacia Grove Street y llegar a casa. Incluye guardado y reinicio.
+Es un objetivo independiente, no la primera misión original completa.
+La carga de recursos y el recorrido pasan pruebas en CPU; la partida
+interactiva en navegador todavía está pendiente de comprobar.
+Consulta [preparación y controles](web/recreation/README.md).
+
+Con los recursos locales ya preparados:
+
+```powershell
+npm --prefix web/recreation start
+```
+
 ## Avance comprobado
 
 Última pasada del ejecutable actual: `2026-10-14T03:31:06.407545+00:00`.
