@@ -2578,7 +2578,7 @@ index 06d5e2b..c57d587 100644
  // _setjmp / _longjmp intrinsics. See intrinsics.h for the two substitution
  // forms and why the two-call one is correct.
 diff --git a/runtime/imports.cpp b/runtime/imports.cpp
-index ec1d2b1..d82c211 100644
+index ec1d2b1..b1956ef 100644
 --- a/runtime/imports.cpp
 +++ b/runtime/imports.cpp
 @@ -1,4 +1,5 @@
@@ -2587,7 +2587,19 @@ index ec1d2b1..d82c211 100644
  #include "gdi32_internal.h"
  #include "user32_internal.h"
  #include "kernel32_internal.h"
-@@ -129,6 +130,11 @@ bool imports_has_dll(const char *dll_lower) {
+@@ -13,9 +14,11 @@ void sched_checkpoint();
+ #include <map>
+ #include <set>
+ #include <cctype>
++#include <cstring>
+ #include <vector>
+ #include <string>
+ #include <algorithm>
++#include <atomic>
+ 
+ namespace {
+ 
+@@ -129,6 +132,11 @@ bool imports_has_dll(const char *dll_lower) {
      return registered_dlls().count(lower_dll(dll_lower)) != 0;
  }
  
@@ -2599,7 +2611,123 @@ index ec1d2b1..d82c211 100644
  uint32_t imports_alloc_trampoline(const char *dll, const char *name, void (*fn)(X86 *),
                                    uint8_t argc_stdcall) {
      std::string k = key_of(dll, name);
-@@ -413,11 +419,18 @@ bool imports_dispatch(X86 *c, uint32_t target) {
+@@ -388,6 +396,115 @@ ImportCallObserver imports_set_call_observer_get(void) {
+     return g_call_observer;
+ }
+ 
++// ---------------------------------------------------------------------------
++// Spin watchdog. A guest loop that keeps dispatching shims forever looks
++// healthy to every runtime check: each call returns, no strict policy fires,
++// and the log only shows the same short call triplet repeated. RECOMP_WATCHDOG
++// switches install this observer instead and print a live scheduler snapshot
++// plus each thread's top-of-stack words when a call count crosses its line,
++// which names the loop from the outside. The observer contract forbids
++// touching the guest context, so the dump is read-only; kernel32_dump_threads
++// only reads parked contexts and guest memory. Without a snapshot facility on
++// the web target the log transport carries the dump, like every [recomp]
++// line.
++// ---------------------------------------------------------------------------
++namespace {
++std::atomic<uint32_t> g_watch_calls{0};
++std::atomic<uint32_t> g_watch_tls_period{0};
++std::atomic<uint32_t> g_watch_cs_pairs{0};
++std::atomic<uint32_t> g_watch_cs_once{0};
++std::atomic<uint32_t> g_watch_cs{0};
++// Only the observing guest thread reads or writes this, from inside a shim
++// while it holds the baton, so no atomics where none are needed for safety.
++uint32_t g_watch_fires = 0;
++void watchdog_flush_hist(); // defined below; the TLS fire prints the histogram
++
++bool watchdog_call(const char *desc, const uint32_t *args, uint32_t argc, uint32_t *result) {
++    (void)result;
++    if (strstr(desc, "CriticalSection")) {
++        if ((strstr(desc, "!Enter") || strstr(desc, "TryEnter")) && args && argc)
++            g_watch_cs.store(args[0]);
++        uint32_t pairs = g_watch_cs_pairs.fetch_add(1) + 1;
++        if (g_watch_cs_once.load() && pairs == g_watch_cs_once.load()) {
++            watchdog_flush_hist();
++            kernel32_dump_threads();
++        }
++    } else if (strstr(desc, "!TlsGetValue")) {
++        uint32_t seen = g_watch_calls.fetch_add(1) + 1;
++        uint32_t period = g_watch_tls_period.load();
++        if (period && seen % period == 0 && g_watch_fires < 8) {
++            ++g_watch_fires;
++            LOGW("watchdog: TlsGetValue call %u, last critsec=%08x", seen, g_watch_cs.load());
++            watchdog_flush_hist();
++            kernel32_dump_threads();
++        }
++    }
++    return true;
++}
++// Hotspot map: an import call is bucketed to the 4 KiB guest page of its
++// return address, so a watchdog fire can name where the guest actually
++// spends its runtime traffic without any per-call formatting cost beyond one
++// increment. The table only covers the mapped image layout; trampolines,
++// guest heap and stacks share one overflow bucket. The observing guest
++// thread is the only mutator while it holds the baton, so plain stores are
++// fine and a fire reads a stable table.
++constexpr uint32_t HIST_LO = 0x400000u;
++constexpr uint32_t HIST_SLOTS = 8192u; // 32 MiB at 4 KiB pages
++uint32_t g_page_hist[HIST_SLOTS + 1];
++
++uint32_t *page_hist_slot(uint32_t ret) {
++    if (ret < HIST_LO || ret - HIST_LO >= HIST_SLOTS * 4096u)
++        return &g_page_hist[HIST_SLOTS];
++    return &g_page_hist[(ret - HIST_LO) >> 12];
++}
++
++// Print the busiest pages since the last fire and clear the whole table, so
++// each watchdog interval reports exactly where new traffic concentrated.
++void watchdog_flush_hist() {
++    for (uint32_t rank = 0; rank < 8; ++rank) {
++        uint32_t best_page = 0, best_hits = 0;
++        for (uint32_t i = 0; i <= HIST_SLOTS; ++i) {
++            if (g_page_hist[i] > best_hits) {
++                best_hits = g_page_hist[i];
++                best_page = i;
++            }
++        }
++        if (!best_hits)
++            break;
++        char where[16];
++        if (best_page == HIST_SLOTS)
++            snprintf(where, sizeof where, "outside");
++        else
++            snprintf(where, sizeof where, "%08x", HIST_LO + (best_page << 12));
++        LOGW("hist: rank %u page %s hits %u", rank, where, best_hits);
++        g_page_hist[best_page] = 0;
++    }
++    memset(g_page_hist, 0, sizeof g_page_hist);
++}
++} // namespace
++
++void imports_install_watchdog() {
++    // One boot line either way: an absent arm notice in a saved log must
++    // distinguish "the switch was not set" from "the binary predates the
++    // watchdog" without a rebuild.
++    const char *tls = recomp_env("WATCHDOG_TLS");
++    const char *cs = recomp_env("WATCHDOG_CS");
++    uint32_t tls_period = tls && *tls ? (uint32_t)strtoul(tls, nullptr, 10) : 0;
++    uint32_t cs_once = cs && *cs ? (uint32_t)strtoul(cs, nullptr, 10) : 0;
++    LOGW("watchdog: RECOMP_WATCHDOG_TLS=%s RECOMP_WATCHDOG_CS=%s", tls ? tls : "unset",
++         cs ? cs : "unset");
++    if (!tls_period && !cs_once)
++        return;
++    if (g_call_observer)
++        return; // a harness owns the observer; it keeps charge of the run
++    g_watch_tls_period.store(tls_period);
++    g_watch_cs_once.store(cs_once);
++    g_call_observer = watchdog_call;
++    LOGW("watchdog armed: every %u TlsGetValue calls, once at %u critsec pairs", tls_period,
++         cs_once);
++    LOGW("watchdog: hotspot histogram armed (4 KiB pages, base 0x400000)");
++}
++
+ // Dispatch a guest import trampoline at a scheduler checkpoint.
+ // Copy dispatch metadata before calling a shim, then restore EIP/ESP according to its calling convention.
+ namespace {
+@@ -413,11 +530,18 @@ bool imports_dispatch(X86 *c, uint32_t target) {
      uint32_t idx = (target - TRAMP_BASE) / TRAMP_STRIDE;
      if (idx >= tramps().size() || !tramps()[idx].atomic)
          sched_checkpoint();
@@ -2618,7 +2746,7 @@ index ec1d2b1..d82c211 100644
          c->eip = rd32(c->r[R_ESP]);
          c->r[R_ESP] += 4;
          set_eax(c, 0);
-@@ -432,6 +445,13 @@ bool imports_dispatch(X86 *c, uint32_t target) {
+@@ -432,10 +556,18 @@ bool imports_dispatch(X86 *c, uint32_t target) {
      // across that call, and do not retain a pointer into the movable vector.
      char desc[512];
      snprintf(desc, sizeof desc, "%s", tramps()[idx].desc.c_str());
@@ -2632,8 +2760,19 @@ index ec1d2b1..d82c211 100644
      ++tramps()[idx].calls;
      ++g_import_calls;
  
+     uint32_t ret_addr = rd32(c->r[R_ESP]);
++    ++*page_hist_slot(ret_addr);
+     LOGV("-> %s (esp=%08x ret=%08x)", desc, c->r[R_ESP], ret_addr);
+     recomp_seh_validate_chain(c, "import enter", desc);
+ 
+@@ -598,4 +730,5 @@ void imports_init() {
+     gdi::register_text();
+     extern void msimg32_register();
+     msimg32_register();
++    imports_install_watchdog();
+ }
 diff --git a/runtime/imports.h b/runtime/imports.h
-index d01eb0a..1e8b7dc 100644
+index d01eb0a..c93671a 100644
 --- a/runtime/imports.h
 +++ b/runtime/imports.h
 @@ -30,6 +30,12 @@ struct ImportShim {
@@ -2649,7 +2788,19 @@ index d01eb0a..1e8b7dc 100644
  
  // ---------------------------------------------------------------------------
  // Return observer. Called after every dispatched shim with the trampoline's
-@@ -157,3 +163,7 @@ void imports_dump_report(FILE *out);
+@@ -66,6 +72,11 @@ void imports_set_call_observer(ImportCallObserver fn);
+ ImportReturnObserver imports_set_return_observer_get(void);
+ ImportCallObserver imports_set_call_observer_get(void);
+ 
++// Arms the runtime's spin watchdog observer (see imports.cpp) when
++// RECOMP_WATCHDOG_TLS or RECOMP_WATCHDOG_CS name a threshold. Leaves an
++// already-installed observer in charge; idempotent alongside imports_init.
++void imports_install_watchdog();
++
+ // Registers the KERNEL32/USER32/GDI32/ADVAPI32/SHELL32/ole32/IMM32/WSOCK32/
+ // WINMM tables owned by this runtime. Idempotent; called by loader_load().
+ void imports_init();
+@@ -157,3 +168,7 @@ void imports_dump_report(FILE *out);
  void imports_coverage(uint32_t *implemented, uint32_t *logging_only, uint32_t *unknown_argc);
  uint32_t imports_call_count(const char *dll, const char *name);
  uint32_t imports_count();
@@ -3403,7 +3554,7 @@ index 0cefcbe..8e0159e 100644
  const char *interp_last_error(void);
  
 diff --git a/runtime/kernel32.cpp b/runtime/kernel32.cpp
-index 529d27d..0385d76 100644
+index 529d27d..05177ab 100644
 --- a/runtime/kernel32.cpp
 +++ b/runtime/kernel32.cpp
 @@ -98,8 +98,9 @@ struct HObj {
@@ -3697,7 +3848,94 @@ index 529d27d..0385d76 100644
      if (request_process_exit(arg(c, 0)))
          return; // never returns
      publish_process_exit(arg(c, 0));
-@@ -4218,6 +4388,7 @@ void create_file_named(X86 *c, const std::string &name) {
+@@ -3943,6 +4113,86 @@ void k_GetLocaleInfoW(X86 *c) {
+ 
+ } // namespace
+ 
++// The probe's spin watchdog asks for this through the public trampoline below.
++// It runs from inside a shim on the watched thread, so that thread holds the
++// baton and every other guest thread is parked at its checkpoint: one scheduler
++// snapshot at a time. Blocking on g_sched_m is safe, waiters hold it only
++// briefly.
++namespace {
++void kernel32_dump_threads_impl() {
++    struct Guard {
++        std::mutex &m;
++        Guard() : m(g_sched_m) {
++            m.lock();
++        }
++        ~Guard() {
++            m.unlock();
++        }
++    } guard;
++    // The running thread's live register file lives in a thread-local, not in
++    // its parked GuestThread slot; the parked slot only holds a real snapshot
++    // for threads that are away from the baton.
++    X86 *live_ctx = guest_current_context();
++    size_t live_index = t_self;
++    LOGW("thread dump: baton=%zu staged=%zu g_exit=%d", g_baton, threads().size(),
++         (int)g_exit_requested);
++    for (GuestThread *t : threads()) {
++        uint32_t eip = t->ctx.eip, esp = t->ctx.r[R_ESP], ebp = t->ctx.r[R_EBP];
++        bool live = t->index == live_index && live_ctx != nullptr;
++        if (live) {
++            eip = live_ctx->eip;
++            esp = live_ctx->r[R_ESP];
++            ebp = live_ctx->r[R_EBP];
++        }
++        char wait[128];
++        size_t w = 0;
++        for (uint32_t i = 0; i < t->wait_n && w < sizeof(wait) - 10; ++i)
++            w += (size_t)snprintf(wait + w, sizeof(wait) - w, "%08x ", t->wait_h[i]);
++        LOGW("thread i=%zu id=%u main=%d spawned=%d finished=%d suspend=%d blocked=%d", t->index,
++             t->id, (int)t->is_main, (int)t->spawned, (int)t->finished, t->suspend_count,
++             (int)t->blocked);
++        LOGW("thread i=%zu wait kind=%u waits=[%.*s] waitcs=%08x deadline=%d", t->index,
++             (unsigned)t->wait_kind, (int)w, wait, t->wait_cs, (int)t->has_deadline);
++        LOGW("thread i=%zu pc live=%d eip=%08x esp=%08x ebp=%08x tls=%08x", t->index, (int)live,
++             eip, esp, ebp, t->tls);
++        LOGW("thread i=%zu chain:", t->index);
++        for (int j = 0; j < 12; ++j)
++            LOGW("thread i=%zu chain %2d %08x", t->index, j, rd32(esp + 4u * (uint32_t)j));
++        // Words above the return chain, for reading frames out of the stack
++        // listing afterwards: return addresses recur at esp slots, so the
++        // plain values name every caller without a guest frame walker.
++        LOGW("thread i=%zu stack:", t->index);
++        for (int j = 12; j < 96; ++j)
++            LOGW("thread i=%zu stack %2d %08x", t->index, j, rd32(esp + 4u * (uint32_t)j));
++        // Real caller walk through ebp frame pointers where the frames keep
++        // them (ret at [ebp+4], saved ebp at [ebp]). The walk is tolerant:
++        // any pointer outside the guest arena, unaligned, or walking
++        // downwards ends the walk.
++        LOGW("thread i=%zu walk:", t->index);
++        uint32_t we = ebp;
++        for (int k = 0; k < 10; ++k) {
++            if (we < 0x00030000u || we >= GUEST_SIZE - 8u || (we & 3))
++                break;
++            uint32_t ret = rd32(we + 4u), prev = rd32(we);
++            LOGW("thread i=%zu walk %2d ebp=%08x ret=%08x next=%08x", t->index, k, we, ret, prev);
++            if (prev <= we || prev >= GUEST_SIZE)
++                break;
++            we = prev;
++        }
++    }
++    // Import-slot indirections the CRT and the game decrypt from .data: their
++    // current values identify which shims those call sites reach.
++    LOGW("pointers 8e30f0=%08x 8e30f4=%08x 8e30f8=%08x 8e30fc=%08x 8e3128=%08x "
++         "8580b4=%08x 8580c4=%08x 8580c8=%08x 858248=%08x 858124=%08x",
++         rd32(0x8e30f0), rd32(0x8e30f4), rd32(0x8e30f8), rd32(0x8e30fc), rd32(0x8e3128),
++         rd32(0x8580b4), rd32(0x8580c4), rd32(0x8580c8), rd32(0x858248), rd32(0x858124));
++}
++} // namespace
++
++void kernel32_dump_threads() {
++    kernel32_dump_threads_impl();
++}
++
+ // ---------------------------------------------------------------------------
+ // The run thread's own ending.
+ //
+@@ -4218,6 +4468,7 @@ void create_file_named(X86 *c, const std::string &name) {
      uint32_t h = handle_new(H_FILE);
      handles()[h].fd = fd;
      handles()[h].path = host;
@@ -3705,7 +3943,7 @@ index 529d27d..0385d76 100644
      if (deferred) {
          handles()[h].write_pending = true;
          handles()[h].write_flags = wanted;
-@@ -4849,7 +5020,7 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4849,7 +5100,7 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "GetTimeFormatA", 6, nullptr},
      {"KERNEL32.dll", "GetDiskFreeSpaceExA", 4, nullptr},
      {"KERNEL32.dll", "GetLongPathNameA", 3, nullptr},
@@ -3714,7 +3952,7 @@ index 529d27d..0385d76 100644
      {"KERNEL32.dll", "HeapValidate", 3, nullptr},
      {"KERNEL32.dll", "QueueUserAPC", 3, nullptr},
      {"KERNEL32.dll", "SetConsoleCtrlHandler", 2, nullptr},
-@@ -4864,6 +5035,9 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4864,6 +5115,9 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "InterlockedDecrement", 1, k_InterlockedDecrement},
      {"KERNEL32.dll", "InterlockedExchange", 2, k_InterlockedExchange},
      {"KERNEL32.dll", "InitializeCriticalSection", 1, k_InitializeCriticalSection},
@@ -3724,6 +3962,22 @@ index 529d27d..0385d76 100644
      {"KERNEL32.dll", "EnterCriticalSection", 1, k_EnterCriticalSection},
      {"KERNEL32.dll", "LeaveCriticalSection", 1, k_LeaveCriticalSection},
      {"KERNEL32.dll", "DeleteCriticalSection", 1, k_DeleteCriticalSection},
+diff --git a/runtime/kernel32_internal.h b/runtime/kernel32_internal.h
+index ad246b9..71156ad 100644
+--- a/runtime/kernel32_internal.h
++++ b/runtime/kernel32_internal.h
+@@ -4,6 +4,11 @@
+ #include <string>
+ 
+ void kernel32_wide_register();
++// Probe diagnostic: one line per registered guest thread (scheduler state,
++// saved context and the guest return chain at its stack top) plus the baton
++// holder. Called from inside a shim on the spinning thread, so the run is
++// parked between checkpoints and the snapshot is consistent by construction.
++void kernel32_dump_threads();
+ void create_file_named(X86 *c, const std::string &name);
+ void get_file_attributes_named(X86 *c, const std::string &name);
+ void set_file_attributes_named(X86 *c, const std::string &name);
 diff --git a/runtime/loader.cpp b/runtime/loader.cpp
 index 75269f0..da96aba 100644
 --- a/runtime/loader.cpp
@@ -8022,10 +8276,10 @@ index 0000000..72659b5
 +}
 diff --git a/runtime/tests/game_boot_probe.cpp b/runtime/tests/game_boot_probe.cpp
 new file mode 100644
-index 0000000..25a76b9
+index 0000000..6e2b4ea
 --- /dev/null
 +++ b/runtime/tests/game_boot_probe.cpp
-@@ -0,0 +1,241 @@
+@@ -0,0 +1,341 @@
 +// A real PE startup probe: same verified loader, imports, scheduler and generated
 +// CPU code as the player, with a null graphics/audio host. No gameplay proof.
 +#include "loader.h"
@@ -8034,10 +8288,12 @@ index 0000000..25a76b9
 +#include "memory.h"
 +#include "win32.h"
 +#include "../dx/dx.h"
++#include "../kernel32_internal.h"
 +#include "../platform/os.h"
 +
 +#include <stdio.h>
 +#include <stdlib.h>
++#include <atomic>
 +#include <string>
 +
 +namespace {
@@ -8160,6 +8416,75 @@ index 0000000..25a76b9
 +    ok = fclose(out) == 0 && ok;
 +    return ok;
 +}
++
++// ----------------------------------------------------------------------------
++// Spin watchdog. A guest loop that keeps dispatching shims forever looks
++// healthy to every runtime check: each call returns, no strict policy fires,
++// and the bootlog only shows the same import triplet repeated. When
++// PROBE_WATCHDOG names a TlsGetValue call count, this observer counts
++// dispatches of that shim and, at the threshold, prints a live thread dump
++// and writes a snapshot of the loaded image, stack, TEB, TLS and low heap.
++// The observer contract forbids touching the guest context, so the snapshot
++// is read-only: every write here goes to stderr or to files.
++std::atomic<uint32_t> g_watch_calls{0};
++std::atomic<uint32_t> g_watch_target{0};
++std::atomic<uint32_t> g_watch_cs_pairs{0};
++std::atomic<uint32_t> g_watch_cs_target{0};
++std::atomic<uint32_t> g_watch_cs{0};
++std::string g_watch_prefix = "boot_probe_dump";
++const char *g_watch_last_desc = "none";
++
++void watchdog_fire() {
++    fprintf(stderr,
++            "[boot-probe] spin watchdog: %u TlsGetValue calls, %u critsec pairs, last shim %s, "
++            "last critsec=%08x\n",
++            g_watch_calls.load(), g_watch_cs_pairs.load(), g_watch_last_desc, g_watch_cs.load());
++    kernel32_dump_threads();
++    FILE *info = fopen((g_watch_prefix + ".json").c_str(), "wb");
++    if (info) {
++        fprintf(info,
++                "{\"tls_calls\":%u,\"critsec_pairs\":%u,\"last_shim\":\"%s\",\"critsec\":%u}\n",
++                g_watch_calls.load(), g_watch_cs_pairs.load(), g_watch_last_desc,
++                g_watch_cs.load());
++        fclose(info);
++    }
++    write_region(g_watch_prefix + ".image.bin", loader_image_base(), loader_image_size());
++    write_region(g_watch_prefix + ".stack.bin", STACK_LIMIT, STACK_SIZE);
++    write_region(g_watch_prefix + ".teb.bin", TEB_BASE, TEB_SIZE + 0x1000u); // TEB + TLS slots
++    write_region(g_watch_prefix + ".heap.bin", HEAP_BASE, 0x1000000u);      // low heap arena
++    for (uint32_t i = 0; i < loader_module_count(); ++i) {
++        const LoaderModule *m = loader_module(i);
++        if (m)
++            write_region(g_watch_prefix + ".aux" + std::to_string(i) + ".bin", m->base, m->size);
++    }
++    fprintf(stderr, "[boot-probe] snapshot written with prefix %s; exiting\n",
++            g_watch_prefix.c_str());
++    fflush(stderr);
++    exit(3);
++}
++
++bool spin_watchdog(const char *desc, const uint32_t *args, uint32_t argc, uint32_t *result) {
++    (void)result;
++    (void)args;
++    (void)argc;
++    if (strstr(desc, "CriticalSection")) {
++        if ((strstr(desc, "TryEnter") || strstr(desc, "!Enter")) && args)
++            g_watch_cs.store(args[0]);
++        uint32_t pairs = g_watch_cs_pairs.fetch_add(1) + 1;
++        if (g_watch_cs_target.load() && pairs == g_watch_cs_target.load()) {
++            watchdog_fire();
++            return true;
++        }
++    } else if (strstr(desc, "!TlsGetValue")) {
++        g_watch_last_desc = desc;
++        uint32_t seen = g_watch_calls.fetch_add(1) + 1;
++        if (g_watch_target.load() && seen == g_watch_target.load()) {
++            watchdog_fire();
++            return true;
++        }
++    }
++    return true;
++}
 +} // namespace
 +
 +// Runs before strict abort while the guest baton holder owns these bytes. A
@@ -8223,6 +8548,35 @@ index 0000000..25a76b9
 +    for (uint32_t i = 0; i < loader_module_count(); ++i)
 +        if (!verify_mapped_imports(*loader_module(i)))
 +            return 2;
++    const char *watchdog = recomp_env("PROBE_WATCHDOG");
++    if (watchdog && *watchdog && argc >= 2) {
++        char *end = nullptr;
++        unsigned long target = strtoul(watchdog, &end, 10);
++        if (!end || *end || !target || target > UINT32_MAX) {
++            fprintf(stderr, "[boot-probe] invalid PROBE_WATCHDOG=%s\n", watchdog);
++            return 2;
++        }
++        g_watch_target.store((uint32_t)target);
++        if (const char *prefix = recomp_env("PROBE_DUMP"); prefix && *prefix)
++            g_watch_prefix = prefix;
++        imports_set_call_observer(spin_watchdog);
++        fprintf(stderr, "[boot-probe] spin watchdog armed: %u TlsGetValue calls, prefix %s\n",
++                (uint32_t)target, g_watch_prefix.c_str());
++    }
++    if (const char *watchdog_cs = recomp_env("PROBE_WATCHDOG_CS"); watchdog_cs && *watchdog_cs && argc >= 2) {
++        char *end = nullptr;
++        unsigned long target = strtoul(watchdog_cs, &end, 10);
++        if (!end || *end || !target || target > UINT32_MAX) {
++            fprintf(stderr, "[boot-probe] invalid PROBE_WATCHDOG_CS=%s\n", watchdog_cs);
++            return 2;
++        }
++        g_watch_cs_target.store((uint32_t)target);
++        if (const char *prefix = recomp_env("PROBE_DUMP"); prefix && *prefix)
++            g_watch_prefix = prefix;
++        imports_set_call_observer(spin_watchdog);
++        fprintf(stderr, "[boot-probe] spin watchdog armed: %u critsec pairs, prefix %s\n",
++                (uint32_t)target, g_watch_prefix.c_str());
++    }
 +    if (factory)
 +        return probe_sound_factory(argv[3], argv[4]);
 +    if (cstring) {
