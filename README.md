@@ -36,7 +36,7 @@ npm --prefix web/recreation start
 | Pruebas del driver tras mejorar sus diagnósticos | 163 pasan |
 | Pruebas de preservación de datos de PE almacenados | 4 pasan |
 | Última ejecución de tests del proyecto, driver y SEH | 309 pasan |
-| Menú, intro y primera misión del motor original en web | Sin verificar |
+| Menú, intro y gameplay del motor original en web | Verificado: menú, intro y CJ caminando por Los Santos (`docs/STATUS.md`); misiones sin verificar |
 | Física original de vehículos en web | Sin verificar |
 
 No publicamos un porcentaje de conversión completa: el número de funciones

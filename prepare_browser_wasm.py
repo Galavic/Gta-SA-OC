@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 
 ROOT = Path(__file__).resolve().parent
 
@@ -76,14 +77,17 @@ def inspect_and_strip(source, destination=None):
     return dict(functions=functions, maximum_locals=maximum, excessive_locals=high)
 
 
-def prepare(sdk):
+def prepare(sdk, game_dir=ROOT):
     started = time.time()
-    directory = ROOT / "build/web/recomp"
-    source = directory / "GTASARecomp.wasm"
-    original = directory / "GTASARecomp.linked.wasm"
-    stripped = directory / "GTASARecomp.stripped.wasm"
-    candidate = directory / "GTASARecomp.browser.wasm"
-    status_file = ROOT / "build/browser-wasm-status.json"
+    game_dir = Path(game_dir).resolve()
+    config = tomllib.loads((game_dir / "game.toml").read_text(encoding="utf-8"))["game"]
+    app_name, game_id = config["app_name"], config["id"]
+    directory = game_dir / "build/web/recomp"
+    source = directory / f"{app_name}.wasm"
+    original = directory / f"{app_name}.linked.wasm"
+    stripped = directory / f"{app_name}.stripped.wasm"
+    candidate = directory / f"{app_name}.browser.wasm"
+    status_file = game_dir / "build/browser-wasm-status.json"
     status = dict(state="running", pid=os.getpid(), playable_verified=False)
     def save():
         status_file.write_text(json.dumps(status, indent=2), encoding="utf-8")
@@ -113,7 +117,7 @@ def prepare(sdk):
         subprocess.run([str(node), "-e", check, str(candidate)], check=True)
         status["v8_compile_passed"] = True
         shutil.copy2(candidate, source)
-        site = ROOT / "build/web-site/gtasa/GTASARecomp.wasm"
+        site = game_dir / "build/web-site" / game_id / f"{app_name}.wasm"
         pending = site.with_suffix(".wasm.new")
         shutil.copy2(candidate, pending)
         pending.replace(site)
@@ -130,13 +134,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--background", action="store_true")
     parser.add_argument("--emsdk", type=Path, default=Path.home() / "GTASAWebToolchains/emsdk")
+    parser.add_argument("--game-dir", type=Path, default=ROOT,
+                        help="Game directory whose build/web/recomp to prepare (default: repository root)")
     args = parser.parse_args()
     if args.background:
-        with (ROOT / "build/browser-wasm.log").open("w", encoding="utf-8") as log:
+        game_dir = args.game_dir.resolve()
+        log_path = game_dir / "build/browser-wasm.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("w", encoding="utf-8") as log:
             process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()),
-                                        "--emsdk", str(args.emsdk)], cwd=ROOT,
-                                       stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                                        "--emsdk", str(args.emsdk), "--game-dir", str(game_dir)],
+                                       cwd=ROOT, stdin=subprocess.DEVNULL, stdout=log,
+                                       stderr=subprocess.STDOUT,
                                        creationflags=subprocess.CREATE_NO_WINDOW)
         print("Browser Wasm preparation PID", process.pid)
     else:
-        prepare(args.emsdk)
+        prepare(args.emsdk, args.game_dir)

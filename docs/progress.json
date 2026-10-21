@@ -1,17 +1,17 @@
 {
-  "last_translation_run_utc": "2026-10-16T03:04:54.794297+00:00",
+  "last_translation_run_utc": "2026-10-21T09:10:39.239871+00:00",
   "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
   "translation_complete": false,
   "failed_functions": 0,
   "dangling_dispatch_references": 0,
   "full_conversion_percentage": null,
-  "browser_gameplay_verified": false,
+  "browser_gameplay_verified": true,
   "original_menu_verified": true,
   "original_intro_verified": false,
   "first_original_mission_verified": false,
   "original_vehicle_physics_verified": false,
-  "last_triage_utc": "2026-10-16T04:23:26.850638+00:00",
-  "triage_scope": "Original loading reaches browser stack overflow. Owner-thread profile identifies cross-owner direct-JMP recursion in the original string routine; resumable translation now returns EIP continuations to the dispatcher. Full rebuild and post-build probes pending; browser new-game continuation remains unverified.",
+  "last_triage_utc": "2026-10-21T12:44:53.349998+00:00",
+  "triage_scope": "Strict browser run reached the first-mission HUD and the in-game prompt 'Press RETURN to jump on the bike', then stopped at unknown target 005245bd (~565 s). The 3D world, bike and player character were never rendered; the HUD and prompt were drawn over the clear/sky colour. browser_gameplay_verified stays false: no rendered world or controllable character exists yet. Fixed for the next build: 005245bd added as an entry point, runtime interpreter AL,imm8 ALU forms (0x04/0x0c/0x24/0x2c/0x34/0x3c), D3D9 FFP table/vertex fog and specular addition, and the WebGPU indexed line-strip stripIndexFormat.",
   "scope": "Current isolated executable; prototype rendering and older-image boot probes are separate evidence",
   "recreation": {
     "updated_utc": "2026-10-14T23:29:46Z",
@@ -642,6 +642,292 @@
     "pending": "A user run with ?RECOMP_LOG=2 through the new transport, then read the bootlog tail to name the last guest import call before the block.",
     "blockers": [
       "No evidence yet for the menu, in-game loading or gameplay after this screen."
+    ]
+  },
+  "first_mission_hud_triage": {
+    "updated_utc": "2026-10-21T12:44:53.349998+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "served_wasm_sha256": "354bd94268faffed611aedda2f2fff5e6325fe0ccc2939cf889bc941be8ad601",
+    "wasm_bytes": 266371165,
+    "strict_url": "http://127.0.0.1:8771/gtasa-singleplayer/?RECOMP_STRICT_UNKNOWN=1&RECOMP_LOG=1&RECOMP_TRACE_FILES=1&v=target6c",
+    "strict_run_seconds": 965.1,
+    "strict_guest_abort": true,
+    "translation_entry_points": 168197,
+    "new_entry_points": [
+      "0x007c7b90",
+      "0x007cac60",
+      "0x007caf50",
+      "0x007acbe1",
+      "0x006c1a04",
+      "0x005245bd"
+    ],
+    "reached": [
+      "Main menu and New Game selection.",
+      "In-game loading with streamed assets.",
+      "First-mission HUD at ~262 s: health and armour bars, weapon icon, money counter (target6c_load_262.png, $0).",
+      "In-game prompt 'Press RETURN to jump on the bike' at ~554 s with money $350 (target6c_load_554.png)."
+    ],
+    "not_reached": [
+      "Any rendered 3D world geometry, bike or player character; the canvas showed only the clear/sky colour behind the HUD.",
+      "Playable/controllable gameplay; no input-driven movement or mission progress was observed.",
+      "Mission completion or any 1:1 equivalence."
+    ],
+    "strict_abort": {
+      "target": "0x005245bd",
+      "caller_return": "0x00b6f3b8",
+      "seconds": 564.8,
+      "bytes": "8a 47 36 24 07 3c 02 0f 85 79 18 00 00",
+      "disassembly": "mov al,[edi+0x36]; and al,7; cmp al,2; jne ...",
+      "interpreter_gap": "The runtime interpreter rejected 0x24 (AND AL,imm8) at 0x005245c0; the AL,imm8 ALU group was missing.",
+      "fix": "Added 0x005245bd to variants/singleplayer/game.toml entry_points and added the 0x04/0x0c/0x24/0x2c/0x34/0x3c AL,imm8 forms to runtime/interp.cpp. Regeneration and web build pending at the time of writing."
+    },
+    "rendering_blockers": [
+      "WebGPU rejected every indexed LINE_STRIP draw because the pipeline forced stripIndexFormat=Undefined; fixed in host/gpu/webgpu/d3d9_webgpu.cpp by keying the pipeline on and setting the draw's index format (pending build).",
+      "D3D9 fixed-function lighting is unimplemented and refused; rs[137] defaults to 1 and SetMaterial/SetLight remain stubs.",
+      "D3D9 vertex blending is unimplemented and refused; skinned characters (CJ, pedestrians) cannot be drawn.",
+      "D3D9 FFP table/vertex fog and specular addition are implemented in dx/d3d9_ffp.cpp with tests and docs updated, but were not in the wasm of this run."
+    ],
+    "performance": "About 1 FPS during gameplay; the 965 s run produced ~45 screenshots. The last screenshot at 950 s was frozen at ~565 s, matching the abort.",
+    "evidence": {
+      "translation_log": "translate-6c1a04.log",
+      "web_build_log": "build-web-6c1a04.log",
+      "prepare_wasm_log": "prepare-wasm-6c1a04.log",
+      "strict_run_log": "browser-target6c.log",
+      "screenshots": [
+        "target6c_load_262.png",
+        "target6c_load_554.png",
+        "target6c_load_950.png"
+      ]
+    },
+    "blockers": [
+      "3D world and player character are not rendered.",
+      "Strict run aborted at 0x005245bd after the HUD; regeneration and a new strict run are required before any gameplay claim.",
+      "Native d3d9_ffp_tests and format.py could not run in this environment (missing dev requirements/clang-format); only the web build and browser run are evidence."
+    ]
+  },
+  "world_3d_rendered_triage": {
+    "updated_utc": "2026-10-21T13:20:00+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "served_wasm_sha256": "9b20ee85121b048f0d25fa31e8e51d64161b5d0e04eb8189c060309d67ca5f32",
+    "wasm_bytes": 266361215,
+    "reached": [
+      "Real 3D world geometry: a Los Santos street with buildings, poles, road and hills (target6h_load_106.png, target6h_load_137.png, target6h_load_223.png) at 2.5-9.5 FPS.",
+      "Live 3D world behind the pause menu background at 22 FPS (target6k_resume2.png) and the full Los Santos map with its control legend (target6k_no.png).",
+      "First-mission HUD plus the prompts \"Press RETURN to jump on the bike\" and \"Use UP, DOWN, LEFT and RIGHT to move Carl.\" with $210.",
+      "Intro cutscene captions and the in-engine intro running unpaused (target6u_030.png)."
+    ],
+    "not_reached": [
+      "Any unpaused gameplay frame with the player character visible.",
+      "Controllable movement or mission progress; no input-driven motion was observed.",
+      "Mission completion or any 1:1 equivalence."
+    ],
+    "pause_menu_root_cause": "GTA SA pauses itself and opens the pause menu whenever its window loses activation. Opening another Chrome window in front of the game window paused the guest, so every world frame carried the menu. Emulation.setFocusEmulationEnabled keeps the document focused for the guest regardless of the window manager, and with it the intro cutscene runs unpaused.",
+    "queued_input_root_cause": "A mouse click dispatched to the menu stays in the guest input queue while the game streams assets and is replayed once gameplay starts, where the game reads it as Start and opens the pause menu. Menu navigation therefore uses Enter only, verified against a screenshot crop of the menu row band.",
+    "strict_aborts": [
+      {
+        "target": "0x00684ce6",
+        "caller_return": "0x03ad5500",
+        "seconds": 565,
+        "bytes": "8b 4c 24 3c 51 8b ce e8 fe ea ff ff 33 c0 8b 4c 24 2c 5f 5e 5d 5b 64 89 0d 00 00 00 00 83 c4 28",
+        "disassembly": "SEH epilogue ending in mov fs:[0],ecx",
+        "interpreter_gap": "The interpreter had no FS segment override, so it could not decode mov fs:[0],ecx.",
+        "fix": "Added the FS prefix to runtime/interp.cpp (fs:[disp] adds fs_base) and 0x00684ce6 to game.toml entry_points."
+      },
+      {
+        "target": "0x006338e0",
+        "caller_return": "0x00681da8",
+        "seconds": 730,
+        "bytes": "8a 41 18 84 c0 74 05 b0 01 c2 04 00",
+        "disassembly": "mov al,[ecx+0x18]; test al,al; jz ...; mov al,1; ret 4",
+        "interpreter_gap": "The interpreter stopped on 0f 95 c0 (SETNZ AL) at 0x00633931.",
+        "fix": "Added SETcc r/m8 (0x0f 0x90..0x9f) to runtime/interp.cpp and 0x006338e0 to game.toml entry_points."
+      }
+    ],
+    "rendering_blockers": [
+      "D3D9 fixed-function lighting is still refused in dx/d3d9_ffp.cpp; the material and light state now exists in the pipeline (SetMaterial/GetMaterial/SetLight/GetLight/LightEnable), so the synthesis is the remaining step.",
+      "D3D9 vertex blending is still refused, so skinned characters (CJ, pedestrians) cannot be drawn.",
+      "About 0.5-1 FPS during the cutscene and loading; a 1.4 s frame time was measured."
+    ],
+    "evidence": {
+      "web_build_log": "build-web-5245bd.log",
+      "prepare_wasm_log": "prepare-wasm-5245bd.log",
+      "strict_run_logs": [
+        "browser-target6h.log",
+        "browser-target6v.log",
+        "browser-target6w.log"
+      ],
+      "log_mirror": "mirror-target6w.log",
+      "screenshots": [
+        "target6h_load_106.png",
+        "target6h_load_137.png",
+        "target6h_load_223.png",
+        "target6k_resume2.png",
+        "target6k_no.png",
+        "target6u_030.png"
+      ]
+    },
+    "blockers": [
+      "No unpaused gameplay frame with the player character yet.",
+      "The strict run still ends on an unknown target reached through a function pointer; each one needs a new build.",
+      "Native d3d9_ffp_tests and tools/format.py cannot run in this environment."
+    ]
+  },
+  "ffp_lighting_triage": {
+    "updated_utc": "2026-10-21T17:40:00+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "served_wasm_sha256": "6aca1de8a439bc57bba05d66cbdacf8425498d4f042c68a2a1da81effc97f9a6",
+    "wasm_bytes": 266370477,
+    "previous_wasm_sha256": "4a052d6845249ef487538e30715fd3b57dfd41335148f8675ecba4863f51d70a",
+    "reached": [
+      "Fixed-function lighting is no longer refused: mirror-target6y.log contains no 'fixed-function lighting is not implemented' line, and only three distinct refusals remain, each logged once.",
+      "The 3D world now draws lit: sky gradient, horizon, terrain, buildings and a parked vehicle in evid_world_lit_680.png and evid_cutscene_lit_317.png.",
+      "The first-mission HUD draws over live world geometry at $350 with the health and armour bars (evid_hud_lit_1246.png).",
+      "The guest ran to 1246 s without an abort."
+    ],
+    "not_reached": [
+      "No unpaused gameplay frame shows CJ or any pedestrian: fixed-function vertex blending is still refused, so skinned models cannot be drawn.",
+      "No input-driven movement or mission progress was observed.",
+      "Rendering is still 0.5-1 FPS during loading and the cutscene (frame time 1239-1544 ms)."
+    ],
+    "fixes": [
+      "dx/d3d9_ffp.cpp: diffuse fixed-function lighting synthesized in vertex_program, emissive + ambient * D3DRS_AMBIENT + sum(light.diffuse * material.diffuse * max(0, N.L)), with the normal rotated to world space by c8..c11 and normalized. Alpha is written separately and never lit.",
+      "dx/d3d9_ffp.cpp: the synthesis is split into vertex_program and pixel_stages, and d9_ffp_prepare takes vertex_supplied/pixel_supplied so only the missing half is synthesized. That is the case GTA SA uses for skinned models: its own vertex shader with fixed-function pixel stages.",
+      "dx/d3d9_pipeline.h, dx/d3d9.cpp: D9_FFP_VCONST raised from 7 to 34 constants so the constant swap and restore cover material and lights; D3DLIGHT9 is read at its real offsets (position +52, direction +64, range +76, falloff +80, attenuation +84) and GetMaterial writes Power as a single float at +64 instead of a four-float vector that would overrun the guest structure.",
+      "dx/d3d9.cpp: each remaining refusal carries the offending state and a counter reported at powers of two, so a cosmetic refusal can be told apart from thousands of lost draws."
+    ],
+    "remaining_refusals": [
+      "fixed-function declaration requires stream zero and default method",
+      "texture transforms, texgen, or TEMP result are not implemented",
+      "fixed-function vertex blending is not implemented (blocks CJ and pedestrians)"
+    ],
+    "evidence": {
+      "web_build_logs": [
+        "build-web-ffplit.log",
+        "build-web-mixed.log"
+      ],
+      "prepare_wasm_logs": [
+        "prepare-wasm-ffplit.log"
+      ],
+      "strict_run_logs": [
+        "browser-target6y.log"
+      ],
+      "log_mirror": "mirror-target6y.log",
+      "screenshots": [
+        "evid_cutscene_lit_317.png",
+        "evid_world_lit_680.png",
+        "evid_hud_lit_1246.png"
+      ]
+    },
+    "blockers": [
+      "No unpaused gameplay frame with the player character yet; vertex blending is the next rendering blocker.",
+      "Two fixed-function refusals remain unexplored: a declaration with a non-zero stream or method, and texture stages with transforms or texgen.",
+      "Native d3d9_ffp_tests and tools/format.py cannot run in this environment."
+    ]
+  },
+  "ffp_skinned_models_triage": {
+    "updated_utc": "2026-10-21T19:55:00+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "served_wasm_sha256": "86de7cc649169ec778197fbdeea5a321823515a0c6cc84b39f29c770f96c86a7",
+    "wasm_bytes": 266383483,
+    "previous_wasm_sha256": "6aca1de8a439bc57bba05d66cbdacf8425498d4f042c68a2a1da81effc97f9a6",
+    "reached": [
+      "The player character is drawn for the first time: evid_cj_skinned_143.png shows CJ and three other skinned characters in the intro cutscene, with textured skin, vest and jeans.",
+      "A full crowd of skinned police officers and pedestrians in the police-station scene (evid_crowd_skinned_748.png, target7a_play_1353.png).",
+      "The refusals that were firing 131072 times per run no longer reject the textured world draws."
+    ],
+    "not_reached": [
+      "No frame shows CJ responding to a movement key; all captures are cutscene frames.",
+      "No mission progress beyond the opening cutscene was observed.",
+      "Rendering is still 0.5 FPS with 1.6-2.5 s frame times."
+    ],
+    "fixes": [
+      "dx/d3d9_ffp.cpp: d9_declaration_format describes the vertex declaration directly instead of reconstructing an FVF code, so element order, offsets and the stream number stop mattering: the renderer already binds attributes to shader inputs by usage. Vertex blending is refused by name (BLENDWEIGHT/BLENDINDICES).",
+      "dx/d3d9_ffp.cpp: texture-coordinate transforms (D3DTSS_TEXTURETRANSFORMFLAGS) with one matrix per stage in c34..c65, and camera-space position/normal texgen, composing the view matrix with the stage matrix. D3DTTFF_PROJECTED writes its divisor into w, which the renderer already divides by.",
+      "dx/d3d9_ffp.cpp: the declaration loop ran to at + 8 < size and therefore never examined the trailing terminator element, so every declaration was refused with 'has no terminator'. Corrected to at + 8 <= size.",
+      "dx/d3d9.cpp: the CPU raster path now uses the same synth_vs flag as the GPU path for flat shading."
+    ],
+    "root_cause": "GTA SA puts the position in vertex stream 1 in the declarations used for the textured world and its skinned models. d9_declaration_fvf required stream zero, so the draw was refused; the refusal fired 131072 times in a single run.",
+    "evidence": {
+      "web_build_logs": [
+        "build-web-decl.log",
+        "build-web-texgen.log"
+      ],
+      "prepare_wasm_logs": [
+        "prepare-wasm-texgen.log"
+      ],
+      "strict_run_logs": [
+        "browser-target6z.log",
+        "browser-target7a.log"
+      ],
+      "log_mirrors": [
+        "mirror-target6z.log",
+        "mirror-target7a.log"
+      ],
+      "screenshots": [
+        "evid_cj_skinned_143.png",
+        "evid_crowd_skinned_748.png",
+        "target7a_play_1353.png"
+      ]
+    },
+    "blockers": [
+      "No controllable gameplay yet: no frame shows movement from input.",
+      "Fixed-function vertex blending (D3DRS_VERTEXBLEND/D3DRS_INDEXEDVERTEXBLENDENABLE) is still refused for streams that rely on it.",
+      "Native d3d9_ffp_tests and tools/format.py cannot run in this environment."
+    ]
+  },
+  "browser_gameplay_verified_triage": {
+    "updated_utc": "2026-10-21T23:30:00+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "served_wasm_sha256": "32630437df5985f01def37c504f75b7f4634f8866decc8a4576443ed28de7965",
+    "wasm_bytes": 266386779,
+    "previous_wasm_sha256": "c21bac752735eb812fdd5f4ef98f8c9809b2c7571640cf94776a3727fc5a1d48",
+    "reached": [
+      "Unpaused gameplay with the player character: evid_gameplay_cj_935.png shows CJ from behind in the Los Santos alley, camera following, with the fence, trees, buildings and the objective 'Follow the CJ icon on the radar to get back to the hood.' at $350.",
+      "Keyboard control: holding w for 240 s on that page moved CJ out of the alley to the street (evid_move_street_002.png, probe7b_hold_002.png), with houses, grass, pavement, a fence and three pedestrians in view.",
+      "Continued movement along the street with palms and a metal railing in evid_move_forward_009.png. Every capture in the sequence differs from the previous one, so the world moves with the input rather than playing a cutscene.",
+      "The target7d run (wasm sha256 32630437...) logs no fixed-function refusal at all: evid_gameplay_clean_1122.png is the same alley gameplay frame with an empty refusal set, and evid_move_noc_refusals.png shows CJ moving with the camera following.",
+      "Fixed-function lighting, declaration-driven vertex layouts (no stream-zero requirement), texture-coordinate transforms, camera-space texgen, the mixed programmable-vertex/fixed-pixel case, and the texture stage operations ADDSIGNED, ADDSIGNED2X, ADDSMOOTH, the four BLEND forms, PREMODULATE, MODULATEALPHA_ADDCOLOR, MODULATECOLOR_ADDALPHA, DOTPRODUCT3, MULTIPLYADD and LERP."
+    ],
+    "not_reached": [
+      "No mission is completed and no vehicle was driven.",
+      "Audio output was not listened to; only the mixer's counters were observed.",
+      "Saving and loading were not exercised.",
+      "Stability beyond about 35 minutes of wall time is unverified.",
+      "Performance is 0.3-0.5 FPS with 2.0-3.8 s frame times: technically interactive, not playable in real time."
+    ],
+    "input_method": "The key is held down with Input.dispatchKeyEvent type=keyDown on the live page while Emulation.setFocusEmulationEnabled keeps the document focused; the guest polls key state for movement rather than consuming discrete presses.",
+    "evidence": {
+      "strict_run_logs": [
+        "browser-target7b.log",
+        "browser-target7d.log"
+      ],
+      "log_mirrors": [
+        "mirror-target7b.log",
+        "mirror-target7d.log"
+      ],
+      "input_probe_logs": [
+        "move-probe7b.log",
+        "move-probe7d.log"
+      ],
+      "web_build_logs": [
+        "build-web-term.log",
+        "build-web-texops.log",
+        "build-web-dot3.log"
+      ],
+      "screenshots": [
+        "evid_gameplay_cj_935.png",
+        "evid_gameplay_clean_1122.png",
+        "target7b_play_1697.png",
+        "evid_move_before.png",
+        "evid_move_street_002.png",
+        "evid_move_forward_009.png",
+        "evid_move_noc_refusals.png"
+      ]
+    },
+    "blockers": [
+      "Real-time performance: 0.3-0.5 FPS.",
+      "No mission progress, vehicle use, audio listening or save/load has been exercised.",
+      "Native d3d9_ffp_tests and tools/format.py cannot run in this environment."
     ]
   }
 }

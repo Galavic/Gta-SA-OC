@@ -1,5 +1,239 @@
 # Estado actual
 
+## Gameplay controlable verificado en el navegador: CJ camina por Los Santos (2026-10-21)
+
+La ejecución `target7d`, con el wasm `sha256 32630437…` (266.386.779 bytes),
+**no registra ni un solo rechazo de función fija** en todo el recorrido
+(`mirror-target7d.log`): la síntesis cubre ya todas las combinaciones de estado
+que GTA SA usa para dibujar el mundo y los personajes. `evid_gameplay_clean_1122.png`
+muestra el callejón con CJ, la valla, el objetivo y 350 $ sin ninguna línea
+`fixed-function draw refused`, y `evid_move_noc_refusals.png` a CJ moviéndose
+con la cámara siguiéndolo.
+
+La ejecución `target7b` fue la primera en llegar a **gameplay sin pausar con el
+personaje del jugador** y en responder al teclado. `evid_gameplay_cj_935.png`
+muestra a CJ de espaldas en el callejón de Los Santos con la cámara tras él, la
+valla, los árboles, los edificios y el objetivo «Follow the 'CJ' icon on the
+radar to get back to the hood.» con 350 $. Manteniendo `w` pulsada sobre esa
+misma página durante 240 s (`evid_move_street_002.png`, `probe7b_hold_002.png`)
+CJ **camina hasta la calle**: se ven casas, césped, la acera, la valla y tres
+peatones más. `evid_move_forward_009.png` muestra el siguiente tramo, con
+palmeras y la barandilla metálica en primer plano. Cada captura de la secuencia
+es distinta de la anterior, así que el mundo se mueve con la entrada y no es una
+cinemática.
+
+Estado del arte en este punto:
+
+- Iluminación de función fija sintetizada (difusa, ambiente global, material).
+- Declaraciones de vértices descritas directamente, sin exigir *stream* cero,
+  que era lo que descartaba 131.072 *draws* por ejecución.
+- Transformaciones de coordenadas de textura y *texgen* de espacio de cámara.
+- Caso mixto: *vertex shader* del juego con etapas de píxel fijas, que es lo que
+  usan los modelos con *skinning*.
+- Operaciones de etapa de textura completadas (ADDSIGNED, ADDSIGNED2X,
+  ADDSMOOTH, los cuatro *blend*, PREMODULATE, MODULATEALPHA_ADDCOLOR,
+  MODULATECOLOR_ADDALPHA, MULTIPLYADD, LERP y **DOTPRODUCT3**). Con
+  `DOTPRODUCT3` el callejón se dibuja entero (`target7c_play_651.png`): muros de
+  ladrillo, calzada, palmeras y árboles, cielo de atardecer.
+
+Lo que **no** está verificado: misiones, vehículos, audio audible, guardado,
+estabilidad más allá de ~35 minutos y rendimiento utilizable. La medición es de
+**0,3–0,5 FPS** con tiempos de frame de 2,0–3,8 s, así que el juego es
+técnicamente interactivo pero no jugable en tiempo real. Tampoco se ha medido
+cuánto de la ciudad se dibuja sin errores: `target7d` no encontró ningún rechazo
+nuevo en 2316 s, pero eso cubre el callejón y la calle contigua, no la ciudad
+entera.
+
+Evidencia: `browser-target7b.log`, `mirror-target7b.log`, `move-probe7b.log`,
+`evid_gameplay_cj_935.png`, `evid_gameplay_cj_1697.png` (frame en reposo),
+`evid_move_before.png`, `evid_move_street_002.png`, `evid_move_forward_009.png`.
+Wasm `sha256 c21bac75…` para la ejecución 7b; el build con las operaciones de
+textura es `build-web-texops.log`.
+
+## Los personajes con *skinning* se dibujan: CJ aparece en pantalla (2026-10-21)
+
+Tras la iluminación, el rechazo que quedaba era otro: la declaración de vértices
+del juego pone **la posición en el *stream* 1**, y `d9_declaration_fvf` la
+rechazaba porque exigía *stream* cero. Ese mismo rechazo se disparaba 131.072
+veces en una ejecución, así que era todo el mundo con textura, no un caso raro.
+
+Correcciones aplicadas en esta ronda:
+
+- `dx/d3d9_ffp.cpp`: `d9_declaration_format` describe la declaración
+  directamente en vez de reconstruir un código FVF. Sólo le interesa qué
+  atributos existen —posición, normal opcional, los dos colores y cuántos juegos
+  de UV—, porque el renderizador ya enlaza atributos a entradas del shader por
+  *usage*. Así el orden de los elementos, sus desplazamientos y el número de
+  *stream* dejan de importar. El *vertex blending* se rechaza por su nombre
+  (`BLENDWEIGHT`/`BLENDINDICES`) en lugar de como elemento desconocido.
+- `dx/d3d9_ffp.cpp`: **transformaciones de coordenadas de textura**
+  (`D3DTSS_TEXTURETRANSFORMFLAGS`) con matriz por etapa en `c34..c65`, y
+  **texgen** de posición y normal en espacio de cámara
+  (`D3DTSS_TCI_CAMERASPACEPOSITION`/`CAMERASPACENORMAL`), componiendo la matriz
+  de vista con la de la etapa. El renderizador ya dividía por `w` para
+  `D3DTTFF_PROJECTED`, así que el divisor se escribe en esa vía.
+- `dx/d3d9_ffp.cpp`: el bucle de declaración miraba sólo hasta
+  `at + 8 < size`, de modo que nunca veía el elemento terminador del final y
+  rechazaba con «has no terminator». Corregido a `at + 8 <= size`.
+
+Evidencia (wasm `sha256 86de7cc6…`): `evid_cj_skinned_143.png` muestra a **CJ y
+tres personajes más con *skinning*** en la cinemática de introducción, con ropa,
+piel y vaqueros texturizados; `evid_crowd_skinned_748.png` y
+`target7a_play_1353.png` muestran la escena de la comisaría con una multitud de
+policías y peatones y el logotipo de la emisora. Es la primera vez que el
+personaje del jugador se dibuja en el navegador.
+
+Sigue **sin verificarse gameplay controlable**: las capturas son de la
+cinemática, ningún frame muestra a CJ respondiendo a una tecla de movimiento, y
+el rendimiento es de 0,5 FPS con tiempos de frame de 1,6–2,5 s.
+
+## La iluminación de función fija deja de rechazarse y el mundo se dibuja iluminado (2026-10-21)
+
+El rechazo de los *draws* de función fija era lo que dejaba el mundo vacío. Con
+el wasm de `0x006338e0` (`sha256 4a052d68…`) la ejecución estricta llegaba a
+gameplay sin pausar, con HUD y el objetivo «Follow the 'CJ' icon on the radar to
+get back to the hood.» y 350 $, pero **sin geometría de mundo**: el espejo del
+log mostraba exactamente tres rechazos distintos de `d3d9_ffp_prepare`, y el
+primero de ellos, «fixed-function lighting is not implemented», descartaba
+todos los *draws* del terreno y de los edificios.
+
+Correcciones aplicadas en esta ronda:
+
+- `dx/d3d9_ffp.cpp`: **iluminación difusa de función fija** sintetizada en el
+  *vertex shader* (`vertex_program`). Suma por vértice
+  `emissive + ambient * D3DRS_AMBIENT + Σ light.diffuse * material.diffuse *
+  max(0, N·L)`, con la normal rotada al espacio de mundo por `c8..c11` y
+  normalizada. Direccionales usan `-direction`; puntuales y *spot* calculan el
+  vector luz→vértice con una `MAD` y `NRM` sobre la posición de mundo, sin
+  atenuación ni cono. El alfa nunca se ilumina: se escribe aparte, del material
+  o del vértice con `D3DRS_COLORVERTEX`.
+- `dx/d3d9_ffp.cpp`: la síntesis se partió en `vertex_program` y
+  `pixel_stages`, y `d9_ffp_prepare` acepta `vertex_supplied`/`pixel_supplied`
+  para sintetizar sólo la mitad que falta. Es el caso que GTA SA usa con sus
+  modelos con *skinning*: *vertex shader* propio y etapas de píxel fijas.
+- `dx/d3d9_pipeline.h`, `dx/d3d9.cpp`: `D9_FFP_VCONST` (34 constantes) en vez
+  de las 7 anteriores, para que el intercambio y la restauración de constantes
+  cubran material y luces; `D3DLIGHT9` se lee con sus desplazamientos reales
+  (posición +52, dirección +64, rango +76, caída +80, atenuación +84) y
+  `GetMaterial` escribe `Power` como un único `float` en +64, no como un vector
+  de cuatro que desbordaría la estructura del invitado.
+- Los rechazos restantes ahora llevan el estado culpable y un contador
+  (`refused (N so far)`) que se emite en potencias de dos, para distinguir un
+  rechazo cosmético de miles de *draws* perdidos.
+
+Evidencia de la ejecución `target6y` (wasm `sha256 6aca1de8…`, 266.370.477
+bytes) con el mirror adjunto: `mirror-target6y.log` ya no contiene
+«fixed-function lighting is not implemented», y los frames
+`evid_cutscene_lit_317.png`, `evid_world_lit_680.png` y `evid_hud_lit_1246.png`
+muestran cielo con degradado, horizonte, terreno, edificios, un vehículo
+aparcado y el HUD de la primera misión con 350 $ a 0,5–1 FPS. La
+`D3DRS_AMBIENT` global y el material se ven como sombreado, no como color plano.
+
+Sigue **sin verificarse gameplay controlable**: ningún frame muestra a CJ
+caminando ni una respuesta a una tecla de movimiento, el *vertex blending* de
+función fija sigue rechazándose (por eso los personajes con *skinning* no se
+dibujan), quedan dos rechazos por explorar (declaración con *stream* distinto de
+cero y etapas de textura con transformación/*texgen*) y el rendimiento es de
+0,5–1 FPS en carga y cinemática.
+
+Evidencia de construcción: `build-web-ffplit.log` y `build-web-mixed.log`
+(EXIT=0), `prepare-wasm-ffplit.log` y `prepare-wasm-diag.log` (212.853
+funciones, V8 compila el módulo completo).
+
+No se afirma jugabilidad, conversión completa, equivalencia 1:1 ni porcentaje.
+`browser_gameplay_verified` sigue en `false`.
+
+## El mundo 3D se renderiza; el juego se pausaba solo al perder el foco (2026-10-21)
+
+Con el wasm de `0x005245bd` (`sha256 9b20ee85…`, 266.361.215 bytes) el juego
+dibuja **geometría 3D real**. En `target6h_load_106.png`,
+`target6h_load_137.png` y `target6h_load_223.png` se ve una calle de Los Santos
+con edificios, postes, calzada y cerros, a 2,5–9,5 FPS. En
+`target6k_resume2.png` el fondo del menú de pausa muestra la misma escena viva a
+22 FPS, y en `target6k_no.png` el mapa completo de Los Santos se dibuja con su
+leyenda de controles. El HUD de la primera misión también sale: salud y
+chaleco, icono de arma, dinero y los avisos «Press RETURN to jump on the bike»
+y «Use UP, DOWN, LEFT and RIGHT to move Carl.» con 210 $.
+
+Durante mucho tiempo cada frame de mundo aparecía con el menú de pausa abierto.
+La causa no era de renderizado: **GTA SA se pausa solo cuando su ventana pierde
+la activación**. Al abrir otra ventana de Chrome por delante de la del juego, el
+invitado abría el menú de pausa y se quedaba ahí. La solución es
+`Emulation.setFocusEmulationEnabled` por CDP, que mantiene el documento con
+foco para el invitado con independencia del gestor de ventanas; con eso la
+cinemática de introducción corre sin pausarse (`target6u_030.png`).
+
+También se identificó que el clic de ratón queda encolado mientras el invitado
+transmite y se reproduce después, ya en gameplay, donde el juego lo lee como
+Start: por eso la navegación del menú usa sólo Enter, dos pulsaciones
+verificadas contra un recorte de la banda de opciones.
+
+La ejecución estricta sigue **sin llegar al gameplay controlable**. Con el wasm
+`9b20ee85…` el invitado abortó a los ~565 s en `0x00684ce6` (epílogo SEH
+`mov fs:[0],ecx`, que el intérprete no decodificaba por el prefijo de segmento
+FS) y, ya con ese arreglo, a los ~730 s en `0x006338e0`, donde el intérprete se
+detenía en `0f 95 c0` (`SETNZ AL`).
+
+Correcciones aplicadas en esta ronda:
+
+- `0x00684ce6` y `0x006338e0` añadidos a `entry_points` en
+  `variants/singleplayer/game.toml`.
+- `runtime/interp.cpp`: prefijo de segmento FS (`fs:[disp]` suma `fs_base`, que
+  es como el invitado alcanza su TEB y el array TLS) y `SETcc r/m8`
+  (`0x0f 0x90..0x9f`).
+- `dx/d3d9_pipeline.h` y `dx/d3d9.cpp`: estado de material (`D3DMATERIAL9`) y de
+  hasta ocho luces (`D3DLIGHT9`) con `SetMaterial`/`GetMaterial`/`SetLight`/
+  `GetLight`/`LightEnable`, que eran `D9_STUB`. La síntesis de shaders todavía
+  rechaza la iluminación de función fija y el *vertex blending*.
+
+Evidencia: `build-web-5245bd.log` (59.166/59.839 funciones, 168.221 puntos de
+entrada), `prepare-wasm-5245bd.log` (212.850 funciones, V8 compila el módulo
+completo), `browser-target6h.log`, `browser-target6v.log`,
+`browser-target6w.log`, `mirror-target6w.log` y las capturas citadas.
+
+No se afirma jugabilidad, conversión completa, equivalencia 1:1 ni porcentaje.
+`browser_gameplay_verified` sigue en `false`: hay mundo 3D, HUD y cinemática,
+pero ningún frame muestra gameplay sin pausar con el personaje y todavía no se
+observó movimiento controlable.
+
+## Primera misión llega al HUD; el mundo 3D sigue sin renderizar (2026-10-21)
+
+Una ejecución estricta de 16 minutos (`RECOMP_STRICT_UNKNOWN=1`) sobre el build
+con `0x006c1a04` llegó por primera vez al estado de juego de la primera misión.
+En `target6c_load_262.png` se ven las barras de salud y chaleco, el icono de
+arma y el contador de dinero; en `target6c_load_554.png` aparece el aviso
+«Press RETURN to jump on the bike.» con 350 $. El HUD y el texto los dibuja el
+juego; **no** hay geometría 3D, moto ni personaje: el fondo es el color de
+cielo/limpieza. No se observó movimiento controlable ni progreso de misión.
+
+La ejecución **no terminó limpia**. A los ~565 s el invitado llamó a
+`0x005245bd` (bytes `8a 47 36 24 07 3c 02`, o sea `mov al,[edi+0x36];
+and al,7; cmp al,2; jne ...`), que es código real pero no era punto de entrada.
+El intérprete tampoco decodificaba `0x24` (`AND AL, imm8`). La captura de 950 s
+está congelada en ese instante (AGE ~385 s), así que el HUD es real pero el
+frame final no está vivo.
+
+Correcciones aplicadas para el siguiente build:
+
+- `0x005245bd` añadido a `entry_points` en `variants/singleplayer/game.toml`.
+- Formas AL,imm8 (`0x04/0x0c/0x24/0x2c/0x34/0x3c`) añadidas a
+  `runtime/interp.cpp`.
+- FFP D3D9: se aceptan niebla de tabla y por vértice y suma especular; siguen
+  rechazadas la iluminación de función fija y el *vertex blending*.
+- WebGPU: el pipeline de `LINE_STRIP` indexado fijaba
+  `stripIndexFormat=Undefined`, lo que invalidaba cada `DrawIndexed` del HUD;
+  ahora la clave y el descriptor usan el formato de índice del draw.
+
+Evidencia: `translate-6c1a04.log` (168.197 puntos de entrada, 0 fallos),
+`build-web-6c1a04.log`, `prepare-wasm-6c1a04.log` (212.830 funciones,
+266.371.165 bytes, sha256 `354bd942…`), `browser-target6c.log`,
+`target6c_load_262.png`, `target6c_load_554.png` y `target6c_load_950.png`.
+La regeneración y el nuevo build estaban en curso al escribir esto.
+
+No se afirma jugabilidad, conversión completa, equivalencia 1:1 ni porcentaje.
+`browser_gameplay_verified` sigue en `false`: hay HUD, pero no mundo ni
+personaje renderizados ni juego controlable.
+
 ## Alto en la pantalla de carga en blanco (abierto) (2026-10-16)
 
 Tras los títulos, la carga inmediatamente anterior al menú queda en blanco.

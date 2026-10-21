@@ -111,3 +111,16 @@ gaps. The real game module linked, passed full V8 compilation, and contains
 all five new function/continuation names. The loopback server serves the new
 module with cache revalidation. Actual browser execution of this revision
 and playable performance remain unverified.
+
+## Verified browser gameplay (2026-10-21)
+
+`docs/STATUS.md` carries the current evidence. The menu, the intro cinematic and
+controllable gameplay all run in the browser: CJ walks through Los Santos under
+held keyboard input. Run `target7d` (wasm `sha256 32630437…`, 266,386,779 bytes)
+logged zero fixed-function refusals over 2316 s.
+
+Still unverified: missions, vehicles, audible audio, save/load, stability beyond
+about 35 minutes and usable performance. The measured rate is 0.3–0.5 FPS with
+2.0–3.8 s frame times, so the build is interactive but not playable in real
+time. Compilation, function counts and CPU-only tests do not establish any of
+the browser results above; only the recorded runs do.

@@ -15,7 +15,9 @@ variants/
 *.local-*.md
 startup-addon-manifest.json
 *.log
+*.err
 *.pid
+*_tmp.py
 *.exe
 *.dll
 *.wasm

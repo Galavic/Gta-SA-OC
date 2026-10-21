@@ -366,7 +366,7 @@ index 0a87829..e3fbfda 100644
      uint32_t dsh_state = 0;                               // STREAMSTATE_STOP 0 / STREAMSTATE_RUN 1
      uint32_t md_buffer = 0, md_length = 0, md_actual = 0; // audio data: the guest buffer
 diff --git a/dx/d3d9.cpp b/dx/d3d9.cpp
-index 1973efb..d615390 100644
+index 1973efb..4233000 100644
 --- a/dx/d3d9.cpp
 +++ b/dx/d3d9.cpp
 @@ -19,8 +19,10 @@
@@ -418,12 +418,12 @@ index 1973efb..d615390 100644
 +    wr32(p + 4, m.h);
 +    wr32(p + 8, m.refresh);
 +    wr32(p + 12, m.format);
-+}
+ }
 +// (this, Adapter, Format)
 +void D9_GetAdapterModeCount(X86 *c) {
 +    uint32_t format = arg(c, 2);
 +    set_eax(c, format >= 21 && format <= 23 ? (uint32_t)std::size(kDisplayModes) : 0);
- }
++}
 +// (this, Adapter, Format, Mode, pMode)
  void D9_EnumAdapterModes(X86 *c) {
 -    put_display_mode(arg(c, 4));
@@ -472,18 +472,26 @@ index 1973efb..d615390 100644
      com_out_ptr(out, view);
      com_ret(c, D3D_OK9);
  }
-@@ -369,7 +398,6 @@ D9_STUB(UpdateTexture, 3)
+@@ -369,14 +398,8 @@ D9_STUB(UpdateTexture, 3)
  D9_STUB(GetRenderTargetData, 3)
  D9_STUB(GetFrontBufferData, 3)
  D9_STUB(ColorFill, 4)
 -D9_STUB(GetRenderTarget, 3)
  D9_STUB(GetTransform, 3)
  D9_STUB(MultiplyTransform, 3)
- D9_STUB(SetMaterial, 2)
-@@ -401,11 +429,6 @@ D9_STUB(SetNPatchMode, 2)
+-D9_STUB(SetMaterial, 2)
+-D9_STUB(GetMaterial, 2)
+-D9_STUB(SetLight, 3)
+-D9_STUB(GetLight, 3)
+-D9_STUB(LightEnable, 3)
+ D9_STUB(GetLightEnable, 3)
+ D9_STUB(SetClipPlane, 3)
+ D9_STUB(GetClipPlane, 3)
+@@ -400,12 +423,6 @@ D9_STUB(GetSoftwareVertexProcessing, 1)
+ D9_STUB(SetNPatchMode, 2)
  D9_STUB(GetNPatchMode, 1)
  D9_STUB(ProcessVertices, 6)
- D9_STUB(GetVertexDeclaration, 2)
+-D9_STUB(GetVertexDeclaration, 2)
 -D9_STUB(SetFVF, 2)
 -D9_STUB(GetFVF, 2)
 -D9_STUB(CreateVertexShader, 3)
@@ -492,7 +500,7 @@ index 1973efb..d615390 100644
  D9_STUB(GetVertexShaderConstantF, 4)
  D9_STUB(SetVertexShaderConstantI, 4)
  D9_STUB(GetVertexShaderConstantI, 4)
-@@ -415,9 +438,6 @@ D9_STUB(GetStreamSource, 5)
+@@ -415,9 +432,6 @@ D9_STUB(GetStreamSource, 5)
  D9_STUB(SetStreamSourceFreq, 3)
  D9_STUB(GetStreamSourceFreq, 3)
  D9_STUB(GetIndices, 2)
@@ -502,7 +510,7 @@ index 1973efb..d615390 100644
  D9_STUB(GetPixelShaderConstantF, 4)
  D9_STUB(SetPixelShaderConstantI, 4)
  D9_STUB(GetPixelShaderConstantI, 4)
-@@ -454,6 +474,11 @@ void Dev_Reset(X86 *c) {
+@@ -454,6 +468,11 @@ void Dev_Reset(X86 *c) {
      dev->width = rd32(present + 0);
      dev->height = rd32(present + 4);
      dev->samples = multisample_count(rd32(present + 16), rd32(present + 20));
@@ -514,7 +522,7 @@ index 1973efb..d615390 100644
      device_forget_buffers(dev);
      ComObj *bb = device_backbuffer(dev);
      dev->render_target = bb ? bb->id : 0;
-@@ -1328,6 +1353,35 @@ void Dev_GetDepthStencilSurface(X86 *c) {
+@@ -1328,6 +1347,35 @@ void Dev_GetDepthStencilSurface(X86 *c) {
      com_ret(c, D3D_OK9);
  }
  
@@ -550,15 +558,35 @@ index 1973efb..d615390 100644
  void Dev_SetRenderTarget(X86 *c) {
      ComObj *dev = this_device9(c);
      ComObj *s = com_this(arg(c, 2));
-@@ -1402,10 +1456,204 @@ void Dev_SetVertexDeclaration(X86 *c) {
+@@ -1402,7 +1450,221 @@ void Dev_SetVertexDeclaration(X86 *c) {
      if (dev) {
          dev->current_viewport = (d && d->kind == K_D3D9DECL) ? d->id : 0;
          d9_pipeline(dev->id).declaration = dev->current_viewport;
 +        d9_pipeline(dev->id).fvf = 0;
-     }
-     com_ret(c, D3D_OK9);
- }
- 
++    }
++    com_ret(c, D3D_OK9);
++}
++
++// SetVertexDeclaration and SetFVF both keep the declaration in the pipeline.
++// Hand the same object back, with its own reference, as Direct3D does.
++void Dev_GetVertexDeclaration(X86 *c) {
++    ComObj *dev = this_device9(c);
++    uint32_t out = arg(c, 1);
++    if (!dev || !out) {
++        com_ret(c, D3DERR_INVALIDCALL);
++        return;
++    }
++    ComObj *d = com_get(d9_pipeline(dev->id).declaration);
++    if (!d) {
++        com_out_ptr(out, 0);
++        com_ret(c, D3D_OK9);
++        return;
++    }
++    com_addref(d);
++    com_out_ptr(out, com_view(d, IF_D3DVERTEXDECL9));
++    com_ret(c, D3D_OK9);
++}
++
 +// A supported FVF installs a real declaration. Failed validation leaves the
 +// previous declaration intact, and repeated identical bindings reuse it.
 +void Dev_SetFVF(X86 *c) {
@@ -746,16 +774,13 @@ index 1973efb..d615390 100644
 +    if (data && (capacity < code.size() || !gm_valid(data, uint32_t(code.size())))) {
 +        com_ret(c, D3DERR_INVALIDCALL);
 +        return;
-+    }
+     }
 +    if (data)
 +        memcpy(gm_ptr(data), code.data(), code.size());
-+    com_ret(c, D3D_OK9);
-+}
-+
- // (this, Type, ppQuery). A query with no GPU behind it answers immediately.
- void Dev_CreateQuery(X86 *c) {
-     ComObj *dev = this_device9(c);
-@@ -1580,15 +1828,69 @@ static void target_viewport(ComObj *dev, const HostD9Target &t, int32_t vp[4]) {
+     com_ret(c, D3D_OK9);
+ }
+ 
+@@ -1580,15 +1842,86 @@ static void target_viewport(ComObj *dev, const HostD9Target &t, int32_t vp[4]) {
      vp[3] = rt ? (int32_t)rt->height : (int32_t)dev->height;
  }
  
@@ -774,44 +799,61 @@ index 1973efb..d615390 100644
 +    D9Pipeline &pl;
 +    D9ShaderBytes saved_vs, saved_ps;
 +    uint64_t saved_vs_key = 0, saved_ps_key = 0;
-+    float saved_vconst[6][4], saved_pconst[1][4];
-+    bool changed = false, ok = false;
++    float saved_vconst[D9_FFP_VCONST][4], saved_pconst[1][4];
++    bool changed = false, ok = false, synth_vs = false;
 +    explicit FixedFunctionBinding(ComObj *dev) : pl(d9_pipeline(dev->id)) {
 +        if (!pl.vs.empty() && !pl.ps.empty()) {
 +            ok = true;
 +            return;
 +        }
++        // D3D9 lets one half of the pipeline stay programmable while the other
++        // runs fixed-function, and GTA SA relies on it: its skinned models bind
++        // their own vertex shader and leave the pixel stages fixed. Only the
++        // missing half is synthesized, so the application's shader and its
++        // constants are left exactly as they are.
++        bool vertex_supplied = !pl.vs.empty(), pixel_supplied = !pl.ps.empty();
 +        D9FixedFunction ff;
 +        std::string why;
 +        ComObj *rt = com_get(dev->render_target);
 +        uint32_t fvf = pl.fvf;
-+        if (!fvf) {
-+            ComObj *decl = com_get(pl.declaration);
-+            if (!decl || decl->kind != K_D3D9DECL)
-+                why = "no fixed-function vertex declaration or FVF is bound";
-+            else
-+                d9_declaration_fvf(decl->blob, fvf, why);
-+        }
-+        if (!pl.vs.empty() || !pl.ps.empty())
-+            why = "mixed programmable/fixed-function shaders are not implemented";
-+        else if (why.empty() && d9_ffp_prepare(pl, fvf, rt ? rt->width : dev->width,
-+                                               rt ? rt->height : dev->height, ff, why)) {
++        // A bound declaration is handed to the synthesis as-is: it carries
++        // element order, offsets and the stream number, which an FVF code
++        // cannot express.
++        ComObj *decl = vertex_supplied ? nullptr : com_get(pl.declaration);
++        const std::vector<uint8_t> *declaration =
++            decl && decl->kind == K_D3D9DECL ? &decl->blob : nullptr;
++        if (d9_ffp_prepare(pl, fvf, rt ? rt->width : dev->width,
++                           rt ? rt->height : dev->height, ff, why, vertex_supplied,
++                           pixel_supplied, declaration)) {
 +            saved_vs = pl.vs;
 +            saved_ps = pl.ps;
 +            saved_vs_key = pl.vs_key;
 +            saved_ps_key = pl.ps_key;
 +            memcpy(saved_vconst, pl.vconst, sizeof saved_vconst);
 +            memcpy(saved_pconst, pl.pconst, sizeof saved_pconst);
-+            pl.vs = ff.vs;
-+            pl.ps = ff.ps;
-+            pl.vs_key = pl.ps_key = 0;
-+            memcpy(pl.vconst, ff.vconst, sizeof ff.vconst);
-+            memcpy(pl.pconst, ff.pconst, sizeof ff.pconst);
++            if (!vertex_supplied) {
++                pl.vs = ff.vs;
++                pl.vs_key = 0;
++                memcpy(pl.vconst, ff.vconst, sizeof ff.vconst);
++                synth_vs = true;
++            }
++            if (!pixel_supplied) {
++                pl.ps = ff.ps;
++                pl.ps_key = 0;
++                memcpy(pl.pconst, ff.pconst, sizeof ff.pconst);
++            }
 +            changed = ok = true;
 +            return;
 +        }
-+        log_once(("d3d9.ffp.refused." + why).c_str(), "d3d9: fixed-function draw refused: %s",
-+                 why.c_str());
++        // log_once keeps a repeated refusal from flooding the ring, but it also
++        // hides how many draws are lost. Counting per reason and reporting at
++        // powers of two keeps the scale visible without the spam: a handful of
++        // refusals is cosmetic, thousands mean the world is missing.
++        static std::map<std::string, uint64_t> refused;
++        uint64_t count = ++refused[why];
++        if (count == 1 || (count & (count - 1)) == 0)
++            log_msg(1, "d3d9: fixed-function draw refused (%llu so far): %s",
++                    (unsigned long long)count, why.c_str());
 +    }
 +    ~FixedFunctionBinding() {
 +        if (!changed)
@@ -833,18 +875,18 @@ index 1973efb..d615390 100644
      d.target = gpu_target(dev);
      target_viewport(dev, d.target, d.viewport);
      d.depth_range[0] = pl.viewport_z[0];
-@@ -1607,6 +1909,10 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
+@@ -1607,6 +1940,10 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
      d.vs_size = (uint32_t)pl.vs.size();
      d.ps = pl.ps.data();
      d.ps_size = (uint32_t)pl.ps.size();
-+    // Only the synthesized fixed-function pipeline reacts to SHADEMODE flat;
-+    // a programmable pair owns its own interpolation regardless of the
++    // Only the synthesized fixed-function vertex path reacts to SHADEMODE flat;
++    // a programmable vertex shader owns its own interpolation regardless of the
 +    // render state.
-+    d.flat_colors = binding.changed && pl.rs[9] == 1;
++    d.flat_colors = binding.synth_vs && pl.rs[9] == 1;
      d.vconst = &pl.vconst[0][0];
      d.vconst_count = std::min<uint32_t>(vs.max_const, 256);
      d.pconst = &pl.pconst[0][0];
-@@ -1614,7 +1920,7 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
+@@ -1614,7 +1951,7 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
      ComObj *decl = com_get(pl.declaration);
      if (!decl || decl->kind != K_D3D9DECL) {
          log_once("d3d9.gpu.nodecl", "d3d9: a draw with no vertex declaration is skipped");
@@ -853,7 +895,7 @@ index 1973efb..d615390 100644
      }
      d.decl = decl->blob.data();
      d.decl_size = (uint32_t)decl->blob.size();
-@@ -1649,19 +1955,28 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
+@@ -1649,19 +1986,28 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
      bool color_write = !pl.rs_set[168] || (pl.rs[168] & 0xf) != 0;
      bool z_write = (!pl.rs_set[14] || pl.rs[14]) && (!pl.rs_set[7] || pl.rs[7]);
      gpu_target_drawn(dev, color_write, z_write);
@@ -879,13 +921,13 @@ index 1973efb..d615390 100644
      static const std::vector<uint8_t> none;
 -    d9_raster_draw(dev, target, (decl && decl->kind == K_D3D9DECL) ? decl->blob : none, call);
 +    D9DrawCall shaded = call;
-+    shaded.flat_colors = binding.changed && binding.pl.rs[9] == 1;
++    shaded.flat_colors = binding.synth_vs && binding.pl.rs[9] == 1;
 +    d9_raster_draw(dev, target, (decl && decl->kind == K_D3D9DECL) ? decl->blob : none, shaded);
 +    return true;
  }
  
  // (this, PrimitiveType, StartVertex, PrimitiveCount)
-@@ -1675,8 +1990,7 @@ void Dev_DrawPrimitive(X86 *c) {
+@@ -1675,8 +2021,7 @@ void Dev_DrawPrimitive(X86 *c) {
          d.primitive = arg(c, 1);
          d.primitive_count = arg(c, 3);
          d.start = arg(c, 2);
@@ -895,7 +937,7 @@ index 1973efb..d615390 100644
          return;
      }
      ComObj *vb = dev ? com_get(dev->back_obj) : nullptr;
-@@ -1688,7 +2002,10 @@ void Dev_DrawPrimitive(X86 *c) {
+@@ -1688,7 +2033,10 @@ void Dev_DrawPrimitive(X86 *c) {
          call.vertex_bytes = vb->blob.size() - dev->lock_off;
          call.stride = dev->rate;
          call.first = arg(c, 2);
@@ -907,7 +949,7 @@ index 1973efb..d615390 100644
      }
      com_ret(c, D3D_OK9);
  }
-@@ -1701,6 +2018,7 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
+@@ -1701,6 +2049,7 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
      ComObj *dev = this_device9(c);
      if (dev && gpu_on()) {
          ComObj *ibo = com_get(d9_pipeline(dev->id).index_buffer);
@@ -915,7 +957,7 @@ index 1973efb..d615390 100644
          if (ibo) {
              gpu_sync_buffer(ibo);
              HostD9Draw d{};
-@@ -1710,9 +2028,9 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
+@@ -1710,9 +2059,9 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
              d.base_vertex = (int32_t)arg(c, 2);
              d.index_buffer = ibo->id;
              d.index_size = ibo->rmask ? ibo->rmask : 2;
@@ -927,7 +969,7 @@ index 1973efb..d615390 100644
          return;
      }
      ComObj *vb = dev ? com_get(dev->back_obj) : nullptr;
-@@ -1729,7 +2047,10 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
+@@ -1729,7 +2078,10 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
          call.index_size = ib->rmask ? ib->rmask : 2;
          call.base_vertex = (int32_t)arg(c, 2);
          call.first = arg(c, 5);
@@ -939,7 +981,7 @@ index 1973efb..d615390 100644
      }
      com_ret(c, D3D_OK9);
  }
-@@ -1801,6 +2122,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
+@@ -1801,6 +2153,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
              describe_draw_inputs(c, arg(c, 3), arg(c, 4), arg(c, 2) + 2);
      }
      if (ComObj *dev = this_device9(c); dev && gpu_on()) {
@@ -947,7 +989,7 @@ index 1973efb..d615390 100644
          HostD9Draw d{};
          d.primitive = arg(c, 1);
          d.primitive_count = arg(c, 2);
-@@ -1809,9 +2131,9 @@ void Dev_DrawPrimitiveUP(X86 *c) {
+@@ -1809,9 +2162,9 @@ void Dev_DrawPrimitiveUP(X86 *c) {
              d.stream[0].stride = arg(c, 4);
              d.inline_vertices = gm_ptr(arg(c, 3));
              d.inline_bytes = bytes;
@@ -959,7 +1001,7 @@ index 1973efb..d615390 100644
          return;
      }
      D9DrawCall call;
-@@ -1819,8 +2141,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
+@@ -1819,8 +2172,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
      call.prim_count = arg(c, 2);
      call.vertices = arg(c, 3);
      call.stride = arg(c, 4);
@@ -969,7 +1011,7 @@ index 1973efb..d615390 100644
  }
  
  // (this, PrimitiveType, MinVertexIndex, NumVertices, PrimitiveCount,
-@@ -1831,6 +2152,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
+@@ -1831,6 +2183,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
               "indices at %08x",
               g_draws, prim_name(arg(c, 1)), arg(c, 4), arg(c, 3), arg(c, 8), arg(c, 7), arg(c, 5));
      if (ComObj *dev = this_device9(c); dev && gpu_on()) {
@@ -977,7 +1019,7 @@ index 1973efb..d615390 100644
          HostD9Draw d{};
          d.primitive = arg(c, 1);
          d.primitive_count = arg(c, 4);
-@@ -1844,9 +2166,9 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
+@@ -1844,9 +2197,9 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
              d.inline_indices = gm_ptr(arg(c, 5));
              d.inline_index_bytes = ibytes;
              d.index_size = isize;
@@ -989,7 +1031,7 @@ index 1973efb..d615390 100644
          return;
      }
      D9DrawCall call;
-@@ -1856,8 +2178,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
+@@ -1856,8 +2209,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
      call.stride = arg(c, 8);
      call.indices = arg(c, 5);
      call.index_size = arg(c, 6) == 102 ? 4 : 2;
@@ -999,7 +1041,31 @@ index 1973efb..d615390 100644
  }
  
  // ---------------------------------------------------------------------------
-@@ -2258,6 +2579,14 @@ static const ComMethod g_decl9[] = {
+@@ -1885,7 +2237,22 @@ RES_STUB(Tex, AddDirtyRect)
+ RES_STUB(Tex, AddDirtyRectCube)
+ RES_STUB(Surf, GetDC)
+ RES_STUB(Surf, ReleaseDC)
+-RES_STUB(Decl, GetDeclaration)
++
++// The element array is opaque to the host except for these tokens; keep the
++// exact copy CreateVertexDeclaration made so a guest can read it back.
++void Decl_GetDeclaration(X86 *c) {
++    ComObj *d = com_this_arg(c);
++    uint32_t elems = arg(c, 1), count = arg(c, 2);
++    if (!d || d->kind != K_D3D9DECL || !count) {
++        com_ret(c, D3DERR_INVALIDCALL);
++        return;
++    }
++    uint32_t n = (uint32_t)(d->blob.size() / 8);
++    if (elems && n)
++        memcpy(gm_ptr(elems), d->blob.data(), d->blob.size());
++    wr32(count, n);
++    com_ret(c, D3D_OK9);
++}
+ 
+ // (this, riid, ppContainer): the texture a level or face belongs to, or the
+ // device when the surface stands alone.
+@@ -2258,6 +2625,14 @@ static const ComMethod g_decl9[] = {
      {"GetDeclaration", 3, Decl_GetDeclaration},
  };
  
@@ -1014,7 +1080,134 @@ index 1973efb..d615390 100644
  static const ComMethod g_query9[] = {
      {"QueryInterface", 3, com_QueryInterface},
      {"AddRef", 1, com_AddRef},
-@@ -2593,6 +2922,15 @@ void d3d9_register() {
+@@ -2361,6 +2736,126 @@ void Dev_SetRenderState(X86 *c) {
+     com_ret(c, D3D_OK9);
+ }
+ 
++// A four-float vector of the structure at `at`, copied as bits so a NaN or a
++// denormal reaches the shader unchanged.
++static void read_vec4(float *dst, uint32_t at) {
++    for (int i = 0; i < 4; ++i) {
++        uint32_t bits = rd32(at + 4u * (uint32_t)i);
++        memcpy(&dst[i], &bits, 4);
++    }
++}
++
++// `count` floats of the structure at `at`, for the three-float members.
++static void read_vec(float *dst, uint32_t at, int count) {
++    for (int i = 0; i < count; ++i) {
++        uint32_t bits = rd32(at + 4u * (uint32_t)i);
++        memcpy(&dst[i], &bits, 4);
++    }
++}
++
++// (this, D3DMATERIAL9*): diffuse, ambient, specular and emissive RGBA, then the
++// specular exponent. A null pointer is accepted and leaves the material alone,
++// as D3D9 does. The structure is 68 bytes: four D3DCOLORVALUE and one float.
++void Dev_SetMaterial(X86 *c) {
++    ComObj *dev = this_device9(c);
++    uint32_t m = arg(c, 1);
++    if (dev && m) {
++        D9Material &mat = d9_pipeline(dev->id).material;
++        read_vec4(mat.diffuse, m);
++        read_vec4(mat.ambient, m + 16);
++        read_vec4(mat.specular, m + 32);
++        read_vec4(mat.emissive, m + 48);
++        read_vec(&mat.power, m + 64, 1);
++        d9_pipeline(dev->id).states_changed();
++    }
++    com_ret(c, D3D_OK9);
++}
++
++void Dev_GetMaterial(X86 *c) {
++    ComObj *dev = this_device9(c);
++    uint32_t m = arg(c, 1);
++    if (dev && m) {
++        D9Material &mat = d9_pipeline(dev->id).material;
++        const float *vec4[4] = {mat.diffuse, mat.ambient, mat.specular, mat.emissive};
++        for (int k = 0; k < 4; ++k)
++            for (int i = 0; i < 4; ++i) {
++                uint32_t bits;
++                memcpy(&bits, &vec4[k][i], 4);
++                wr32(m + 16u * (uint32_t)k + 4u * (uint32_t)i, bits);
++            }
++        uint32_t bits;
++        memcpy(&bits, &mat.power, 4);
++        wr32(m + 64, bits);
++    }
++    com_ret(c, D3D_OK9);
++}
++
++// (this, Index, const D3DLIGHT9*). The structure is 104 bytes:
++//   +0 Type, +4 Diffuse, +20 Specular, +36 Ambient (D3DCOLORVALUE each),
++//   +52 Position and +64 Direction (three floats each),
++//   +76 Range, +80 Falloff, +84 Attenuation0, +88 Attenuation1, +92 Attenuation2.
++void Dev_SetLight(X86 *c) {
++    ComObj *dev = this_device9(c);
++    uint32_t index = arg(c, 1), l = arg(c, 2);
++    if (dev && index < 8 && l) {
++        D9Light &light = d9_pipeline(dev->id).light[index];
++        light.type = rd32(l);
++        read_vec4(light.diffuse, l + 4);
++        read_vec4(light.specular, l + 20);
++        read_vec4(light.ambient, l + 36);
++        read_vec(light.position, l + 52, 3);
++        read_vec(light.direction, l + 64, 3);
++        read_vec(&light.range, l + 76, 1);
++        read_vec(&light.falloff, l + 80, 1);
++        read_vec(light.attenuation, l + 84, 3);
++        d9_pipeline(dev->id).states_changed();
++    }
++    com_ret(c, D3D_OK9);
++}
++
++void Dev_GetLight(X86 *c) {
++    ComObj *dev = this_device9(c);
++    uint32_t index = arg(c, 1), l = arg(c, 2);
++    if (dev && index < 8 && l) {
++        D9Light &light = d9_pipeline(dev->id).light[index];
++        wr32(l, light.type);
++        const float *vec4[3] = {light.diffuse, light.specular, light.ambient};
++        for (int k = 0; k < 3; ++k)
++            for (int i = 0; i < 4; ++i) {
++                uint32_t bits;
++                memcpy(&bits, &vec4[k][i], 4);
++                wr32(l + 4u + 16u * (uint32_t)k + 4u * (uint32_t)i, bits);
++            }
++        const float *scalars[3] = {light.position, light.direction, light.attenuation};
++        const uint32_t at[3] = {52u, 64u, 84u};
++        const int count[3] = {3, 3, 3};
++        for (int k = 0; k < 3; ++k)
++            for (int i = 0; i < count[k]; ++i) {
++                uint32_t bits;
++                memcpy(&bits, &scalars[k][i], 4);
++                wr32(l + at[k] + 4u * (uint32_t)i, bits);
++            }
++        const float *single[2] = {&light.range, &light.falloff};
++        const uint32_t single_at[2] = {76u, 80u};
++        for (int k = 0; k < 2; ++k) {
++            uint32_t bits;
++            memcpy(&bits, single[k], 4);
++            wr32(l + single_at[k], bits);
++        }
++    }
++    com_ret(c, D3D_OK9);
++}
++
++void Dev_LightEnable(X86 *c) {
++    ComObj *dev = this_device9(c);
++    uint32_t index = arg(c, 1);
++    if (dev && index < 8) {
++        d9_pipeline(dev->id).light[index].enabled = arg(c, 2) != 0;
++        d9_pipeline(dev->id).states_changed();
++    }
++    com_ret(c, D3D_OK9);
++}
++
+ // (this, Sampler, Type, Value)
+ void Dev_SetSamplerState(X86 *c) {
+     ComObj *dev = this_device9(c);
+@@ -2593,6 +3088,15 @@ void d3d9_register() {
      com_bind(IF_D3DINDEXBUFFER9, K_D3D9IB);
      com_bind(IF_D3DVERTEXDECL9, K_D3D9DECL);
      com_bind(IF_D3DQUERY9, K_D3D9QUERY);
@@ -1031,18 +1224,56 @@ index 1973efb..d615390 100644
          com_set_destructor(k, d3d9_resource_destroy);
      com_set_destructor(K_D3D9QUERY, query_destroy);
 diff --git a/dx/d3d9_pipeline.h b/dx/d3d9_pipeline.h
-index cc84cf4..7cef5bc 100644
+index cc84cf4..519e256 100644
 --- a/dx/d3d9_pipeline.h
 +++ b/dx/d3d9_pipeline.h
-@@ -61,6 +61,7 @@ struct D9Pipeline {
+@@ -33,6 +33,32 @@ struct D9ShaderBytes {
+     }
+ };
+ 
++// D3DLIGHT9, as the guest passes it: the type, then diffuse, specular and
++// ambient as RGBA, then position and direction as three floats, range, falloff
++// and the three attenuation coefficients.
++struct D9Light {
++    uint32_t type = 1;          // D3DLIGHT_POINT when the guest has set none
++    bool enabled = false;
++    float diffuse[4] = {};      // RGBA, 0..1
++    float specular[4] = {};
++    float ambient[4] = {};
++    float position[3] = {};
++    float direction[3] = {0, 0, 1};
++    float range = 0.0f;
++    float falloff = 0.0f;
++    float attenuation[3] = {1.0f, 0.0f, 0.0f};
++};
++
++// D3DMATERIAL9: diffuse, ambient, specular and emissive, each RGBA, plus the
++// specular exponent.
++struct D9Material {
++    float diffuse[4] = {1, 1, 1, 1};
++    float ambient[4] = {0, 0, 0, 1};
++    float specular[4] = {1, 1, 1, 1};
++    float emissive[4] = {0, 0, 0, 1};
++    float power = 0.0f;
++};
++
+ struct D9Pipeline {
+     D9ShaderBytes vs, ps;                // bound shader bytecode, empty for none
+     uint64_t vs_key = 0, ps_key = 0;     // d9sh::code_key of each, 0 for none
+@@ -61,13 +87,22 @@ struct D9Pipeline {
      Stream stream[8];
      uint32_t index_buffer = 0;
      uint32_t declaration = 0;
 +    uint32_t fvf = 0, fvf_cached = 0, fvf_declaration = 0;
      uint32_t color_target[4] = {}; // render target 0 lives on the device too
      int32_t scissor[4] = {};       // left, top, right, bottom
++    // Fixed-function lighting inputs. The device keeps them here rather than in
++    // the render state table because each is a structure, and a draw reads them
++    // the same way it reads the transforms.
++    D9Material material;
++    D9Light light[8];              // D3D caps fixed-function lights at eight
      const char *label = nullptr;   // effect/technique/pass that bound the shaders, for diagnostics
-@@ -68,6 +69,9 @@ struct D9Pipeline {
+ 
      // Direct3D 9's documented defaults. ZENABLE also depends on whether the
      // device was made with a depth buffer; CreateDevice and Reset set it.
      D9Pipeline() {
@@ -1052,7 +1283,7 @@ index cc84cf4..7cef5bc 100644
          auto f = [](float x) {
              uint32_t b;
              memcpy(&b, &x, 4);
-@@ -125,6 +129,7 @@ struct D9Pipeline {
+@@ -125,6 +160,7 @@ struct D9Pipeline {
              tss[i][5] = 2;
              tss[i][6] = 1;
              tss[i][11] = (uint32_t)i; // TEXCOORDINDEX
@@ -2170,7 +2401,7 @@ index cae581c..5264e4e 100644
          Tex *bound[16];
          for (uint32_t s = 0; s < 16; ++s) {
 diff --git a/host/gpu/webgpu/d3d9_webgpu.cpp b/host/gpu/webgpu/d3d9_webgpu.cpp
-index 03c2df2..bf7bc85 100644
+index 03c2df2..098b7a1 100644
 --- a/host/gpu/webgpu/d3d9_webgpu.cpp
 +++ b/host/gpu/webgpu/d3d9_webgpu.cpp
 @@ -576,8 +576,8 @@ class WebGpuRenderer final : public D9Backend {
@@ -2184,7 +2415,18 @@ index 03c2df2..bf7bc85 100644
          if (!vmod || !fmod) {
              skip("untranslated shader");
              return;
-@@ -1429,14 +1429,15 @@ class WebGpuRenderer final : public D9Backend {
+@@ -637,6 +637,10 @@ class WebGpuRenderer final : public D9Backend {
+         ps.bias = (int32_t)std::lround(bias * 16777215.0f);
+         ps.slope = slope;
+         ps.colors = d9msl::pixel_color_outputs(pp);
++        ps.index_format = (d.index_buffer || d.inline_indices)
++                              ? (d.index_size == 4 ? WGPUIndexFormat_Uint32
++                                                   : WGPUIndexFormat_Uint16)
++                              : WGPUIndexFormat_Undefined;
+         WGPURenderPipeline pso = pipeline(ps, vkey);
+         if (!pso) {
+             skip("no pipeline");
+@@ -1429,14 +1433,15 @@ class WebGpuRenderer final : public D9Backend {
  
      // ---- shaders and pipelines ---------------------------------------------------
      WGPUShaderModule module(uint64_t code_key, const d9sh::Program &p, const d9msl::PixelVariant &v,
@@ -2204,6 +2446,34 @@ index 03c2df2..bf7bc85 100644
          WGPUShaderModule m = nullptr;
          if (ok) {
              WGPUShaderSourceWGSL s = WGPU_SHADER_SOURCE_WGSL_INIT;
+@@ -1606,12 +1611,14 @@ class WebGpuRenderer final : public D9Backend {
+         int32_t bias;
+         float slope;
+         uint32_t colors;
++        WGPUIndexFormat index_format = WGPUIndexFormat_Undefined;
+     };
+     WGPURenderPipeline pipeline(const PipeState &p, uint64_t vkey) {
+         const uint32_t *rs = p.rs;
+         uint64_t key = mix(mix((uint64_t)(uintptr_t)p.vmod, (uint64_t)(uintptr_t)p.fmod), vkey);
+         key = mix(key, (uint64_t)p.topology | (uint64_t)p.cull << 8 |
+-                           (uint64_t)pass_samples_ << 16 | (uint64_t)pass_color_count_ << 24);
++                           (uint64_t)pass_samples_ << 16 | (uint64_t)pass_color_count_ << 24 |
++                           (uint64_t)p.index_format << 32);
+         key = mix(key, (uint64_t)(uintptr_t)p.layout->pipeline);
+         for (int i = 0; i < 4; ++i)
+             key = mix(key, (uint64_t)pass_formats_[i] + 1000 * (uint64_t)i);
+@@ -1729,8 +1736,10 @@ class WebGpuRenderer final : public D9Backend {
+         pd.vertex.bufferCount = p.vl->buffers.size();
+         pd.vertex.buffers = p.vl->buffers.data();
+         pd.primitive.topology = p.topology;
++        // WebGPU requires a concrete strip index format for indexed strip
++        // draws. Undefined remains valid for non-indexed strips.
+         if (strip)
+-            pd.primitive.stripIndexFormat = WGPUIndexFormat_Undefined;
++            pd.primitive.stripIndexFormat = p.index_format;
+         pd.primitive.frontFace = WGPUFrontFace_CW;
+         pd.primitive.cullMode = p.cull;
+         pd.depthStencil = pass_depth_view_ ? &ds : nullptr;
 diff --git a/host/input_gate.cpp b/host/input_gate.cpp
 index 2dd011b..49f466a 100644
 --- a/host/input_gate.cpp
@@ -2809,7 +3079,7 @@ index d01eb0a..c93671a 100644
 +// Called synchronously on the guest baton holder; it must not mutate guest state.
 +extern "C" void recomp_unknown_diagnostic(X86 *c, uint32_t target);
 diff --git a/runtime/interp.cpp b/runtime/interp.cpp
-index b210e66..158239a 100644
+index b210e66..823610c 100644
 --- a/runtime/interp.cpp
 +++ b/runtime/interp.cpp
 @@ -1,9 +1,15 @@
@@ -2858,16 +3128,27 @@ index b210e66..158239a 100644
      CALL, // direct: target; indirect: src
      RET,
      JMP,
-@@ -35,6 +53,8 @@ enum Op : uint8_t {
+@@ -35,6 +53,9 @@ enum Op : uint8_t {
      // A JMP whose target is a translated entry: a tail call out of this
      // routine, which the address table places rather than this interpreter.
      JMPOUT,
 +    CLD, // DF = 0
 +    STD, // DF = 1
++    SETCC, // byte dst = condition
  };
  
  // A register or memory operand. kind 0: none, 1: register, 2: memory,
-@@ -52,6 +72,10 @@ struct Ins {
+@@ -45,6 +66,9 @@ struct Operand {
+     int8_t base = -1, index = -1;
+     uint8_t scale = 1;
+     int32_t disp = 0;
++    // An FS segment override, which addresses the guest's TEB through
++    // fs_base instead of the flat address the ModRM bytes describe.
++    bool fs = false;
+ };
+ 
+ struct Ins {
+@@ -52,6 +76,10 @@ struct Ins {
      uint8_t len = 0;
      Op op = NOP;
      uint8_t cond = 0;
@@ -2878,7 +3159,7 @@ index b210e66..158239a 100644
      Operand dst, src;
      int32_t imm3 = 0; // IMUL r, r/m, imm
      bool has_imm3 = false;
-@@ -59,6 +83,8 @@ struct Ins {
+@@ -59,6 +87,8 @@ struct Ins {
      uint32_t target_index = 0; // JMP, Jcc: `target`'s index in Routine::code
      bool indirect = false;
      uint16_t ret_pop = 0;
@@ -2887,9 +3168,20 @@ index b210e66..158239a 100644
  };
  
  // How far the decoder reads before it gives up looking for the last RET.
-@@ -156,9 +182,83 @@ bool decode(uint32_t a, Ins &in) {
+@@ -155,10 +185,94 @@ bool decode(uint32_t a, Ins &in) {
+     uint8_t b = rd8(p++);
      uint8_t reg = 0;
      unsigned n;
++    // FS segment override. The guest reaches its thread environment block and
++    // TLS array through fs:[disp], and every frame-based SEH epilogue stores
++    // the previous handler back with `mov fs:[0], ecx`. The prefix carries no
++    // other meaning here: the flat selectors are all the guest's own, so only
++    // the FS base is added to the effective address.
++    bool fs = false;
++    while (b == 0x64) {
++        fs = true;
++        b = rd8(p++);
++    }
      switch (b) {
 +    case 0x66: {
 +        // Admit only register/memory MOV for this operand-size override.
@@ -2971,7 +3263,7 @@ index b210e66..158239a 100644
      case 0x01:
      case 0x09:
      case 0x21:
-@@ -192,6 +292,45 @@ bool decode(uint32_t a, Ins &in) {
+@@ -192,6 +306,45 @@ bool decode(uint32_t a, Ins &in) {
          in.src = to_reg ? rm : reg_operand(reg);
          break;
      }
@@ -3017,7 +3309,27 @@ index b210e66..158239a 100644
      case 0x05:
      case 0x0d:
      case 0x25:
-@@ -209,11 +348,36 @@ bool decode(uint32_t a, Ins &in) {
+@@ -203,17 +356,56 @@ bool decode(uint32_t a, Ins &in) {
+         in.src = imm_operand((int32_t)rd32(p));
+         p += 4;
+         break;
++    case 0x04:
++    case 0x0c:
++    case 0x24:
++    case 0x2c:
++    case 0x34:
++    case 0x3c:
++        // AL, imm8: the CRT and this game's own helpers use it to mask a
++        // byte flag straight out of a struct field (e.g. AND AL,7).
++        in.op = kGroup1[(b >> 3) & 7];
++        in.dst = reg_operand(R_EAX);
++        in.src = imm_operand((int32_t)rd8(p));
++        p += 1;
++        in.width = 1;
++        break;
+     case 0xa9: // TEST EAX,imm32
+         in.op = TEST;
+         in.dst = reg_operand(R_EAX);
          in.src = imm_operand((int32_t)rd32(p));
          p += 4;
          break;
@@ -3056,10 +3368,21 @@ index b210e66..158239a 100644
          in.op = TEST;
          in.dst = rm;
          in.src = imm_operand((int32_t)rd32(p));
-@@ -338,6 +502,15 @@ bool decode(uint32_t a, Ins &in) {
+@@ -338,6 +530,26 @@ bool decode(uint32_t a, Ins &in) {
              in.cond = b2 & 15;
              in.target = p + 4 + rd32(p);
              p += 4;
++        } else if (b2 >= 0x90 && b2 <= 0x9f) {
++            // SETcc r/m8: the CRT's comparison helpers end with it, and the
++            // result is a byte flag the caller tests.
++            Operand rm;
++            if (!(n = modrm(p, rm, reg)) || reg != 0)
++                return false;
++            p += n;
++            in.op = SETCC;
++            in.cond = b2 & 15;
++            in.width = 1;
++            in.dst = rm;
 +        } else if (b2 == 0xbe || b2 == 0xbf || b2 == 0xb6 || b2 == 0xb7) {
 +            Operand rm;
 +            if (!(n = modrm(p, rm, reg)))
@@ -3072,7 +3395,7 @@ index b210e66..158239a 100644
          } else if (b2 == 0xaf) {
              Operand rm;
              if (!(n = modrm(p, rm, reg)))
-@@ -352,7 +525,11 @@ bool decode(uint32_t a, Ins &in) {
+@@ -352,7 +564,11 @@ bool decode(uint32_t a, Ins &in) {
          break;
      }
      default:
@@ -3085,7 +3408,7 @@ index b210e66..158239a 100644
              in.op = b < 0x48 ? INC : DEC;
              in.dst = reg_operand(b & 7);
          } else if (b >= 0x50 && b <= 0x57) {
-@@ -366,6 +543,11 @@ bool decode(uint32_t a, Ins &in) {
+@@ -366,6 +582,11 @@ bool decode(uint32_t a, Ins &in) {
              in.cond = b & 15;
              in.target = p + 1 + (int8_t)rd8(p);
              p += 1;
@@ -3097,7 +3420,29 @@ index b210e66..158239a 100644
          } else if (b >= 0xb8 && b <= 0xbf) {
              in.op = MOV;
              in.dst = reg_operand(b & 7);
-@@ -522,6 +704,64 @@ void store_mem(X86 *c, const Operand &o, uint32_t v) {
+@@ -376,6 +597,12 @@ bool decode(uint32_t a, Ins &in) {
+         }
+     }
+     in.len = (uint8_t)(p - a);
++    if (fs) {
++        if (in.dst.kind == 2)
++            in.dst.fs = true;
++        if (in.src.kind == 2)
++            in.src.fs = true;
++    }
+     return true;
+ }
+ 
+@@ -477,6 +704,8 @@ uint32_t address_of(const X86 *c, const Operand &o) {
+         a += c->r[o.base];
+     if (o.index >= 0)
+         a += c->r[o.index] * o.scale;
++    if (o.fs)
++        a += c->fs_base;
+     return a;
+ }
+ 
+@@ -522,6 +751,64 @@ void store_mem(X86 *c, const Operand &o, uint32_t v) {
      wr32(a, v);
  }
  
@@ -3162,7 +3507,7 @@ index b210e66..158239a 100644
  void push(X86 *c, uint32_t v) {
      c->r[R_ESP] -= 4;
      if (!readable(c->r[R_ESP], 4)) {
-@@ -561,13 +801,14 @@ struct Flags {
+@@ -561,13 +848,14 @@ struct Flags {
      Op op = NOP; // NOP: nothing pending, c->eflags_* are current
      uint32_t a = 0, b = 0, res = 0;
      uint8_t cf = 0, of = 0; // IMUL computes these itself
@@ -3178,7 +3523,7 @@ index b210e66..158239a 100644
  }
  uint32_t flag_pf(const Flags &f) {
      return parity(f.res);
-@@ -589,18 +830,19 @@ uint32_t flag_cf(const X86 *c, const Flags &f) {
+@@ -589,18 +877,19 @@ uint32_t flag_cf(const X86 *c, const Flags &f) {
      }
  }
  uint32_t flag_of(const X86 *c, const Flags &f) {
@@ -3202,7 +3547,7 @@ index b210e66..158239a 100644
      default:
          (void)c;
          return 0;
-@@ -672,6 +914,43 @@ bool condition(const X86 *c, const Flags &f, uint8_t cc) {
+@@ -672,6 +961,43 @@ bool condition(const X86 *c, const Flags &f, uint8_t cc) {
      return (cc & 1) ? !v : v;
  }
  
@@ -3246,7 +3591,7 @@ index b210e66..158239a 100644
  // What is left of the outermost interp_call's step budget. A CALL inside a
  // heap routine goes back through recomp_call and can land in the interpreter
  // again, so the budget is shared across that nesting rather than renewed by
-@@ -692,6 +971,8 @@ void run(X86 *c, const Routine &r) {
+@@ -692,6 +1018,8 @@ void run(X86 *c, const Routine &r) {
      Flags f;
      for (;;) {
          const Ins &in = *ip;
@@ -3255,7 +3600,7 @@ index b210e66..158239a 100644
          if (g_steps_left == 0) {
              snprintf(g_error, sizeof g_error, "no RET within %u instructions (at %08x)", kMaxSteps,
                       in.addr);
-@@ -702,9 +983,29 @@ void run(X86 *c, const Routine &r) {
+@@ -702,9 +1030,33 @@ void run(X86 *c, const Routine &r) {
          switch (in.op) {
          case NOP:
              break;
@@ -3281,12 +3626,16 @@ index b210e66..158239a 100644
 +                value = in.width == 1 ? uint32_t(int32_t(int8_t(value)))
 +                                      : uint32_t(int32_t(int16_t(value)));
 +            store(c, in.dst, value);
++            break;
++        }
++        case SETCC: {
++            store8(c, in.dst, condition(c, f, in.cond) ? 1u : 0u);
              break;
 +        }
          case MOV8: {
              uint32_t a = address_of(c, in.dst);
              if (!readable(a, 1)) {
-@@ -714,49 +1015,104 @@ void run(X86 *c, const Routine &r) {
+@@ -714,49 +1066,104 @@ void run(X86 *c, const Routine &r) {
              wr8(a, (uint8_t)in.src.disp);
              break;
          }
@@ -3410,7 +3759,7 @@ index b210e66..158239a 100644
              break;
          }
          case IMUL: {
-@@ -788,11 +1144,73 @@ void run(X86 *c, const Routine &r) {
+@@ -788,11 +1195,73 @@ void run(X86 *c, const Routine &r) {
              store(c, in.dst, v);
              break;
          }
@@ -3484,7 +3833,7 @@ index b210e66..158239a 100644
              break;
          }
          case RET:
-@@ -818,11 +1236,20 @@ void run(X86 *c, const Routine &r) {
+@@ -818,11 +1287,20 @@ void run(X86 *c, const Routine &r) {
  
  } // namespace
  
@@ -3506,7 +3855,7 @@ index b210e66..158239a 100644
      const uint32_t entry_esp = c->r[R_ESP];
      if (g_depth++ == 0)
          g_steps_left = kMaxSteps;
-@@ -834,6 +1261,17 @@ extern "C" int interp_call(X86 *c, uint32_t target) {
+@@ -834,6 +1312,17 @@ extern "C" int interp_call(X86 *c, uint32_t target) {
      try {
          run(c, *r);
      } catch (const Fault &) {
@@ -3554,7 +3903,7 @@ index 0cefcbe..8e0159e 100644
  const char *interp_last_error(void);
  
 diff --git a/runtime/kernel32.cpp b/runtime/kernel32.cpp
-index 529d27d..05177ab 100644
+index 529d27d..63745e2 100644
 --- a/runtime/kernel32.cpp
 +++ b/runtime/kernel32.cpp
 @@ -98,8 +98,9 @@ struct HObj {
@@ -3751,7 +4100,44 @@ index 529d27d..05177ab 100644
  void k_WriteFile(X86 *c) {
      uint32_t h = arg(c, 0), buf = arg(c, 1), want = arg(c, 2), pwrote = arg(c, 3);
      HObj *o = handle_any(h);
-@@ -1245,7 +1364,14 @@ void k_GetProcAddress(X86 *c) {
+@@ -1145,6 +1264,36 @@ uint32_t call_dll_entry(X86 *c, const LoaderModule &m, uint32_t reason) {
+     return result;
+ }
+ 
++// A statically imported DLL is attached by the Windows loader before the EXE
++// entry point, independently of any LoadLibrary call. Auxiliary images are
++// mapped but not attached by loader_load, so do the attach here once process
++// startup reaches a guest context. The load reference is owned by the import
++// table and never released, matching the loader's process-lifetime reference.
++bool attach_auxiliary(X86 *c) {
++    for (uint32_t i = 0; i < loader_module_count(); ++i) {
++        const LoaderModule *listed = loader_module(i);
++        if (!listed || listed->attached)
++            continue;
++        LoaderModule *m = loader_module_named(listed->name.c_str());
++        if (!m)
++            continue;
++        if (!m->entry || recomp_module_lookup(m->entry) < 0) {
++            LOGV("%s: DLL entry %08x is not translated, not run", m->name.c_str(), m->entry);
++            continue;
++        }
++        m->attached = true;
++        m->load_refs = 1;
++        if (!call_dll_entry(c, *m, 1)) { // DLL_PROCESS_ATTACH
++            call_dll_entry(c, *m, 0);    // failed attach still receives detach
++            m->attached = false;
++            m->load_refs = 0;
++            LOGW("%s: DLL_PROCESS_ATTACH failed", m->name.c_str());
++            return false;
++        }
++    }
++    return true;
++}
++
+ void load_library_named(X86 *c, const std::string &module_name) {
+     std::string name = library_name(module_name);
+     auto it = modules().find(name);
+@@ -1245,7 +1394,14 @@ void k_GetProcAddress(X86 *c) {
              dll = kv.first;
              break;
          }
@@ -3767,7 +4153,19 @@ index 529d27d..05177ab 100644
      if (!a) {
          log_once(("gpa:" + dll + "!" + proc).c_str(),
                   "GetProcAddress(%s, \"%s\") -> 0 (no shim registered)",
-@@ -1501,6 +1627,10 @@ void k_GetDriveTypeA(X86 *c) {
+@@ -1302,6 +1458,11 @@ void k_GetCommandLineA(X86 *c) {
+     get_command_line(c);
+ }
+ } // namespace
++
++bool loader_attach_auxiliary(X86 *c) {
++    return attach_auxiliary(c);
++}
++
+ void win32_reset_command_line_for_test() {
+     kernel32_wide_reset_command_line();
+     g_cmdline_addr = 0;
+@@ -1501,6 +1662,10 @@ void k_GetDriveTypeA(X86 *c) {
  // drives simulation: 004a5590 uses 005cd92c/005cd930 and the real clock.
  // Return the draw deadline to retire after reading the real host time.
  static uint32_t native_frame_clock(X86 *c) {
@@ -3778,7 +4176,7 @@ index 529d27d..05177ab 100644
      using Clock = std::chrono::steady_clock;
      static FrameDeadline deadline;
      static int active = 0;
-@@ -1537,6 +1667,12 @@ static uint32_t native_frame_clock(X86 *c) {
+@@ -1537,6 +1702,12 @@ static uint32_t native_frame_clock(X86 *c) {
          return RECOMP_HOOK_FRAME_CLOCK_WAIT_DEADLINE;
      }
      return 0;
@@ -3791,7 +4189,7 @@ index 529d27d..05177ab 100644
  }
  void k_GetTickCount(X86 *c) {
      const uint32_t draw_deadline = native_frame_clock(c);
-@@ -1728,6 +1864,26 @@ void k_InitializeCriticalSection(X86 *c) {
+@@ -1728,6 +1899,26 @@ void k_InitializeCriticalSection(X86 *c) {
      }
      set_eax(c, 0);
  }
@@ -3818,7 +4216,7 @@ index 529d27d..05177ab 100644
  void k_EnterCriticalSection(X86 *c) {
      imports_call_leaves_surfaces();
      sched_enter_critsec(arg(c, 0));
-@@ -1775,6 +1931,11 @@ void k_ReleaseSemaphore(X86 *c) {
+@@ -1775,6 +1966,11 @@ void k_ReleaseSemaphore(X86 *c) {
      }
      o->count += n;
      set_eax(c, 1);
@@ -3830,7 +4228,43 @@ index 529d27d..05177ab 100644
  }
  
  void k_CreateEventA(X86 *c) {
-@@ -3373,7 +3534,16 @@ void k_SetThreadPriority(X86 *c) {
+@@ -1822,6 +2018,12 @@ void k_WaitForSingleObject(X86 *c) {
+     set_eax(c, sched_wait_objects(&h, 1, false, arg(c, 1)));
+ }
+ 
++// The alertable flag only affects APC delivery, which no guest thread queues.
++void k_WaitForSingleObjectEx(X86 *c) {
++    uint32_t h = arg(c, 0);
++    set_eax(c, sched_wait_objects(&h, 1, false, arg(c, 1)));
++}
++
+ void k_WaitForMultipleObjects(X86 *c) {
+     wait_multiple_objects(c);
+ }
+@@ -2789,6 +2991,22 @@ void sched_checkpoint() {
+     guest_yield();
+ }
+ 
++// Direct translated calls are scheduling checkpoints too, not just imports.
++// RetryLoadFile, for example, polls a worker-owned read entry through ordinary
++// translated calls and never enters the runtime while the read is pending, so
++// the runnable worker would wait forever for a baton only a guest import could
++// hand it.  Sampling every 64th call keeps the clock read off the hot path;
++// sched_checkpoint still applies its one-per-millisecond limit, its single-
++// thread fast path and its atomic-stretch test.
++static __thread uint32_t t_guest_call_checkpoints = 0;
++
++void recomp_guest_checkpoint() {
++    if (++t_guest_call_checkpoints < 64)
++        return;
++    t_guest_call_checkpoints = 0;
++    sched_checkpoint();
++}
++
+ namespace {
+ 
+ // A shim that changed an object's state calls this so a thread blocked on it
+@@ -3373,7 +3591,16 @@ void k_SetThreadPriority(X86 *c) {
  }
  
  void k_ExitProcess(X86 *c) {
@@ -3848,7 +4282,22 @@ index 529d27d..05177ab 100644
      if (request_process_exit(arg(c, 0)))
          return; // never returns
      publish_process_exit(arg(c, 0));
-@@ -3943,6 +4113,86 @@ void k_GetLocaleInfoW(X86 *c) {
+@@ -3594,6 +3821,14 @@ void k_lstrlenA(X86 *c) {
+     set_eax(c, (uint32_t)gm_str(arg(c, 0)).size());
+ }
+ 
++// Case-insensitive lexicographic comparison with the lstrcmpiA return
++// convention: <0, 0, >0.
++void k_lstrcmpiA(X86 *c) {
++    std::string a = gm_str(arg(c, 0)), b = gm_str(arg(c, 1));
++    int r = os_strcasecmp(a.c_str(), b.c_str());
++    set_eax(c, r < 0 ? 0xffffffffu : (uint32_t)r);
++}
++
+ void k_lstrcpyA(X86 *c) {
+     uint32_t d = arg(c, 0);
+     std::string s = gm_str(arg(c, 1));
+@@ -3943,6 +4178,86 @@ void k_GetLocaleInfoW(X86 *c) {
  
  } // namespace
  
@@ -3935,7 +4384,7 @@ index 529d27d..05177ab 100644
  // ---------------------------------------------------------------------------
  // The run thread's own ending.
  //
-@@ -4218,6 +4468,7 @@ void create_file_named(X86 *c, const std::string &name) {
+@@ -4218,6 +4533,7 @@ void create_file_named(X86 *c, const std::string &name) {
      uint32_t h = handle_new(H_FILE);
      handles()[h].fd = fd;
      handles()[h].path = host;
@@ -3943,7 +4392,7 @@ index 529d27d..05177ab 100644
      if (deferred) {
          handles()[h].write_pending = true;
          handles()[h].write_flags = wanted;
-@@ -4849,7 +5100,7 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4849,7 +5165,7 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "GetTimeFormatA", 6, nullptr},
      {"KERNEL32.dll", "GetDiskFreeSpaceExA", 4, nullptr},
      {"KERNEL32.dll", "GetLongPathNameA", 3, nullptr},
@@ -3952,7 +4401,7 @@ index 529d27d..05177ab 100644
      {"KERNEL32.dll", "HeapValidate", 3, nullptr},
      {"KERNEL32.dll", "QueueUserAPC", 3, nullptr},
      {"KERNEL32.dll", "SetConsoleCtrlHandler", 2, nullptr},
-@@ -4864,6 +5115,9 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4864,6 +5180,9 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "InterlockedDecrement", 1, k_InterlockedDecrement},
      {"KERNEL32.dll", "InterlockedExchange", 2, k_InterlockedExchange},
      {"KERNEL32.dll", "InitializeCriticalSection", 1, k_InitializeCriticalSection},
@@ -3962,6 +4411,22 @@ index 529d27d..05177ab 100644
      {"KERNEL32.dll", "EnterCriticalSection", 1, k_EnterCriticalSection},
      {"KERNEL32.dll", "LeaveCriticalSection", 1, k_LeaveCriticalSection},
      {"KERNEL32.dll", "DeleteCriticalSection", 1, k_DeleteCriticalSection},
+@@ -4874,6 +5193,7 @@ const ImportShim g_kernel32_shims[] = {
+     {"KERNEL32.dll", "ResetEvent", 1, k_ResetEvent},
+     {"KERNEL32.dll", "CreateMutexA", 3, k_CreateMutexA},
+     {"KERNEL32.dll", "WaitForSingleObject", 2, k_WaitForSingleObject},
++    {"KERNEL32.dll", "WaitForSingleObjectEx", 3, k_WaitForSingleObjectEx},
+     {"KERNEL32.dll", "WaitForMultipleObjects", 4, k_WaitForMultipleObjects},
+     // threads and process exit
+     {"KERNEL32.dll", "CreateThread", 6, k_CreateThread},
+@@ -4898,6 +5218,7 @@ const ImportShim g_kernel32_shims[] = {
+     {"KERNEL32.dll", "RtlUnwind", 4, k_RtlUnwind},
+     // strings, code pages, locale
+     {"KERNEL32.dll", "lstrlenA", 1, k_lstrlenA},
++    {"KERNEL32.dll", "lstrcmpiA", 2, k_lstrcmpiA},
+     {"KERNEL32.dll", "lstrcpyA", 2, k_lstrcpyA},
+     {"KERNEL32.dll", "lstrcatA", 2, k_lstrcatA},
+     {"KERNEL32.dll", "IsDBCSLeadByte", 1, k_IsDBCSLeadByte},
 diff --git a/runtime/kernel32_internal.h b/runtime/kernel32_internal.h
 index ad246b9..71156ad 100644
 --- a/runtime/kernel32_internal.h
@@ -3978,8 +4443,59 @@ index ad246b9..71156ad 100644
  void create_file_named(X86 *c, const std::string &name);
  void get_file_attributes_named(X86 *c, const std::string &name);
  void set_file_attributes_named(X86 *c, const std::string &name);
+diff --git a/runtime/kernel32_wide.cpp b/runtime/kernel32_wide.cpp
+index 85af1d5..6f3f9db 100644
+--- a/runtime/kernel32_wide.cpp
++++ b/runtime/kernel32_wide.cpp
+@@ -851,6 +851,38 @@ void k_FindResourceW(X86 *c) {
+     }
+     set_eax(c, entry);
+ }
++// ANSI resource identifiers are strings unless they fit in an integer.
++// resource_find reads wide names, so stage a temporary UTF-16 copy.
++static uint32_t ansi_resource_identifier(uint32_t value) {
++    if (value <= 0xffff)
++        return value;
++    std::string text = gm_str(value, 512);
++    uint32_t units = wide_units(text) + 1;
++    uint32_t staged = heap_alloc(units * 2);
++    if (!staged)
++        return 0;
++    gm_put_wstr(staged, text, units);
++    return staged;
++}
++void k_FindResourceA(X86 *c) {
++    if (!resource_module(arg(c, 0))) {
++        set_eax(c, 0);
++        return;
++    }
++    uint32_t type = ansi_resource_identifier(arg(c, 2));
++    uint32_t name = ansi_resource_identifier(arg(c, 1));
++    std::string why;
++    uint32_t entry = type && name ? resource_find(type, name, &why) : 0;
++    if (arg(c, 2) > 0xffff && type)
++        heap_free(type);
++    if (arg(c, 1) > 0xffff && name)
++        heap_free(name);
++    if (!entry) {
++        set_last_error(1814);
++        LOGV("FindResourceA: %s", why.c_str());
++    }
++    set_eax(c, entry);
++}
+ void k_LoadResource(X86 *c) {
+     uint32_t data = resource_module(arg(c, 0)) ? resource_data(arg(c, 1), nullptr) : 0;
+     if (!data)
+@@ -901,6 +933,7 @@ void k_EnumResourceNamesW(X86 *c) {
+ 
+ static const ImportShim g_kernel32_wide[] = {
+     {"KERNEL32.dll", "FindResourceW", 3, k_FindResourceW},
++    {"KERNEL32.dll", "FindResourceA", 3, k_FindResourceA},
+     {"KERNEL32.dll", "LoadResource", 2, k_LoadResource},
+     {"KERNEL32.dll", "LockResource", 1, k_LockResource},
+     {"KERNEL32.dll", "SizeofResource", 2, k_SizeofResource},
 diff --git a/runtime/loader.cpp b/runtime/loader.cpp
-index 75269f0..da96aba 100644
+index 75269f0..3d773fd 100644
 --- a/runtime/loader.cpp
 +++ b/runtime/loader.cpp
 @@ -305,7 +305,16 @@ struct AuxSpec {
@@ -4041,6 +4557,203 @@ index 75269f0..da96aba 100644
  
      if (g_entry != LOADER_EXPECTED_ENTRY)
          LOGW("entry point is %08x, expected %08x", g_entry, LOADER_EXPECTED_ENTRY);
+@@ -829,6 +848,11 @@ void run_entry(X86 *c) {
+     sched_set_guest_thread(true);
+     // ExitProcess/TerminateProcess/ExitThread-outside-a-thread longjmp here.
+     if (setjmp(*process_exit_jmp()) == 0) {
++        // Static imports are attached before the EXE entry point on Windows.
++        // Without this, an auxiliary CRT keeps its heap and per-thread data
++        // uninitialised even though its exported functions are resolvable.
++        if (!loader_attach_auxiliary(c))
++            return;
+         uint32_t count = 0;
+         for (uint32_t p = g_tls.callbacks; p && rva_ok(p - g_base, 4); p += 4) {
+             uint32_t cb = rd32(p);
+diff --git a/runtime/loader.h b/runtime/loader.h
+index bfe336c..1140cad 100644
+--- a/runtime/loader.h
++++ b/runtime/loader.h
+@@ -91,3 +91,9 @@ X86 *loader_context();
+ // Calls the PE entry point through recomp_call using loader_context().
+ void run_entry();
+ void run_entry(X86 *c);
++
++// Attaches the auxiliary modules that the Windows loader would have attached
++// for a static import before running the EXE entry point. The module keeps one
++// process-lifetime load reference, so a later LoadLibrary only adds another.
++// Returns false when a DllMain failed; the caller must not run the entry then.
++bool loader_attach_auxiliary(X86 *c);
+diff --git a/runtime/misc.cpp b/runtime/misc.cpp
+index 3c955d7..e66f702 100644
+--- a/runtime/misc.cpp
++++ b/runtime/misc.cpp
+@@ -811,6 +811,36 @@ void a_RegEnumKeyExW(X86 *c) {
+         wr64(arg(c, 7), 0);
+     set_eax(c, hr);
+ }
++uint32_t reg_write_name_ansi(const std::string &name, uint32_t out, uint32_t len) {
++    if (!len || !gm_valid(len, 4))
++        return 87;
++    uint32_t have = rd32(len), need = uint32_t(name.size());
++    wr32(len, need);
++    if (!out || have <= need)
++        return 234;
++    if (!gm_valid(out, need + 1))
++        return 87;
++    gm_put_str(out, name.c_str(), have);
++    return 0;
++}
++void a_RegEnumKeyExA(X86 *c) {
++    std::string path = key_path(arg(c, 0), "");
++    if (path.empty()) {
++        set_eax(c, 6);
++        return;
++    }
++    auto names = reg_children(path);
++    if (arg(c, 1) >= names.size()) {
++        set_eax(c, 259);
++        return;
++    }
++    uint32_t hr = reg_write_name_ansi(names[arg(c, 1)], arg(c, 2), arg(c, 3));
++    if (!hr && arg(c, 6))
++        hr = reg_write_name_ansi("", arg(c, 5), arg(c, 6));
++    if (!hr && arg(c, 7) && gm_valid(arg(c, 7), 8))
++        wr64(arg(c, 7), 0);
++    set_eax(c, hr);
++}
+ void a_RegEnumValueW(X86 *c) {
+     std::string path = key_path(arg(c, 0), "");
+     if (path.empty()) {
+@@ -879,6 +909,48 @@ void a_RegDeleteKeyW(X86 *c) {
+     g_registry_dirty = true;
+     set_eax(c, 0);
+ }
++void a_RegDeleteKeyA(X86 *c) {
++    std::string path = key_path(arg(c, 0), gm_str(arg(c, 1), 512));
++    if (path.empty()) {
++        set_eax(c, 6);
++        return;
++    }
++    if (!reg_children(path).empty()) {
++        set_eax(c, 5);
++        return;
++    }
++    if (!regstore().erase(path)) {
++        set_eax(c, 2);
++        return;
++    }
++    g_registry_dirty = true;
++    set_eax(c, 0);
++}
++// The Win16-era spelling: create or open lpSubKey and set its unnamed value
++// to lpData. REG_SZ is the only type this API supports.
++void a_RegSetValueA(X86 *c) {
++    std::string path = key_path(arg(c, 0), gm_str(arg(c, 1), 512));
++    if (path.empty()) {
++        set_eax(c, 6);
++        return;
++    }
++    if (arg(c, 2) != 1) { // REG_SZ
++        set_eax(c, 87);
++        return;
++    }
++    if (!regstore().count(path)) {
++        regstore()[path];
++        g_registry_dirty = true;
++    }
++    RegValue rv;
++    rv.type = 1;
++    uint32_t data = arg(c, 3), cb = arg(c, 4);
++    rv.str = data ? gm_str(data, cb && cb != 0xffffffffu ? cb : 0x8000) : std::string();
++    regstore()[path][""] = rv;
++    g_registry_dirty = true;
++    registry_flush();
++    set_eax(c, 0);
++}
+ void a_RegDeleteValueW(X86 *c) {
+     std::string path = key_path(arg(c, 0), "");
+     if (path.empty()) {
+@@ -972,6 +1044,31 @@ void o_CoTaskMemFree(X86 *c) {
+         heap_free(arg(c, 0));
+     set_eax(c, 0);
+ }
++// StringFromCLSID returns a CoTaskMemAlloc'd "{guid}" in the usual
++// 8-4-4-4-12 spelling. The GUID's first three fields are little-endian.
++void o_StringFromCLSID(X86 *c) {
++    uint32_t guid = arg(c, 0), out = arg(c, 1);
++    if (!guid || !gm_valid(guid, 16) || !out || !gm_valid(out, 4)) {
++        set_eax(c, 0x80070057u); // E_INVALIDARG
++        return;
++    }
++    const uint8_t *g = g_mem + guid;
++    uint32_t d1 = rd32(guid);
++    uint16_t d2 = rd16(guid + 4), d3 = rd16(guid + 6);
++    char text[64];
++    snprintf(text, sizeof text,
++             "{%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
++             (unsigned long)d1, d2, d3, g[8], g[9], g[10], g[11], g[12], g[13], g[14], g[15]);
++    uint32_t string = heap_alloc(78);
++    if (!string) {
++        wr32(out, 0);
++        set_eax(c, 0x8007000eu); // E_OUTOFMEMORY
++        return;
++    }
++    gm_put_wstr(string, text, 39);
++    wr32(out, string);
++    set_eax(c, 0);
++}
+ void o_IsEqualGUID(X86 *c) {
+     uint32_t a = arg(c, 0), b = arg(c, 1);
+     set_eax(c, a && b && gm_valid(a, 16) && gm_valid(b, 16) && !memcmp(g_mem + a, g_mem + b, 16));
+@@ -1061,6 +1158,21 @@ void w_gethostbyname(X86 *c) {
+              gm_str(arg(c, 0), 256).c_str());
+     set_eax(c, 0);
+ }
++void w_htons(X86 *c) {
++    uint32_t v = arg(c, 0) & 0xffff;
++    set_eax(c, ((v & 0xff) << 8) | ((v >> 8) & 0xff));
++}
++void w_inet_addr(X86 *c) {
++    std::string text = gm_str(arg(c, 0), 64);
++    unsigned a = 0, b = 0, c1 = 0, d = 0;
++    char tail = 0;
++    if (sscanf(text.c_str(), "%u.%u.%u.%u%c", &a, &b, &c1, &d, &tail) != 4 ||
++        a > 255 || b > 255 || c1 > 255 || d > 255) {
++        set_eax(c, 0xffffffffu); // INADDR_NONE
++        return;
++    }
++    set_eax(c, a | (b << 8) | (c1 << 16) | (d << 24));
++}
+ void w_inet_ntoa(X86 *c) {
+     // The returned pointer is reused across calls, as the real inet_ntoa does.
+     // heap_owns re-checks it because mem_init() invalidates the whole heap.
+@@ -2008,6 +2120,9 @@ const ImportShim g_misc_shims[] = {
+     {"ADVAPI32.dll", "RegCloseKey", 1, a_RegCloseKey},
+     {"ADVAPI32.dll", "RegQueryValueExA", 6, a_RegQueryValueExA},
+     {"ADVAPI32.dll", "RegSetValueExA", 6, a_RegSetValueExA},
++    {"ADVAPI32.dll", "RegSetValueA", 5, a_RegSetValueA},
++    {"ADVAPI32.dll", "RegEnumKeyExA", 8, a_RegEnumKeyExA},
++    {"ADVAPI32.dll", "RegDeleteKeyA", 2, a_RegDeleteKeyA},
+     {"ADVAPI32.dll", "RegOpenKeyExW", 5, a_RegOpenKeyExW},
+     {"ADVAPI32.dll", "RegCreateKeyExW", 9, a_RegCreateKeyExW},
+     {"ADVAPI32.dll", "RegQueryValueExW", 6, a_RegQueryValueExW},
+@@ -2039,6 +2154,7 @@ const ImportShim g_misc_shims[] = {
+     {"ole32.dll", "CoTaskMemAlloc", 1, o_CoTaskMemAlloc},
+     {"ole32.dll", "CoTaskMemFree", 1, o_CoTaskMemFree},
+     {"ole32.dll", "IsEqualGUID", 2, o_IsEqualGUID},
++    {"ole32.dll", "StringFromCLSID", 2, o_StringFromCLSID},
+     {"ole32.dll", "CoUninitialize", 0, o_CoUninitialize},
+     {"ole32.dll", "PropVariantClear", 1, o_PropVariantClear},
+     {"ole32.dll", "PropVariantCopy", 2, o_PropVariantCopy},
+@@ -2164,6 +2280,8 @@ const ImportShim g_misc_shims[] = {
+     {"WINMM.dll", "waveInReset", 1, nullptr},
+     {"WINMM.dll", "waveInGetPosition", 3, nullptr},
+     // Winsock 2: networking is out of scope, but the pop counts are not.
++    {"WS2_32.dll", "htons", 1, w_htons},
++    {"WS2_32.dll", "inet_addr", 1, w_inet_addr},
+     {"WS2_32.dll", "WSAStartup", 2, nullptr},
+     {"WS2_32.dll", "WSACleanup", 0, nullptr},
+     {"WS2_32.dll", "WSAGetLastError", 0, nullptr},
 diff --git a/runtime/profile.cpp b/runtime/profile.cpp
 index 9c58dda..299f4c4 100644
 --- a/runtime/profile.cpp
@@ -4943,11 +5656,114 @@ index 7016990..14be314 100644
      test_input_wakes_a_parked_thread(c);
      test_intrinsics(c);
      test_undeliverable_calls(c);
+diff --git a/runtime/user32.cpp b/runtime/user32.cpp
+index 2ef5486..f9af73e 100644
+--- a/runtime/user32.cpp
++++ b/runtime/user32.cpp
+@@ -1413,12 +1413,10 @@ void u_MessageBoxW(X86 *c) {
+     set_eax(c, answer);
+ }
+ 
+-// wvsprintfA: the Win32 subset (%s %c %d %i %u %x %X %% with width/precision
+-// and the l/h size prefixes). `va` points at the guest argument array.
+-void u_wvsprintfA(X86 *c) {
+-    uint32_t out = arg(c, 0);
+-    std::string fmt = gm_str(arg(c, 1), 4096);
+-    uint32_t va = arg(c, 2);
++// wvsprintfA/wsprintfA: the Win32 subset (%s %c %d %i %u %x %X %% with
++// width/precision and the l/h size prefixes). `va` points at the guest
++// argument array.
++static uint32_t format_vsprintf(uint32_t out, const std::string &fmt, uint32_t va) {
+     std::string res;
+     size_t i = 0;
+     while (i < fmt.size()) {
+@@ -1487,7 +1485,30 @@ void u_wvsprintfA(X86 *c) {
+     }
+     if (out)
+         memcpy(g_mem + out, res.c_str(), res.size() + 1);
+-    set_eax(c, (uint32_t)res.size());
++    return (uint32_t)res.size();
++}
++
++void u_wvsprintfA(X86 *c) {
++    set_eax(c, format_vsprintf(arg(c, 0), gm_str(arg(c, 1), 4096), arg(c, 2)));
++}
++
++// wsprintfA is cdecl: the caller pops its arguments, and the first vararg
++// follows the two fixed parameters at ESP+12.
++void u_wsprintfA(X86 *c) {
++    set_eax(c, format_vsprintf(arg(c, 0), gm_str(arg(c, 1), 4096), c->r[R_ESP] + 12));
++}
++
++// Dialogs are not modelled. Returning the documented failure keeps the
++// caller's stack balanced and lets it take its own error path.
++void u_DialogBoxParamA(X86 *c) {
++    LOGW("DialogBoxParamA(template=%08x): dialogs are not implemented", arg(c, 1));
++    set_eax(c, 0xffffffffu); // -1
++}
++void u_EndDialog(X86 *c) {
++    set_eax(c, 1);
++}
++void u_GetDlgItem(X86 *c) {
++    set_eax(c, 0);
+ }
+ 
+ } // namespace user32
+@@ -1709,6 +1730,9 @@ const ImportShim g_user32_shims[] = {
+     {"USER32.dll", "SetWindowTextA", 2, u_SetWindowTextA},
+     {"USER32.dll", "SetDlgItemTextA", 3, u_SetDlgItemTextA},
+     {"USER32.dll", "CreateDialogParamA", 5, u_CreateDialogParamA},
++    {"USER32.dll", "DialogBoxParamA", 5, u_DialogBoxParamA},
++    {"USER32.dll", "EndDialog", 2, u_EndDialog},
++    {"USER32.dll", "GetDlgItem", 2, u_GetDlgItem},
+     {"USER32.dll", "PeekMessageA", 5, u_PeekMessageA},
+     {"USER32.dll", "GetMessageA", 4, u_GetMessageA},
+     {"USER32.dll", "GetMessagePos", 0, u_GetMessagePos},
+@@ -1743,6 +1767,7 @@ const ImportShim g_user32_shims[] = {
+     {"USER32.dll", "MessageBoxA", 4, u_MessageBoxA},
+     {"USER32.dll", "MessageBoxW", 4, u_MessageBoxW},
+     {"USER32.dll", "wvsprintfA", 3, u_wvsprintfA},
++    {"USER32.dll", "wsprintfA", ARGC_CDECL, u_wsprintfA},
+     // Not imported by D3DPopTB.exe, but registered so GetProcAddress and the
+     // host layer can reach them.
+     {"USER32.dll", "SendMessageA", 4, u_SendMessageA},
 diff --git a/runtime/x86.h b/runtime/x86.h
-index 4dc8955..d60a757 100644
+index 4dc8955..93773a7 100644
 --- a/runtime/x86.h
 +++ b/runtime/x86.h
-@@ -432,6 +432,7 @@ void recomp_unknown_call(X86 *c, uint32_t target);
+@@ -344,6 +344,16 @@ static inline float xmm_f32(const X86 *c, int reg) {
+ static inline void xmm_set_f32(X86 *c, int reg, float v) {
+     memcpy(&c->xmm[reg][0], &v, 4);
+ }
++/* Packed lanes use the same bit view; callers hold the whole operand before
++ * writing any lane because a packed destination may also be a source. */
++static inline float xmm_lane_f32(const X86 *c, int reg, int lane) {
++    float v;
++    memcpy(&v, &c->xmm[reg][lane], 4);
++    return v;
++}
++static inline void xmm_set_lane_f32(X86 *c, int reg, int lane, float v) {
++    memcpy(&c->xmm[reg][lane], &v, 4);
++}
+ 
+ /* SQRTSD and SQRTSS of a negative operand return the "indefinite" quiet NaN,
+  * which has its sign bit set; the host's sqrt returns a positive NaN and sets
+@@ -418,6 +428,14 @@ void recomp_profile_pop(void);
+  * target), then the import shim range.  Anything else aborts. */
+ void recomp_jump(X86 *c, uint32_t target);
+ 
++/* A cooperative scheduling checkpoint at a translated direct-call boundary.
++ * A guest poll loop can spin through translated calls for as long as it likes
++ * without entering an import; hanging the checkpoint only on imports lets it
++ * hold the baton and starve another runnable guest thread.  Rate limited by
++ * the scheduler, a no-op with one guest thread and inside an atomic import
++ * stretch. */
++void recomp_guest_checkpoint(void);
++
+ /* Indirect JMP whose target is neither a block entry nor a shim.  Aborts with
+  * the target and the jumping instruction's address. */
+ void recomp_unknown_jump(X86 *c, uint32_t target);
+@@ -432,6 +450,7 @@ void recomp_unknown_call(X86 *c, uint32_t target);
  /* A popped callback sentinel can bypass translated callers. The innermost
   * guest_call owns the live host return checkpoint and its guest stack range. */
  void recomp_callback_return(X86 *c);
@@ -5628,7 +6444,7 @@ index e31c835..7c0fbff 100644
                                                   ("ESP", True, False)])
  def test_frame_establishment_through_edx_needs_a_zero_base(reg, zeroed, checkpoint):
 diff --git a/tools/recomp/translate.py b/tools/recomp/translate.py
-index 944f2ca..3d63a67 100644
+index 944f2ca..806d49b 100644
 --- a/tools/recomp/translate.py
 +++ b/tools/recomp/translate.py
 @@ -18,13 +18,15 @@ are enabled by the native host, never by the baseline/differential build.
@@ -5875,6 +6691,15 @@ index 944f2ca..3d63a67 100644
                    "POPFL": "POPFD", "PUSHFL": "PUSHFD",
                    "CWTL": "CWDE", "CLTD": "CDQ", "CBTW": "CBW",
                    "IRETD": "IRET"}
+@@ -1344,7 +1458,7 @@ class Image(object):
+         if mnem.startswith("F") and mnem not in self.X87_INT:
+             return {4: "float", 8: "double", 10: "extended double"}.get(nbytes)
+         return {1: "byte", 2: "word", 4: "dword", 8: "qword",
+-                10: "extended double"}.get(nbytes)
++                10: "extended double", 16: "xmmword"}.get(nbytes)
+ 
+     def _op_text(self, ci, op, mnem):
+         import capstone.x86_const as X
 @@ -1381,7 +1495,17 @@ class Image(object):
              words = words[1:]
          mnem = words[-1].upper()
@@ -5941,16 +6766,16 @@ index 944f2ca..3d63a67 100644
 +                revisit_condition = (va in seen and not previous_zero
 +                                     and unknown_condition_seen.get(va) is False)
 +                if (va in seen and not revisit_condition) or claimed or va in boundary_set or not (lo <= va < hi):
-+                    break
+                     break
+-                got = list(self.md.disasm(self.data[va - self.base:va - self.base + 16],
+-                                          va, count=1))
+-                if not got or got[0].address + got[0].size > hi:
 +                # Audited non-code bytes are never translated: entry, branch
 +                # and fall-through paths all stop here, bounded or not. The
 +                # pointer scan and entry loading already refuse these ranges;
 +                # recovery must not decode through them either.
 +                if self.is_declared_data(va):
-                     break
--                got = list(self.md.disasm(self.data[va - self.base:va - self.base + 16],
--                                          va, count=1))
--                if not got or got[0].address + got[0].size > hi:
++                    break
 +                ci = self._decode_recovery_instruction(va, self.data)
 +                if ci is None or ci.address + ci.size > hi:
                      if bounds is not None:
@@ -6770,7 +7595,30 @@ index 944f2ca..3d63a67 100644
                      # The host jmp_buf has to belong to a frame that is still
                      # live when _longjmp fires, so setjmp is taken here rather
                      # than inside the runtime (runtime/intrinsics.h).
-@@ -3201,19 +3769,24 @@ class Translator(object):
+@@ -3194,6 +3762,22 @@ class Translator(object):
+                 else:
+                     self.reject_offimage_call(t)
+                     self.stats["_call_unknown"] += 1
++                    # A target outside the mapped image cannot be a translated
++                    # entry: dispatching to it would only fail at run time. The
++                    # bytes are usually a decoy CALL behind a provably-taken
++                    # XOR/Jcc branch. Keep the transfer visible - reaching it
++                    # still aborts with its address - but do not spell it as a
++                    # block-entry dispatch, which cannot exist. Module builds
++                    # are different: their calls into the image's own table are
++                    # ordinary and are rewritten by dispatch_outside.
++                    if (self.image is not None and self.image.end > self.image.base
++                            and not (self.image.base <= t < self.image.end)
++                            and not (GUEST_SHIM_BASE <= t < GUEST_SHIM_END)
++                            and t not in INTRINSIC_BODY
++                            and not AUX_MODULE and SYMBOL_PREFIX == "recomp_"):
++                        self.stats["_call_offimage_trap"] += 1
++                        L.append("recomp_unknown_call(c, %s); return;" % hexlit(t))
++                        return L
+                     L.append("recomp_call(c, %s);" % hexlit(t))
+                 if RESUMABLE_STACKS:
+                     L.append("if (c->eip != %s) return;" % hexlit(nxt))
+@@ -3201,19 +3785,24 @@ class Translator(object):
                      L.append("c->eip = %s;" % hexlit(ins.addr))
                      L.append("{ jmp_buf *b_ = recomp_seh_frame_adopt(c); "
                               "if (b_) { if (setjmp(*b_)) { recomp_seh_land(c); return; } } }")
@@ -6807,7 +7655,7 @@ index 944f2ca..3d63a67 100644
              return L
  
          if m == "RET":
-@@ -3231,6 +3804,24 @@ class Translator(object):
+@@ -3231,6 +3820,24 @@ class Translator(object):
                  return L
              return ["c->eip = rd32(c->r[4]); c->r[4] += %du; " % (4 + n) +
                      orphan + "recomp_return(c); return;"]
@@ -6832,7 +7680,70 @@ index 944f2ca..3d63a67 100644
  
          # ------------------------------------------------------------ SSE --
          # Data movement only, in dword lanes. A Delphi runtime's FillChar and
-@@ -3439,9 +4030,11 @@ class Translator(object):
+@@ -3250,7 +3857,8 @@ class Translator(object):
+                         "ANDPS": "&", "POR": "|", "ORPD": "|", "ORPS": "|"}
+         SSE_LANE_FORMS = ("PANDN", "ANDNPD", "ANDNPS", "PCMPEQD", "PUNPCKLDQ", "PUNPCKHDQ",
+                           "PUNPCKLQDQ", "UNPCKLPD", "UNPCKHPD", "MOVDDUP", "MOVLPD", "MOVLPS",
+-                          "MOVHPD", "MOVHPS", "SHUFPS", "SHUFPD", "MOVAPD", "MOVUPD")
++                          "MOVHPD", "MOVHPS", "SHUFPS", "SHUFPD", "MOVAPD", "MOVUPD",
++                          "MOVAPS", "MOVUPS")
+         if m in SSE_LANE_OPS or m in SSE_LANE_FORMS:
+             dst, src = ops[0], ops[1]
+ 
+@@ -3280,7 +3888,7 @@ class Translator(object):
+             elif m == "PCMPEQD":
+                 L.extend(put(dst, i, "%s == %s ? 0xffffffffu : 0u" % (d(i), sv(i)))
+                          for i in range(4))
+-            elif m in ("MOVAPD", "MOVUPD"):   # MOVAPS and MOVUPS under another name
++            elif m in ("MOVAPD", "MOVUPD", "MOVAPS", "MOVUPS"):
+                 L.extend(put(dst, i, sv(i)) for i in range(4))
+             elif m == "PUNPCKLDQ":            # d0 s0 d1 s1
+                 L.extend([put(dst, 0, d(0)), put(dst, 1, sv(0)),
+@@ -3316,6 +3924,43 @@ class Translator(object):
+                           put(dst, 2, sv(hi)), put(dst, 3, sv(hi + 1))])
+             return L
+ 
++        # Packed single-precision arithmetic. XMM lanes are stored as
++        # integer-sized cells, so read and write them through the float view;
++        # snapshot every lane first because the destination often aliases a
++        # source. The guest's MXCSR rounding mode is not modelled, and the
++        # runtime already states the same limitation for scalar SSE.
++        SSE_PACKED_MATH = {"ADDPS": "+", "SUBPS": "-", "MULPS": "*", "DIVPS": "/"}
++        if m in SSE_PACKED_MATH:
++            dst, src = ops[0], ops[1]
++
++            def flane(op, i):
++                if op.kind == "xmm":
++                    return "xmm_lane_f32(c, %d, %d)" % (op.reg, i)
++                return "rdf32(%s + %du)" % (addr_expr(op), 4 * i)
++
++            def fput(op, i, value):
++                if op.kind == "xmm":
++                    return "xmm_set_lane_f32(c, %d, %d, %s);" % (op.reg, i, value)
++                return "wrf32(%s + %du, %s);" % (addr_expr(op), 4 * i, value)
++
++            L.extend("float d%d_ = %s;" % (i, flane(dst, i)) for i in range(4))
++            L.extend("float s%d_ = %s;" % (i, flane(src, i)) for i in range(4))
++            L.extend(fput(dst, i, "d%d_ %s s%d_" % (i, SSE_PACKED_MATH[m], i))
++                     for i in range(4))
++            return L
++
++        # The high/low half moves. Only the named half of the destination
++        # changes; the other half keeps its value.
++        if m in ("MOVHLPS", "MOVLHPS"):
++            dst, src = ops[0], ops[1]
++            if dst.kind != "xmm" or src.kind != "xmm":
++                raise TranslateError("%s requires two XMM registers" % m)
++            pairs = ((0, 2), (1, 3)) if m == "MOVHLPS" else ((2, 0), (3, 1))
++            for d, s in pairs:
++                L.append("c->xmm[%d][%d] = c->xmm[%d][%d];"
++                         % (dst.reg, d, src.reg, s))
++            return L
++
+         # Scalar double and single forms. The host's double and float are the
+         # same IEEE formats in the same rounding mode, and scalar SSE leaves
+         # the lanes above its result alone, which is why nothing here clears
+@@ -3439,9 +4084,11 @@ class Translator(object):
          if m == "HLT":
              return ["recomp_hlt(c);"]
          if m == "INT":
@@ -6845,7 +7756,7 @@ index 944f2ca..3d63a67 100644
          if m == "IN":
              size = operand_size(ops[:1], hint=32)
              port = read_op(ops[1], 32) if len(ops) > 1 else "0u"
-@@ -3454,9 +4047,10 @@ class Translator(object):
+@@ -3454,9 +4101,10 @@ class Translator(object):
              return L
          if m in ("NOP", "WAIT", "PAUSE"):
              return [";"]
@@ -6858,7 +7769,7 @@ index 944f2ca..3d63a67 100644
              return ["c->fpu_tag = 0xffffu;"]
          if m == "STMXCSR":
              # No translated SSE arithmetic changes MXCSR, so expose its reset value.
-@@ -3497,7 +4091,7 @@ class Translator(object):
+@@ -3497,7 +4145,7 @@ class Translator(object):
              return  # a translator built without bytes, as the unit tests are
          if self.image.base <= t < self.image.end:
              return
@@ -6867,7 +7778,7 @@ index 944f2ca..3d63a67 100644
              return
          raise TranslateError("call to %08x, which is outside the image" % t)
  
-@@ -3506,6 +4100,12 @@ class Translator(object):
+@@ -3506,7 +4154,25 @@ class Translator(object):
              return ["goto L_%08x;" % t]
          if t in self.func_addrs:
              self.stats["_tailcall"] += 1
@@ -6878,9 +7789,22 @@ index 944f2ca..3d63a67 100644
 +                # back to recomp_run, which dispatches this exact target.
 +                return ["c->eip = %s; return;" % hexlit(t)]
              return ["CALL_FN(%08x); return;" % t]
++        if (self.all_insn_addrs and t not in self.all_insn_addrs
++                and not (GUEST_SHIM_BASE <= t < GUEST_SHIM_END)
++                and t not in INTRINSIC_BODY):
++            # A literal transfer into the middle of an instruction, a table
++            # immediate or INT3 padding is not code: no translation can carry
++            # it. Original execution would fault there, so trap at the site
++            # with the target rather than spell a dispatch that cannot exist.
++            self.stats["_tailcall_not_instruction"] += 1
++            self.notes.append("%08x: jump to %08x, which is not an instruction"
++                              % (ins.addr, t))
++            return ["c->eip = %s; recomp_unknown_call(c, %s); return;"
++                    % (hexlit(ins.addr), hexlit(t))]
          self.stats["_tailcall_unknown"] += 1
          self.notes.append("%08x: jump to %08x outside any known function" % (ins.addr, t))
-@@ -3901,6 +4501,15 @@ class Translator(object):
+         return ["c->eip = %s; recomp_jump(c, %s); return;" % (hexlit(ins.addr), hexlit(t))]
+@@ -3901,6 +4567,15 @@ class Translator(object):
              return ["x87_set_cw(c, rd16(%s));" % addr_expr(ops[0])]
          if m == "FFREE":
              return [";"]
@@ -6896,7 +7820,7 @@ index 944f2ca..3d63a67 100644
          if m in ("FSAVE", "FNSAVE"):
              return ["x87_fnsave(c, %s);" % addr_expr(ops[0])]
          if m == "FRSTOR":
-@@ -3962,19 +4571,22 @@ def retarget_withdrawn(body, pruned):
+@@ -3962,19 +4637,22 @@ def retarget_withdrawn(body, pruned):
      if not pruned:
          return body
      out = []
@@ -6931,7 +7855,7 @@ index 944f2ca..3d63a67 100644
      return out
  
  
-@@ -3995,6 +4607,32 @@ def load_functions(only=None):
+@@ -3995,6 +4673,32 @@ def load_functions(only=None):
      return funcs
  
  
@@ -6964,7 +7888,7 @@ index 944f2ca..3d63a67 100644
  def main():
      ap = argparse.ArgumentParser()
      ap.add_argument("--out", required=True, help="where the generated sources go (build/recomp/gen)")
-@@ -4045,6 +4683,49 @@ def main():
+@@ -4045,6 +4749,49 @@ def main():
          AUX_MODULE = {"name": args.as_module, "base": cfg["game"]["image_base"],
                        "size": 0}  # the image's extent, filled in once it is read
      image = Image(BINARY)
@@ -7014,7 +7938,7 @@ index 944f2ca..3d63a67 100644
      discovered = []
      if args.discovered:
          global EXTRA_ENTRY_POINTS
-@@ -4072,11 +4753,17 @@ def main():
+@@ -4072,11 +4819,17 @@ def main():
  
      t0 = time.time()
      entries = load_functions(set(args.only) if args.only else None)
@@ -7032,7 +7956,7 @@ index 944f2ca..3d63a67 100644
              listed_starts.append(a)
              p = os.path.join(LISTINGS, "%08x.asm" % a)
              if os.path.exists(p) and os.path.getsize(p) > 0:
-@@ -4102,6 +4789,7 @@ def main():
+@@ -4102,6 +4855,7 @@ def main():
      for addr, name, nbytes, path in entries:
          try:
              insns = parse_listing(path)
@@ -7040,7 +7964,7 @@ index 944f2ca..3d63a67 100644
          except TranslateError as e:
              failures.append((addr, "parse: %s" % e))
              continue
-@@ -4195,6 +4883,13 @@ def main():
+@@ -4195,6 +4949,13 @@ def main():
  
      os.makedirs(args.out, exist_ok=True)
      chunks = []
@@ -7054,7 +7978,20 @@ index 944f2ca..3d63a67 100644
  
      def accepts(fn, reached=False):
          """Can the emitter translate every instruction of this block?
-@@ -4488,7 +5183,7 @@ def main():
+@@ -4472,7 +5233,11 @@ def main():
+                                           or prior.addr in protected_entries)
+         note_structural(provenance, owner if promote_owner else {}, t, why)
+         if t in all_addrs and not separate:
+-            return stronger or truncated
++            if why != "config":
++                return stronger or truncated
++            prior_entry = owner.get(t)
++            if prior_entry is not None and prior_entry.addr == t:
++                return True
+         if home is not None and t in home.addrs:
+             return False
+         if t in owner and not separate:
+@@ -4488,7 +5253,7 @@ def main():
              return True
          bounds = None
          boundaries = set()
@@ -7063,7 +8000,7 @@ index 944f2ca..3d63a67 100644
          if protected and why == "config":
              # A configured entry states that this address IS a function, but
              # recovery still needs a ceiling. Unbounded, it runs past the body
-@@ -4543,7 +5238,7 @@ def main():
+@@ -4543,7 +5308,7 @@ def main():
                      owned.update(ins.addr for ins in block)
                      fragments.update((ins.addr, ins) for ins in block)
              if owned:
@@ -7072,7 +8009,33 @@ index 944f2ca..3d63a67 100644
              lo_index, hi_index = bisect_right(candidate_starts, t), bisect_right(candidate_starts, bounds[1])
              boundaries = {a for a in candidate_starts[lo_index:hi_index]
                            if a not in owned and a not in finally_owners}
-@@ -4853,6 +5548,9 @@ def main():
+@@ -4849,10 +5614,35 @@ def main():
+                   "(already owned, or its recovery did not validate)" % addr,
+                   file=sys.stderr)
+ 
++    def discovery_zero_branches(fn):
++        """XOR/Jcc proofs for discovery's listing-gap fall-throughs.
++
++        The final emission pass already drops the dead side of an adjacent
++        original `XOR reg,reg` / `JZ` branch, but discovery runs first and
++        seeds the gap fall-through as an independent entry.  That entry then
++        keeps the dead decoy body alive, and a later `CALL` from it is
++        reported as an undeliverable dispatch.  Only bodies that actually
++        have a gap after a candidate branch pay for the proof.
++        """
++        if not any(
++                not fn.contiguous[i]
++                and fn.insns[i].mnem in ("JE", "JZ", "JNE", "JNZ")
++                and fn.insns[i - 1].mnem == "XOR"
++                and len(fn.insns[i - 1].ops) == 2
++                and fn.insns[i - 1].ops[0] == fn.insns[i - 1].ops[1]
++                for i in range(1, len(fn.insns))):
++            return {}
++        fn.index = {ins.addr: k for k, ins in enumerate(fn.insns)}
++        roots = {fn.addr} | (set(fn.index) & all_addrs)
++        return tr.constant_zero_branches(fn, roots)
++
+     scanned_pointers = False
      seh_stubs = set()
      converged = False
      for _round in range(64):
@@ -7082,7 +8045,39 @@ index 944f2ca..3d63a67 100644
          tr.func_addrs = all_addrs
          tr.all_insn_addrs = set(owner)
          tr.jumptables.clear()
-@@ -5276,14 +5974,82 @@ def main():
+@@ -4894,6 +5684,7 @@ def main():
+         for fn in list(parsed):
+             if fn in retired_finally_bodies:
+                 continue
++            proven_zero = discovery_zero_branches(fn)
+             for i, ins in enumerate(fn.insns):
+                 # PUSH imm32 / RET names a continuation just as a direct JMP
+                 # does; do not depend on heuristic pointer discovery for it.
+@@ -4903,14 +5694,20 @@ def main():
+                 # by the data-pointer scan calls functions Ghidra never listed
+                 # either: 0049e800 calls 004c3110 and 004c31e0.
+                 if ins.mnem in ("JMP", "CALL") or ins.mnem in JCC:
+-                    changed |= resolve(Translator.branch_target(ins), listed, fn,
+-                                       continuation=ins.mnem != "CALL")
++                    # A JNE/JNZ proven never taken only falls through; seeding
++                    # its dead branch target would resurrect a decoy body.
++                    if proven_zero.get(i) is not False:
++                        changed |= resolve(Translator.branch_target(ins), listed, fn,
++                                           continuation=ins.mnem != "CALL")
+                 if fn in retired_finally_bodies or i >= len(fn.insns) or fn.insns[i] is not ins:
+                     break  # a stronger target replaced this speculative suffix
+                 if ins.mnem in TERMINATORS or tr.never_returns(ins):
+                     continue
+                 if not fn.contiguous[i]:
+-                    changed |= resolve(fn.fallthrough[i], listed, fn)
++                    # XOR reg,reg / JE is always taken; the byte after the
++                    # branch is the dead decoy CALL, not a continuation.
++                    if proven_zero.get(i) is not True:
++                        changed |= resolve(fn.fallthrough[i], listed, fn)
+             if fn.insns[-1].mnem not in TERMINATORS and not tr.never_returns(fn.insns[-1]):
+                 changed |= resolve(fn.fallthrough[-1] or fn.end, listed, fn)
+         for t in sorted(tr.unlisted_targets):
+@@ -5276,14 +6073,82 @@ def main():
      # after mismatched returns have unwound the native call stack.
      if RESUMABLE_STACKS:
          starts = {f.addr for f in parsed}
@@ -7170,7 +8165,7 @@ index 944f2ca..3d63a67 100644
      for t, fn in extra.items():
          entries_by_fn[fn.addr].add(t)
  
-@@ -5306,13 +6072,16 @@ def main():
+@@ -5306,13 +6171,16 @@ def main():
      # came from Ghidra's listing are never dropped - a dangling target there is
      # a translator gap, and the invariant below turns it into a build failure.
      fn_ref = re.compile(r"FN\(([0-9a-f]{8})\)")
@@ -7190,7 +8185,7 @@ index 944f2ca..3d63a67 100644
          out = []
          for line in body:
              for kind in ("recomp_call", "recomp_jump"):
-@@ -5331,6 +6100,10 @@ def main():
+@@ -5331,6 +6199,10 @@ def main():
                  target = int(hit, 16)
                  if target not in known:
                      out.append((target, line.strip()))
@@ -7201,7 +8196,7 @@ index 944f2ca..3d63a67 100644
          return out
  
      # Entries the emitter had to drop are not entry points either.
-@@ -5343,6 +6116,10 @@ def main():
+@@ -5343,6 +6215,10 @@ def main():
      withdrawn = []
      recovered_addrs = prunable_blocks({f.addr for f in recovered}, provenance)
      pruned = []
@@ -7212,7 +8207,7 @@ index 944f2ca..3d63a67 100644
      if forget:
          for a in sorted(forget):
              if a in bodies:
-@@ -5542,6 +6319,20 @@ def main():
+@@ -5542,6 +6418,20 @@ def main():
          tr.stats["_withdrawn_retargeted"] = len(gone)
  
      ok = [fn for fn in parsed if fn.addr in bodies]
@@ -7233,7 +8228,7 @@ index 944f2ca..3d63a67 100644
      if args.as_module and (args.only or discovered):
          # Discovery ran over the whole image, as it must to recover a function
          # whole, but a module carries only the functions it was asked for:
-@@ -5589,6 +6380,25 @@ def main():
+@@ -5589,6 +6479,25 @@ def main():
                % (at, fn_addr, len(missing), total,
                   " ".join("%08x" % m for m in missing[:6])), file=sys.stderr)
      if (table_gaps or undecoded) and not args.allow_table_gaps:
@@ -7259,7 +8254,7 @@ index 944f2ca..3d63a67 100644
          raise TranslateError(
              "%d jump tables have entries that dispatch nowhere (%d slots in "
              "total) and %d table sites decoded nothing; pass "
-@@ -5663,6 +6473,48 @@ def main():
+@@ -5663,6 +6572,48 @@ def main():
                   % (target, line[:110])))
          dangling = []
      if dangling:
@@ -7308,7 +8303,19 @@ index 944f2ca..3d63a67 100644
          # A target that Ghidra listed but that failed to translate is the
          # usual cause, so name the failures first: they are what to fix.
          for a, why in failures[:40]:
-@@ -5782,7 +6634,8 @@ def main():
+@@ -5699,9 +6650,10 @@ def main():
+         fh.write("extern const uint32_t %sfunc_addrs[];\nextern uint8_t %shooked[];\n"
+                  "extern RecompHookFn %shook_ptrs[];\n" % (P, P, P))
+         fh.write("#ifdef RECOMP_NO_HOOKS\n"
+-                 "#define CALL_FN(a) do { if (recomp_profile_enabled) recomp_call(c, %sfunc_addrs[FIDX(a)]); else FN(a)(c); } while (0)\n"
++                 "#define CALL_FN(a) do { recomp_guest_checkpoint(); if (recomp_profile_enabled) recomp_call(c, %sfunc_addrs[FIDX(a)]); else FN(a)(c); } while (0)\n"
+                  "#else\n"
+                  "#define CALL_FN(a) do {\\\n"
++                 "    recomp_guest_checkpoint();\\\n"
+                  "    uint32_t i_ = FIDX(a);\\\n"
+                  "    uint32_t ebp_ = recomp_frame_watch ? c->r[5] : 0u;\\\n"
+                  "    if (recomp_profile_enabled) { recomp_call(c, %sfunc_addrs[i_]); break; }\\\n"
+@@ -5782,7 +6734,8 @@ def main():
      # neither another pop nor dispatching the continuation is correct here.
      call_returns = sorted({
          fn.fallthrough[i] or (fn.insns[i + 1].addr if i + 1 < len(fn.insns) else fn.end)
@@ -7456,10 +8463,10 @@ index 66254e1..343e5b9 100644
  </html>
 diff --git a/docs/d3d9-fixed-function.md b/docs/d3d9-fixed-function.md
 new file mode 100644
-index 0000000..89621e4
+index 0000000..3d159a9
 --- /dev/null
 +++ b/docs/d3d9-fixed-function.md
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,37 @@
 +# Bounded Direct3D 9 fixed-function support
 +
 +`dx/d3d9_ffp.cpp` prepares shader-model-2 bytecode for both existing rendering
@@ -7486,19 +8493,23 @@ index 0000000..89621e4
 +the selected UV set. A null texture with COLORARG1 set to TEXTURE stops the stage
 +cascade, following Microsoft's [texture blending rules](https://learn.microsoft.com/en-us/windows/win32/direct3d9/texture-blending).
 +
-+Lighting, fog, specular addition, vertex blending, automatic texture coordinate
-+generation, texture transforms, TEMP stage results, flat shading, point-size
-+FVFs and non-float2 UV formats remain unsupported and are explicitly refused.
++Fog is honoured per draw: the renderer evaluates linear, exponential and
++exponential-squared table fog from the raster depth, and a synthesized vertex
++shader writes the rasterizer fog factor for the per-vertex modes. Specular
++addition folds the vertex specular colour into the pixel stage when
++D3DRS_SPECULARENABLE is set. Lighting, vertex blending, automatic texture
++coordinate generation, texture transforms, TEMP stage results, point-size FVFs
++and non-float2 UV formats remain unsupported and are explicitly refused.
 +The pre-existing CPU rasterizer also lacks clipping and a complete depth/stencil
 +implementation; it cannot be represented as a complete software D3D9 device.
 +Offscreen pixel tests establish the supported operations, not a game's startup,
 +playability or performance.
 diff --git a/dx/d3d9_ffp.cpp b/dx/d3d9_ffp.cpp
 new file mode 100644
-index 0000000..8d102b9
+index 0000000..4c116ad
 --- /dev/null
 +++ b/dx/d3d9_ffp.cpp
-@@ -0,0 +1,280 @@
+@@ -0,0 +1,728 @@
 +#include "d3d9_ffp.h"
 +#include "d3d9_shader.h"
 +#include <algorithm>
@@ -7533,6 +8544,11 @@ index 0000000..8d102b9
 +uint32_t src(uint32_t type, uint32_t index, uint32_t swizzle = 0xe4) {
 +    return reg(type, index) | (swizzle << 16);
 +}
++// Replaces the swizzle of an operand that is already encoded: the swizzle lives
++// in bits 16..23, one two-bit selector per component.
++uint32_t swz(uint32_t operand, uint32_t swizzle) {
++    return (operand & ~0xff0000u) | (swizzle << 16);
++}
 +void declare(Code &c, uint32_t type, uint32_t index, uint32_t usage, uint32_t usage_index = 0) {
 +    c.op(OP_DCL, {0x80000000u | usage | (usage_index << 16), dst(type, index)});
 +}
@@ -7543,6 +8559,13 @@ index 0000000..8d102b9
 +    f.stride += size;
 +}
 +bool fail(std::string &why, const char *message) {
++    why = message;
++    return false;
++}
++// Same, with the offending state appended. The refusal log is deduplicated per
++// message, so the detail turns one opaque line into a description of the exact
++// declaration or texture stage the application bound.
++bool fail(std::string &why, const std::string &message) {
 +    why = message;
 +    return false;
 +}
@@ -7559,7 +8582,7 @@ index 0000000..8d102b9
 +// accidentally overwrite the previous stage or the sampled texel.
 +bool argument(Code &c, uint32_t value, uint32_t temp, uint32_t &operand, std::string &why) {
 +    if (value & ~0x3fu)
-+        return fail(why, "unsupported texture argument flags");
++        return fail(why, "unsupported texture argument flags: " + std::to_string(value));
 +    uint32_t swizzle = value & 0x20 ? 0xff : 0xe4;
 +    switch (value & 15) {
 +    case 0:
@@ -7578,7 +8601,8 @@ index 0000000..8d102b9
 +        operand = src(R_INPUT, 1, swizzle);
 +        break;
 +    default:
-+        return fail(why, "unsupported texture argument source");
++        return fail(why, "unsupported texture argument source: " + std::to_string(value & 15) +
++                         " in " + std::to_string(value));
 +    }
 +    if (value & 0x10) {
 +        c.op(OP_SUB, {dst(R_TEMP, temp), src(R_CONST, 1, 0), operand});
@@ -7588,6 +8612,14 @@ index 0000000..8d102b9
 +}
 +bool combine(Code &c, uint32_t operation, uint32_t a, uint32_t b, uint32_t mask, std::string &why) {
 +    uint32_t d = dst(R_TEMP, 4, mask, true);
++    // The previous stage's result is the "current" colour in D3D's stage
++    // semantics, and it lives in r0 until the stage is committed.
++    uint32_t current = src(R_TEMP, 0);
++    auto lerp = [&](uint32_t factor) {
++        c.op(OP_SUB, {dst(R_TEMP, 5, mask), a, current});
++        c.op(OP_MUL, {dst(R_TEMP, 5, mask), src(R_TEMP, 5), factor});
++        c.op(OP_ADD, {d, src(R_TEMP, 5), current});
++    };
 +    switch (operation) {
 +    case 2:
 +        c.op(OP_MOV, {d, a});
@@ -7608,11 +8640,74 @@ index 0000000..8d102b9
 +    case 7:
 +        c.op(OP_ADD, {d, a, b});
 +        break;
++    case 8: // ADDSIGNED: a + b - 0.5
++        c.op(OP_ADD, {dst(R_TEMP, 4, mask), a, b});
++        c.op(OP_SUB, {d, src(R_TEMP, 4), src(R_CONST, 1, 0xff)});
++        break;
++    case 9: // ADDSIGNED2X: (a + b - 0.5) * 2
++        c.op(OP_ADD, {dst(R_TEMP, 4, mask), a, b});
++        c.op(OP_SUB, {dst(R_TEMP, 4, mask), src(R_TEMP, 4), src(R_CONST, 1, 0xff)});
++        c.op(OP_MUL, {d, src(R_TEMP, 4), src(R_CONST, 1, 0x55)});
++        break;
 +    case 10:
 +        c.op(OP_SUB, {d, a, b});
 +        break;
++    case 11: // ADDSMOOTH: a + b - a*b
++        c.op(OP_MUL, {dst(R_TEMP, 5, mask), a, b});
++        c.op(OP_ADD, {dst(R_TEMP, 4, mask), a, b});
++        c.op(OP_SUB, {d, src(R_TEMP, 4), src(R_TEMP, 5)});
++        break;
++    case 12: // BLENDDIFFUSEALPHA: lerp(current, a, diffuse alpha)
++        lerp(src(R_INPUT, 0, 0xff));
++        break;
++    case 13: // BLENDTEXTUREALPHA: lerp(current, a, texture alpha)
++        lerp(src(R_TEMP, 1, 0xff));
++        break;
++    case 14: // BLENDFACTORALPHA: lerp(current, a, texture factor alpha)
++        lerp(src(R_CONST, 0, 0xff));
++        break;
++    case 16: // BLENDCURRENTALPHA: lerp(current, a, current alpha)
++        lerp(src(R_TEMP, 0, 0xff));
++        break;
++    case 17: // PREMODULATE: rgb * arg2 alpha, alpha unchanged
++        if (mask & 7)
++            c.op(OP_MUL, {dst(R_TEMP, 4, 7), a, swz(b, 0xff)});
++        if (mask & 8)
++            c.op(OP_MOV, {dst(R_TEMP, 4, 8), swz(a, 0xff)});
++        break;
++    case 18: // MODULATEALPHA_ADDCOLOR: rgb * alpha + arg2 rgb, arg2 alpha
++        if (mask & 7) {
++            c.op(OP_MUL, {dst(R_TEMP, 5, 7), a, swz(a, 0xff)});
++            c.op(OP_ADD, {dst(R_TEMP, 4, 7, true), src(R_TEMP, 5), b});
++        }
++        if (mask & 8)
++            c.op(OP_MOV, {dst(R_TEMP, 4, 8), swz(b, 0xff)});
++        break;
++    case 19: // MODULATECOLOR_ADDALPHA: arg2 rgb, arg1 alpha * arg2 alpha
++        if (mask & 7)
++            c.op(OP_MOV, {dst(R_TEMP, 4, 7), b});
++        if (mask & 8) {
++            c.op(OP_MUL, {dst(R_TEMP, 5, 8), swz(a, 0xff), swz(b, 0xff)});
++            c.op(OP_MOV, {dst(R_TEMP, 4, 8), src(R_TEMP, 5)});
++        }
++        break;
++    case 25: // DOTPRODUCT3: (a . b) replicated into all four channels
++        c.op(OP_DP3, {dst(R_TEMP, 4), a, b});
++        if (mask != 15)
++            c.op(OP_MOV, {d, src(R_TEMP, 4)});
++        break;
++    case 26: // MULTIPLYADD: a*b + current
++        c.op(OP_MUL, {dst(R_TEMP, 5, mask), a, b});
++        c.op(OP_ADD, {d, src(R_TEMP, 5), current});
++        break;
++    case 27: // LERP: a*b + current*(1 - b)
++        c.op(OP_MUL, {dst(R_TEMP, 5, mask), a, b});
++        c.op(OP_SUB, {dst(R_TEMP, 4, mask), src(R_CONST, 1, 0), b});
++        c.op(OP_MUL, {dst(R_TEMP, 4, mask), src(R_TEMP, 4), current});
++        c.op(OP_ADD, {d, src(R_TEMP, 5), src(R_TEMP, 4)});
++        break;
 +    default:
-+        return fail(why, "unsupported texture stage operation");
++        return fail(why, "unsupported texture stage operation: " + std::to_string(operation));
 +    }
 +    return true;
 +}
@@ -7627,8 +8722,10 @@ index 0000000..8d102b9
 +    if (f.transformed && (fvf & 0x10))
 +        return fail(why, "XYZRHW and NORMAL are mutually exclusive");
 +    element(f, f.transformed ? 3 : 2, f.transformed ? 9 : 0, 0, f.transformed ? 16 : 12);
-+    if (fvf & 0x10)
++    if (fvf & 0x10) {
 +        element(f, 2, 3, 0, 12);
++        f.normal = true;
++    }
 +    f.diffuse = (fvf & 0x40) != 0;
 +    f.specular = (fvf & 0x80) != 0;
 +    if (f.diffuse)
@@ -7648,10 +8745,30 @@ index 0000000..8d102b9
 +    uint32_t candidate = 0, textures = 0;
 +    if (declaration.size() < 16 || declaration.size() % 8)
 +        return fail(why, "missing or truncated fixed-function declaration");
++    // One line describing every element, so a refusal names the whole layout
++    // rather than only the first element that does not fit.
++    auto layout = [&declaration]() {
++        std::string out;
++        for (size_t at = 0; at + 8 <= declaration.size(); at += 8) {
++            const uint8_t *e = declaration.data() + at;
++            if (e[4] == 17)
++                break;
++            out += " [stream " + std::to_string(e[0] | (e[1] << 8)) + " offset " +
++                   std::to_string(e[2] | (e[3] << 8)) + " type " + std::to_string(e[4]) +
++                   " usage " + std::to_string(e[6]) + " index " + std::to_string(e[7]) + "]";
++        }
++        return out;
++    };
 +    for (size_t at = 0; at + 8 < declaration.size(); at += 8) {
 +        const uint8_t *e = declaration.data() + at;
 +        if (e[0] || e[1] || e[5])
-+            return fail(why, "fixed-function declaration requires stream zero and default method");
++            return fail(why, "fixed-function declaration requires stream zero and default method:"
++                              " element " + std::to_string(at / 8) + " stream " +
++                              std::to_string(e[0] | (e[1] << 8)) + " offset " +
++                              std::to_string(e[2] | (e[3] << 8)) + " type " +
++                              std::to_string(e[4]) + " method " + std::to_string(e[5]) +
++                              " usage " + std::to_string(e[6]) + " index " +
++                              std::to_string(e[7]) + " in" + layout());
 +        if (e[6] == 0 && e[7] == 0 && e[4] == 2)
 +            candidate |= 2; // FLOAT3 POSITION
 +        else if (e[6] == 9 && e[7] == 0 && e[4] == 3)
@@ -7675,26 +8792,230 @@ index 0000000..8d102b9
 +    return true;
 +}
 +
-+bool d9_ffp_prepare(const D9Pipeline &p, uint32_t fvf, uint32_t width, uint32_t height,
-+                    D9FixedFunction &result, std::string &why) {
-+    D9FixedFunction out;
-+    if (!d9_fvf_decode(fvf, out.format, why))
-+        return false;
-+    const D9FVF &f = out.format;
-+    if (!f.transformed && p.rs[137])
-+        return fail(why, "fixed-function lighting is not implemented");
-+    if (p.rs[28] || p.rs[29] || p.rs[151] || p.rs[167])
-+        return fail(why,
-+                    "fixed-function fog, specular addition, or vertex blending is not implemented");
++// Describes a vertex declaration directly, element by element, instead of
++// reconstructing an FVF code from it. The renderer already binds attributes to
++// shader inputs by usage, so the synthesized shader only needs to know which
++// attributes exist: a position, an optional normal, the two colours and how
++// many texture coordinate sets. That makes element order, offsets and the
++// stream number irrelevant, which is what a declaration with the positions in
++// a second stream needs, and it rejects vertex blending by name rather than as
++// an unrecognized element.
++bool d9_declaration_format(const std::vector<uint8_t> &declaration, D9FVF &format,
++                           std::string &why) {
++    if (declaration.size() < 16 || declaration.size() % 8)
++        return fail(why, "missing or truncated fixed-function declaration");
++    D9FVF f;
++    bool position = false, terminated = false;
++    for (size_t at = 0; at + 8 <= declaration.size(); at += 8) {
++        const uint8_t *e = declaration.data() + at;
++        if (e[4] == 17) { // D3DDECLTYPE_UNUSED marks the end
++            terminated = true;
++            break;
++        }
++        if (e[5]) // D3DDECLMETHOD: only DEFAULT is implemented
++            return fail(why, "vertex declaration method is not implemented: usage " +
++                             std::to_string(e[6]) + " index " + std::to_string(e[7]) +
++                             " method " + std::to_string(e[5]));
++        switch (e[6]) {
++        case 0: // POSITION
++            if (e[7] != 0)
++                return fail(why, "position usage index is not implemented: " +
++                                 std::to_string(e[7]));
++            position = true;
++            break;
++        case 9: // POSITIONT
++            position = true;
++            f.transformed = true;
++            break;
++        case 1: // BLENDWEIGHT
++        case 2: // BLENDINDICES
++            return fail(why, "fixed-function vertex blending is not implemented");
++        case 3: // NORMAL
++            f.normal = true;
++            break;
++        case 10: // COLOR
++            if (e[7] == 0)
++                f.diffuse = true;
++            else if (e[7] == 1)
++                f.specular = true;
++            else
++                return fail(why, "colour usage index is not implemented: " +
++                                 std::to_string(e[7]));
++            break;
++        case 5: // TEXCOORD
++            if (e[7] + 1 > f.textures)
++                f.textures = e[7] + 1;
++            break;
++        default:
++            return fail(why, "vertex declaration usage is not implemented: usage " +
++                             std::to_string(e[6]) + " index " + std::to_string(e[7]));
++        }
++    }
++    if (!terminated)
++        return fail(why, "fixed-function declaration has no terminator");
++    if (!position)
++        return fail(why, "fixed-function declaration has no position");
++    format = std::move(f);
++    why.clear();
++    return true;
++}
++
++// Pixel side of the fixed-function pipeline: one TEX per textured stage, the
++// COMBINE operations that follow, and the specular add. `uv_sets` is the number
++// of texture coordinate sets in the vertex layout, or zero when the application
++// supplies its own vertex shader and the layout is therefore unknown.
++bool pixel_stages(const D9Pipeline &p, uint32_t uv_sets, Code &vs, Code &ps,
++                  D9FixedFunction &out, bool vertex_supplied, std::string &why) {
++    declare(ps, R_INPUT, 0, 10);
++    declare(ps, R_INPUT, 1, 10, 1);
++    uint32_t one = 0x3f800000, two = 0x40000000, four = 0x40800000, half = 0x3f000000;
++    ps.op(OP_DEF, {dst(R_CONST, 1), one, two, four, half});
++    for (unsigned k = 0; k < 4; ++k)
++        out.pconst[0][k] = ((p.rs[60] >> (k == 3 ? 24 : (2 - k) * 8)) & 255) / 255.0f;
++    ps.op(OP_MOV, {dst(R_TEMP, 0), src(R_INPUT, 0)});
++    // Texture-coordinate transforms need a matrix per stage, taken from the
++    // first free constant past the lighting range and allocated only for the
++    // stages that ask for one.
++    unsigned tt_base = 18 + 16;
++    for (uint32_t stage = 0; stage < 8; ++stage) {
++        const uint32_t *t = p.tss[stage];
++        if (t[1] == 1 || (t[2] == 2 && !p.sampler_tex[stage]))
++            break;
++        // D3DTSS_TEXCOORDINDEX: the low three bits select a UV set, and the
++        // generator bits ask for a coordinate computed from the vertex instead.
++        // D3DTSS_TCI_PASSTHRU 0, CAMERASPACENORMAL 0x10000 and
++        // CAMERASPACEPOSITION 0x20000 are implemented; the reflection vector and
++        // sphere map generators are not.
++        uint32_t tci = t[11] & ~7u, uv_index = t[11] & 7u;
++        if (tci && tci != 0x10000u && tci != 0x20000u)
++            return fail(why, "texgen is not implemented: stage " + std::to_string(stage) +
++                             " texcoord index " + std::to_string(t[11]));
++        if (tci == 0x10000u && !out.format.normal)
++            return fail(why, "camera-space normal texgen needs a normal: stage " +
++                             std::to_string(stage));
++        if (t[28] && t[28] != 1)
++            return fail(why, "texture TEMP result is not implemented: stage " +
++                             std::to_string(stage) + " result arg " + std::to_string(t[28]));
++        // D3DTSS_TEXTURETRANSFORMFLAGS: 0 disables the transform, 1..4 give the
++        // number of components, and 0x100 asks for the projective divide that
++        // the renderer performs from the coordinate's w lane.
++        uint32_t ttf = t[24], count = ttf & 7, projected = ttf & 0x100;
++        if (ttf & ~0x107u)
++            return fail(why, "texture transform flags are not implemented: stage " +
++                             std::to_string(stage) + " flags " + std::to_string(ttf));
++        if (ttf && (count < 1 || count > 4))
++            return fail(why, "texture transform component count is not implemented: stage " +
++                             std::to_string(stage) + " flags " + std::to_string(ttf));
++        bool textured = false;
++        for (uint32_t type : {2u, 3u, 5u, 6u})
++            textured |= (t[type] & 15) == 2;
++        if (textured) {
++            if (!p.sampler_tex[stage])
++                return fail(why, "texture argument has no texture");
++            // The fixed-function vertex path produces the stage's coordinate. A
++            // supplied vertex shader already writes its own, and D3D applies no
++            // fixed-function transform to a programmable vertex pipeline.
++            if (!vertex_supplied) {
++                if (!ttf && !tci) {
++                    if (uv_index >= uv_sets)
++                        return fail(why, "texture argument has no texture or UV set");
++                    vs.op(OP_MOV, {dst(R_TEXCRDOUT, stage), src(R_INPUT, 3 + uv_index)});
++                } else if (!ttf) {
++                    // A generated coordinate with no transform is used as-is:
++                    // camera-space position or normal, so only the view matrix
++                    // applies.
++                    float vt[16];
++                    multiply(p.transform[2], p.transform[16 + stage], vt);
++                    for (uint32_t col = 0; col < 4; ++col)
++                        for (uint32_t row = 0; row < 4; ++row)
++                            out.vconst[tt_base + col][row] = vt[4 * row + col];
++                    for (uint32_t k = 0; k < 4; ++k)
++                        vs.op(OP_DP4, {dst(R_TEMP, 6, 1u << k),
++                                       src(R_INPUT, tci == 0x10000u ? 11 : 0),
++                                       src(R_CONST, tt_base + k)});
++                    vs.op(OP_MOV, {dst(R_TEXCRDOUT, stage), src(R_TEMP, 6)});
++                    tt_base += 4;
++                } else {
++                    // The stage's matrix, or the view matrix composed with it
++                    // for a generated coordinate, in the same row-vector
++                    // convention as the world matrix: c[col][row] = m[4*row+col].
++                    float mat[16];
++                    if (tci)
++                        multiply(p.transform[2], p.transform[16 + stage], mat);
++                    else
++                        memcpy(mat, p.transform[16 + stage], sizeof mat);
++                    for (uint32_t col = 0; col < 4; ++col)
++                        for (uint32_t row = 0; row < 4; ++row)
++                            out.vconst[tt_base + col][row] = mat[4 * row + col];
++                    if (tci) {
++                        vs.op(OP_MOV, {dst(R_TEMP, 5), src(R_INPUT, tci == 0x10000u ? 11 : 0)});
++                        if (tci == 0x10000u) // a normal has no translation term
++                            vs.op(OP_MOV, {dst(R_TEMP, 5, 8), src(R_CONST, 7, 0x00)});
++                    } else {
++                        // A plain UV set is (u, v, 0, 1), so the translation row
++                        // applies to it.
++                        if (uv_index >= uv_sets)
++                            return fail(why, "texture argument has no texture or UV set");
++                        vs.op(OP_MOV, {dst(R_TEMP, 5, 3), src(R_INPUT, 3 + uv_index)});
++                        vs.op(OP_MOV, {dst(R_TEMP, 5, 4), src(R_CONST, 7, 0x00)});
++                        vs.op(OP_MOV, {dst(R_TEMP, 5, 8), src(R_CONST, 4, 0x00)});
++                    }
++                    for (uint32_t k = 0; k < 4; ++k)
++                        vs.op(OP_DP4, {dst(R_TEMP, 6, 1u << k), src(R_TEMP, 5),
++                                       src(R_CONST, tt_base + k)});
++                    if (projected) {
++                        // The renderer divides by w, so the divisor goes there.
++                        uint32_t from = count < 4 ? count : 3;
++                        vs.op(OP_DP4, {dst(R_TEMP, 6, 8), src(R_TEMP, 5),
++                                       src(R_CONST, tt_base + from)});
++                    }
++                    vs.op(OP_MOV, {dst(R_TEXCRDOUT, stage), src(R_TEMP, 6)});
++                    tt_base += 4;
++                }
++            }
++            declare(ps, R_ADDR, stage, 5, stage);
++            ps.op(OP_DCL, {0x90000000u, dst(R_SAMPLER, stage)}); // 2D sampler
++            ps.op(OP_TEX, {dst(R_TEMP, 1), src(R_ADDR, stage), src(R_SAMPLER, stage)});
++        }
++        for (unsigned alpha = 0; alpha < 2; ++alpha) {
++            uint32_t a, b;
++            if (!argument(ps, t[alpha ? 5 : 2], 2, a, why) ||
++                !argument(ps, t[alpha ? 6 : 3], 3, b, why) ||
++                !combine(ps, t[alpha ? 4 : 1], a, b, alpha ? 8 : 7, why))
++                return false;
++        }
++        ps.op(OP_MOV, {dst(R_TEMP, 0), src(R_TEMP, 4)});
++    }
++    // D3D adds the vertex specular colour after the texture stages. With no
++    // specular element the vertex shader supplies c5, which stays zero.
++    if (p.rs[29])
++        ps.op(OP_ADD, {dst(R_TEMP, 0, 7), src(R_TEMP, 0), src(R_INPUT, 1)});
++    ps.op(OP_MOV, {dst(R_COLOROUT, 0), src(R_TEMP, 0)});
++    return true;
++}
++
++// Vertex side of the fixed-function pipeline: position transform, fog, lighting
++// and the colour outputs. `f` describes the vertex stream the application binds.
++bool vertex_program(const D9Pipeline &p, const D9FVF &f, uint32_t width, uint32_t height,
++                    Code &vs, D9FixedFunction &out, std::string &why) {
++    // Fixed-function lighting is a diffuse sum over the enabled lights plus
++    // the material's own ambient and emissive terms. It needs a normal; a
++    // format without one keeps its vertex colour and the lighting state is
++    // simply unused, which is what a prelit vertex stream expects.
++    bool lit = !f.transformed && p.rs[137] && f.normal;
++    // Table fog (D3DRS_FOGTABLEMODE) is evaluated per pixel by the renderer
++    // from the rasterizer depth and the fog colour. Per-vertex fog writes the
++    // factor below. Specular addition is folded into the pixel shader. Vertex
++    // blending changes the vertex stream layout, so it stays transactional.
++    if (p.rs[151] || p.rs[167])
++        return fail(why, "fixed-function vertex blending is not implemented");
 +    // Flat (1) and gouraud (2) share this shader: the difference is purely
 +    // how the raster stage interpolates the colour varyings, which the draw
 +    // flags carry to the renderer (HostD9Draw.flat_colors). PHONG (3) has no
 +    // implementation anywhere in the toolkit.
 +    if (p.rs[9] != 2 && p.rs[9] != 1)
 +        return fail(why, "fixed-function phong shading is not implemented");
-+    Code vs, ps;
 +    vs.word(0xfffe0200u);
-+    ps.word(0xffff0200u);
 +    declare(vs, R_INPUT, 0, f.transformed ? 9 : 0);
 +    if (f.diffuse)
 +        declare(vs, R_INPUT, 1, 10);
@@ -7702,8 +9023,15 @@ index 0000000..8d102b9
 +        declare(vs, R_INPUT, 2, 10, 1);
 +    for (uint32_t i = 0; i < f.textures; ++i)
 +        declare(vs, R_INPUT, 3 + i, 5, i);
++    // The normal gets the last free input slot, past the eight UV sets.
++    if (f.normal)
++        declare(vs, R_INPUT, 11, 3);
 +    // c4 provides colour defaults; all position matrices occupy c0..c3.
 +    out.vconst[4][0] = out.vconst[4][1] = out.vconst[4][2] = out.vconst[4][3] = 1;
++    // c7 holds the two literals the synthesized maths needs: zero (swizzle x)
++    // and -1 in every lane (swizzle y).
++    out.vconst[7][0] = 0.0f;
++    out.vconst[7][1] = -1.0f;
 +    if (!f.transformed) {
 +        float wv[16], wvp[16];
 +        multiply(p.transform[24], p.transform[2], wv);
@@ -7735,45 +9063,176 @@ index 0000000..8d102b9
 +        vs.op(OP_MUL, {dst(R_RASTOUT, 0, 7), src(R_TEMP, 0), src(R_TEMP, 0, 0xff)});
 +        vs.op(OP_MOV, {dst(R_RASTOUT, 0, 8), src(R_TEMP, 0, 0xff)});
 +    }
-+    vs.op(OP_MOV, {dst(R_ATTROUT, 0), f.diffuse ? src(R_INPUT, 1) : src(R_CONST, 4)});
-+    vs.op(OP_MOV, {dst(R_ATTROUT, 1), f.specular ? src(R_INPUT, 2) : src(R_CONST, 5)});
-+    declare(ps, R_INPUT, 0, 10);
-+    declare(ps, R_INPUT, 1, 10, 1);
-+    uint32_t one = 0x3f800000, two = 0x40000000, four = 0x40800000;
-+    ps.op(OP_DEF, {dst(R_CONST, 1), one, two, four, 0});
-+    for (unsigned k = 0; k < 4; ++k)
-+        out.pconst[0][k] = ((p.rs[60] >> (k == 3 ? 24 : (2 - k) * 8)) & 255) / 255.0f;
-+    ps.op(OP_MOV, {dst(R_TEMP, 0), src(R_INPUT, 0)});
-+    for (uint32_t stage = 0; stage < 8; ++stage) {
-+        const uint32_t *t = p.tss[stage];
-+        if (t[1] == 1 || (t[2] == 2 && !p.sampler_tex[stage]))
-+            break;
-+        if (t[24] || (t[11] & ~7u) || (t[28] && t[28] != 1))
-+            return fail(why, "texture transforms, texgen, or TEMP result are not implemented");
-+        bool textured = false;
-+        for (uint32_t type : {2u, 3u, 5u, 6u})
-+            textured |= (t[type] & 15) == 2;
-+        if (textured) {
-+            if (!p.sampler_tex[stage] || t[11] >= f.textures)
-+                return fail(why, "texture argument has no texture or UV set");
-+            vs.op(OP_MOV, {dst(R_TEXCRDOUT, stage), src(R_INPUT, 3 + t[11])});
-+            declare(ps, R_ADDR, stage, 5, stage);
-+            ps.op(OP_DCL, {0x90000000u, dst(R_SAMPLER, stage)}); // 2D sampler
-+            ps.op(OP_TEX, {dst(R_TEMP, 1), src(R_ADDR, stage), src(R_SAMPLER, stage)});
++    // D3DFOG_NONE/EXP/EXP2/LINEAR are 0/1/2/3. Table fog uses the
++    // rasterizer depth in the renderer, so only the vertex modes need a
++    // factor here. The renderer's mode 1 reads this oFog value; the table
++    // modes read the raster depth and ignore it.
++    if (p.rs[28] && !p.rs[35] && p.rs[140] >= 1 && p.rs[140] <= 3) {
++        if (!f.transformed)
++            vs.op(OP_DP4, {dst(R_TEMP, 0, 1), src(R_INPUT, 0), src(R_CONST, 3)});
++        else
++            vs.op(OP_MOV, {dst(R_TEMP, 0, 1), src(R_TEMP, 0, 0xff)});
++        if (p.rs[140] == 3) {
++            float start = 0, end = 1;
++            memcpy(&start, &p.rs[36], 4);
++            memcpy(&end, &p.rs[37], 4);
++            float inv = end != start ? 1.0f / (end - start) : 0.0f;
++            out.vconst[6][0] = end * inv;
++            out.vconst[6][1] = -inv;
++            // factor = z * (-inv) + end * inv, then saturate.
++            vs.op(OP_MAD, {dst(R_TEMP, 0, 1), src(R_TEMP, 0), src(R_CONST, 6, 0x55),
++                           src(R_CONST, 6)});
++        } else {
++            float density = 1;
++            memcpy(&density, &p.rs[38], 4);
++            out.vconst[6][0] = p.rs[140] == 2 ? density : -density;
++            vs.op(OP_MUL, {dst(R_TEMP, 0, 1), src(R_TEMP, 0), src(R_CONST, 6)});
++            if (p.rs[140] == 2) {
++                // EXP2: exp(-(density * z)^2).
++                out.vconst[6][1] = -1;
++                vs.op(OP_MUL, {dst(R_TEMP, 0, 1), src(R_TEMP, 0), src(R_TEMP, 0)});
++                vs.op(OP_MUL, {dst(R_TEMP, 0, 1), src(R_TEMP, 0), src(R_CONST, 6, 0x55)});
++            }
++            vs.op(OP_EXPP, {dst(R_TEMP, 0, 1), src(R_TEMP, 0)});
 +        }
-+        for (unsigned alpha = 0; alpha < 2; ++alpha) {
-+            uint32_t a, b;
-+            if (!argument(ps, t[alpha ? 5 : 2], 2, a, why) ||
-+                !argument(ps, t[alpha ? 6 : 3], 3, b, why) ||
-+                !combine(ps, t[alpha ? 4 : 1], a, b, alpha ? 8 : 7, why))
-+                return false;
-+        }
-+        ps.op(OP_MOV, {dst(R_TEMP, 0), src(R_TEMP, 4)});
++        vs.op(OP_MOV, {dst(R_RASTOUT, 1, 1, true), src(R_TEMP, 0)});
 +    }
-+    ps.op(OP_MOV, {dst(R_COLOROUT, 0), src(R_TEMP, 0)});
-+    out.vs = vs.finish();
-+    out.ps = ps.finish();
-+    if (!program_for(out.vs.vec()).ok || !program_for(out.ps.vec()).ok)
++    if (lit) {
++        // Diffuse fixed-function lighting, per vertex:
++        //   colour = emissive + ambient * material.ambient
++        //          + sum over enabled lights of
++        //              light.diffuse * material.diffuse * max(0, N . L)
++        //          + vertex colour when D3DRS_COLORVERTEX is set.
++        // Directional lights use their direction as-is; point and spot lights
++        // use the vector from the light to the vertex, without attenuation,
++        // range or the spot cone. That keeps lit geometry shaded rather than
++        // flat black, and it is exact for the directional case GTA SA uses for
++        // its sun. The world matrix is c8..c11 so the normal can be rotated
++        // into world space, which is where the light vectors live.
++        const D9Material &m = p.material;
++        for (unsigned col = 0; col < 4; ++col)
++            for (unsigned row = 0; row < 4; ++row)
++                out.vconst[8 + col][row] = p.transform[24][4 * row + col];
++        // c16..c17: material diffuse, and emissive plus ambient scaled by the
++        // global ambient render state (D3DRS_AMBIENT is a D3DCOLOR: AABBGGRR).
++        memcpy(out.vconst[16], m.diffuse, sizeof m.diffuse);
++        uint32_t ambient = p.rs[139];
++        const float global[3] = {(float)(ambient & 0xff) / 255.0f,
++                                 (float)((ambient >> 8) & 0xff) / 255.0f,
++                                 (float)((ambient >> 16) & 0xff) / 255.0f};
++        for (unsigned k = 0; k < 3; ++k)
++            out.vconst[17][k] = m.emissive[k] + m.ambient[k] * global[k];
++        out.vconst[17][3] = 1.0f;
++        // Rotate the normal into world space and normalize it. Each DP3 writes
++        // one lane, so the masks are x, y and z.
++        vs.op(OP_DP3, {dst(R_TEMP, 3, 1), src(R_INPUT, 11), src(R_CONST, 8)});
++        vs.op(OP_DP3, {dst(R_TEMP, 3, 2), src(R_INPUT, 11), src(R_CONST, 9)});
++        vs.op(OP_DP3, {dst(R_TEMP, 3, 4), src(R_INPUT, 11), src(R_CONST, 10)});
++        vs.op(OP_NRM, {dst(R_TEMP, 3), src(R_TEMP, 3)});
++        // Start from the ambient and emissive terms.
++        vs.op(OP_MUL, {dst(R_TEMP, 0), src(R_CONST, 16), src(R_CONST, 17)});
++        // Point and spot lights need the vertex in world space, which is one
++        // DP4 whatever the number of lights. r2 keeps it for the whole loop so
++        // the per-light vector goes to r4 and the world position is not lost.
++        bool needs_world = false;
++        for (const D9Light &l : p.light)
++            needs_world |= l.enabled && (l.type == 1 || l.type == 2);
++        if (needs_world)
++            vs.op(OP_DP4, {dst(R_TEMP, 2), src(R_INPUT, 0), src(R_CONST, 8)});
++        unsigned used = 0;
++        for (unsigned i = 0; i < 8 && used < 8; ++i) {
++            const D9Light &l = p.light[i];
++            if (!l.enabled || l.type < 1 || l.type > 3)
++                continue;
++            unsigned base = 18 + used * 2;
++            ++used;
++            // c(base): light diffuse, c(base+1): world-space light vector.
++            memcpy(out.vconst[base], l.diffuse, sizeof l.diffuse);
++            // D3DLIGHT_POINT 1, D3DLIGHT_SPOT 2, D3DLIGHT_DIRECTIONAL 3.
++            bool directional = l.type == 3;
++            if (directional) {
++                // Directional: the vector points from the vertex towards the
++                // light, which is the negated direction.
++                for (unsigned k = 0; k < 3; ++k)
++                    out.vconst[base + 1][k] = -l.direction[k];
++                out.vconst[base + 1][3] = 0;
++            } else {
++                // Point and spot: the vector from the light to the vertex,
++                // which needs the vertex in world space. The position is
++                // stored negated with a w of one, so the MAD below yields
++                // world position minus light position.
++                for (unsigned k = 0; k < 3; ++k)
++                    out.vconst[base + 1][k] = -l.position[k];
++                out.vconst[base + 1][3] = 1;
++                vs.op(OP_MAD, {dst(R_TEMP, 4), src(R_CONST, base + 1), src(R_CONST, 4),
++                               src(R_TEMP, 2)});
++                vs.op(OP_NRM, {dst(R_TEMP, 4), src(R_TEMP, 4)});
++            }
++            if (directional) {
++                vs.op(OP_DP3, {dst(R_TEMP, 1), src(R_TEMP, 3), src(R_CONST, base + 1)});
++            } else {
++                // The light vector points away from the light, so the dot
++                // product with the surface normal is negated.
++                vs.op(OP_DP3, {dst(R_TEMP, 1), src(R_TEMP, 3), src(R_TEMP, 4)});
++                vs.op(OP_MUL, {dst(R_TEMP, 1), src(R_TEMP, 1), src(R_CONST, 7, 0x55)});
++            }
++            vs.op(OP_MAX, {dst(R_TEMP, 1), src(R_TEMP, 1), src(R_CONST, 7, 0x00)});
++            // light.diffuse * material.diffuse * max(0, N.L), accumulated.
++            vs.op(OP_MUL, {dst(R_TEMP, 4), src(R_CONST, base), src(R_CONST, 16)});
++            vs.op(OP_MAD, {dst(R_TEMP, 0), src(R_TEMP, 4), src(R_TEMP, 1), src(R_TEMP, 0)});
++        }
++        // The lit sum drives the colour; alpha keeps the material's, or the
++        // vertex's when COLORVERTEX is set, because D3D never lights alpha.
++        if (p.rs[141] && f.diffuse) {
++            vs.op(OP_MUL, {dst(R_TEMP, 0, 7), src(R_TEMP, 0), src(R_INPUT, 1)});
++            vs.op(OP_MOV, {dst(R_ATTROUT, 0, 7, true), src(R_TEMP, 0)});
++            vs.op(OP_MOV, {dst(R_ATTROUT, 0, 8), src(R_INPUT, 1, 0xff)});
++        } else {
++            vs.op(OP_MOV, {dst(R_ATTROUT, 0, 7, true), src(R_TEMP, 0)});
++            vs.op(OP_MOV, {dst(R_ATTROUT, 0, 8), src(R_CONST, 16, 0xff)});
++        }
++    } else {
++        vs.op(OP_MOV, {dst(R_ATTROUT, 0), f.diffuse ? src(R_INPUT, 1) : src(R_CONST, 4)});
++    }
++    vs.op(OP_MOV, {dst(R_ATTROUT, 1), f.specular ? src(R_INPUT, 2) : src(R_CONST, 5)});
++    return true;
++}
++
++bool d9_ffp_prepare(const D9Pipeline &p, uint32_t fvf, uint32_t width, uint32_t height,
++                    D9FixedFunction &result, std::string &why, bool vertex_supplied,
++                    bool pixel_supplied, const std::vector<uint8_t> *declaration) {
++    D9FixedFunction out;
++    if (!vertex_supplied) {
++        // A bound declaration describes the stream directly and is preferred:
++        // it carries element order, offsets and the stream number, which an FVF
++        // code cannot express.
++        bool described;
++        if (declaration && !declaration->empty())
++            described = d9_declaration_format(*declaration, out.format, why);
++        else if (fvf)
++            described = d9_fvf_decode(fvf, out.format, why);
++        else
++            described = fail(why, "no fixed-function vertex declaration or FVF is bound");
++        if (!described)
++            return false;
++    }
++    const D9FVF &f = out.format;
++    Code vs, ps;
++    if (!vertex_supplied && !vertex_program(p, f, width, height, vs, out, why))
++        return false;
++    if (!pixel_supplied) {
++        ps.word(0xffff0200u);
++        if (!pixel_stages(p, vertex_supplied ? 0 : f.textures, vs, ps, out, vertex_supplied,
++                          why))
++            return false;
++        out.ps = ps.finish();
++    }
++    if (!vertex_supplied)
++        out.vs = vs.finish();
++    // Only the synthesized half needs validating; a supplied one is the
++    // application's own bytecode, already checked when it was created.
++    if ((!vertex_supplied && !program_for(out.vs.vec()).ok) ||
++        (!pixel_supplied && !program_for(out.ps.vec()).ok))
 +        return fail(why, "generated fixed-function shader failed bytecode validation");
 +    result = std::move(out);
 +    why.clear();
@@ -7781,10 +9240,10 @@ index 0000000..8d102b9
 +}
 diff --git a/dx/d3d9_ffp.h b/dx/d3d9_ffp.h
 new file mode 100644
-index 0000000..fb163f0
+index 0000000..68ed040
 --- /dev/null
 +++ b/dx/d3d9_ffp.h
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,62 @@
 +// A bounded Direct3D 9 fixed-function shader synthesis path. Unsupported state
 +// is rejected before either renderer sees a draw; the original device state
 +// and its programmable shader constants are never changed by this helper.
@@ -7795,13 +9254,21 @@ index 0000000..fb163f0
 +struct D9FVF {
 +    std::vector<uint8_t> declaration;
 +    uint32_t stride = 0, textures = 0;
-+    bool transformed = false, diffuse = false, specular = false;
++    bool transformed = false, diffuse = false, specular = false, normal = false;
 +};
++
++// One past the highest vertex-shader constant the synthesized pipeline writes:
++// c0..c3 world-view-projection, c4..c5 colour defaults, c6..c7 fog and the
++// shared literals, c8..c11 the world matrix, c16..c17 the material, c18..c33 up
++// to eight lights, and c34..c65 one four-column matrix per texture stage that
++// asks for a texture-coordinate transform. A draw swaps this range in and
++// restores the application's own constants afterwards.
++static constexpr unsigned D9_FFP_VCONST = 66;
 +
 +struct D9FixedFunction {
 +    D9FVF format;
 +    D9ShaderBytes vs, ps;
-+    float vconst[6][4] = {};
++    float vconst[D9_FFP_VCONST][4] = {};
 +    float pconst[1][4] = {};
 +};
 +
@@ -7813,16 +9280,38 @@ index 0000000..fb163f0
 +bool d9_declaration_fvf(const std::vector<uint8_t> &declaration, uint32_t &fvf, std::string &why);
 +
 +// Synthesizes SM2 shaders shared by the existing CPU and GPU renderers.
-+// Initially supports unlit/prelit colour and select/modulate/add/subtract
-+// texture stages. Lighting, fog, texgen and texture transforms are refused.
++// Supports unlit/prelit colour, diffuse fixed-function lighting from up to
++// eight lights, select/modulate/add/subtract texture stages, table and
++// per-vertex fog, and specular addition. Vertex blending, texgen, texture
++// transforms and spot/point attenuation are refused or approximated as noted
++// at their sites.
++//
++// D3D9 lets one half of the pipeline stay programmable while the other runs
++// fixed-function, and GTA SA relies on it: its skinned models bind their own
++// vertex shader and leave the pixel stages fixed. `vertex_supplied` and
++// `pixel_supplied` keep the application's half untouched and synthesize only
++// the missing one. The result's matching D9ShaderBytes member is then empty.
++//
++// `declaration`, when given and non-empty, is the bound vertex declaration and
++// takes precedence over `fvf`: it can describe element order, offsets and a
++// position in a second stream, none of which an FVF code carries.
 +bool d9_ffp_prepare(const D9Pipeline &state, uint32_t fvf, uint32_t width, uint32_t height,
-+                    D9FixedFunction &result, std::string &why);
++                    D9FixedFunction &result, std::string &why, bool vertex_supplied = false,
++                    bool pixel_supplied = false,
++                    const std::vector<uint8_t> *declaration = nullptr);
++
++// Describes a vertex declaration directly: position, optional normal, the two
++// colours and the number of texture coordinate sets. Element order, offsets and
++// the stream number are irrelevant because the renderer binds attributes to
++// shader inputs by usage. Vertex blending is refused by name.
++bool d9_declaration_format(const std::vector<uint8_t> &declaration, D9FVF &format,
++                           std::string &why);
 diff --git a/dx/tests/d3d9_ffp_tests.cpp b/dx/tests/d3d9_ffp_tests.cpp
 new file mode 100644
-index 0000000..72659b5
+index 0000000..c54635c
 --- /dev/null
 +++ b/dx/tests/d3d9_ffp_tests.cpp
-@@ -0,0 +1,451 @@
+@@ -0,0 +1,495 @@
 +// Real SM2 decoder and software rasterizer tests, with owned COM surfaces.
 +// No game image, generated code, GPU, window or pretend successful draw.
 +#include "../com.h"
@@ -7904,6 +9393,10 @@ index 0000000..72659b5
 +struct XYZColour {
 +    float x, y, z;
 +    uint32_t colour;
++};
++struct XYZSpecular {
++    float x, y, z;
++    uint32_t colour, specular;
 +};
 +struct ScreenColour {
 +    float x, y, z, rhw;
@@ -7997,14 +9490,53 @@ index 0000000..72659b5
 +    check(ff.format.stride == 123, "refusal leaves output unchanged");
 +    p.rs[137] = 0;
 +    p.rs[28] = 1;
-+    check(!d9_ffp_prepare(p, 0x42, 64, 64, ff, why), "unimplemented fog refused");
++    p.rs[35] = 3; // D3DFOG_LINEAR table fog, applied by the renderer
++    check(d9_ffp_prepare(p, 0x42, 64, 64, ff, why), "linear table fog accepted");
 +    p.rs[28] = 0;
++    p.rs[35] = 0;
++    p.rs[29] = 1;
++    check(d9_ffp_prepare(p, 0x42, 64, 64, ff, why), "specular addition accepted");
++    p.rs[29] = 0;
++    p.rs[151] = 1;
++    check(!d9_ffp_prepare(p, 0x42, 64, 64, ff, why), "vertex blending refused");
++    p.rs[151] = 0;
 +    p.sampler_tex[0] = 1;
 +    p.tss[0][11] = 0x10000;
 +    check(!d9_ffp_prepare(p, 0x142, 64, 64, ff, why), "automatic texture coordinates refused");
 +    p.tss[0][11] = 0;
 +    p.tss[0][1] = 26;
 +    check(!d9_ffp_prepare(p, 0x142, 64, 64, ff, why), "unsupported texture operation refused");
++}
++
++void fog_and_specular_cases() {
++    D9Pipeline p;
++    defaults(p);
++    D9FixedFunction ff;
++    std::string why;
++    p.rs[28] = 1;
++    p.rs[35] = 3; // D3DFOG_LINEAR table fog, evaluated by the renderer
++    check(d9_ffp_prepare(p, 0x42, 64, 64, ff, why), "linear table fog accepted");
++    p.rs[35] = 0;
++    p.rs[140] = 3; // D3DFOG_LINEAR vertex fog, evaluated by the synthesized VS
++    check(d9_ffp_prepare(p, 0x42, 64, 64, ff, why), "linear vertex fog accepted");
++    std::string source, error;
++    check(d9wgsl::vertex_source(d9sh::program_for(ff.vs.vec()), &source, &error),
++          "vertex-fog VS translates through actual WebGPU shader generator");
++    check(source.find("o.fog") != std::string::npos,
++          "vertex fog writes the rasterizer fog factor");
++    p.rs[140] = 0;
++    p.rs[28] = 0;
++
++    ComObj *dev = com_new(K_D3D9DEVICE), *target = surface(64, 64);
++    D9Pipeline &dp = d9_pipeline(dev->id);
++    defaults(dp);
++    dp.rs[29] = 1;
++    const XYZSpecular specular[] = {{-.75f, .75f, .5f, 0xffff0000, 0xff00ff00},
++                                    {.75f, .75f, .5f, 0xffff0000, 0xff00ff00},
++                                    {-.75f, -.75f, .5f, 0xffff0000, 0xff00ff00}};
++    check(draw(dev, target, 0xc2, specular, sizeof specular), "specular triangle accepted");
++    check(pixel(target, 12, 12) == 0xffffff00,
++          "specular colour is added to the texture stage result");
 +}
 +
 +uint32_t device_call(uint32_t view, uint32_t slot, std::initializer_list<uint32_t> args) {
@@ -8267,6 +9799,7 @@ index 0000000..72659b5
 +    dx_register_shims();
 +    raster_cases();
 +    refusal_cases();
++    fog_and_specular_cases();
 +    flat_shading_cases();
 +    device_cases();
 +    exclusive_client_area();
