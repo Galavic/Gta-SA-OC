@@ -70,6 +70,21 @@ bloqueado, ensanchado hacia fuera hasta un múltiplo de 4 porque el offset de
 escritura del backend debe estar alineado (ensanchar es seguro; estrechar no).
 `__insert_with_size` baja de 4514 ms a 354 ms por ventana de 30 s.
 
+### El rango de subida es correcto también con geometría en movimiento
+
+Una captura estática no distingue un rango de subida correcto de uno que pierde
+bytes: los triángulos obsoletos solo aparecen cuando la geometría se reescribe en
+cada frame. Por eso la última comprobación mantiene `w` pulsada 40 s y captura la
+vista cada 0,5 s: los **72 fotogramas de 72** son distintos entre sí, así que el
+mundo se mueve con la entrada y no reproduce una cinemática, y `mv1_after_move.png`
+muestra a CJ fuera del callejón con el cartel de la calle, palmeras, edificios, un
+coche aparcado, el radar y el HUD, sin triángulos perdidos ni costuras. El registro
+de la página no contiene ningún aviso de WebGPU ni abortos.
+
+Con la ciudad a la vista el coste sube y la cifra baja: **12,0–12,8 fps con
+1154–1249 *draws* por frame** frente a 17,8 fps con ~760 en el callejón. Es la
+medida honesta del recorrido, y sigue siendo una sola calle, no la ciudad entera.
+
 ### Dos intentos medidos y revertidos
 
 Ninguno de los dos se quedó, y ambos están aquí para que no se repitan:
@@ -84,16 +99,30 @@ Ninguno de los dos se quedó, y ambos están aquí para que no se repitan:
 ### Qué sigue sin verificarse
 
 Misiones, vehículos, audio escuchado, guardado y carga, estabilidad más allá de
-~35 minutos y cobertura de la ciudad entera. La cifra de fps es **una escena
-estática** (el callejón), no un recorrido. El límite `CAP 60` del overlay es el
-límite de frames de la configuración del kit, no una medida.
+~35 minutos y cobertura de la ciudad entera. La cifra de 17,8 fps es **una escena
+estática** (el callejón); en movimiento por la misma calle baja a 12,0–12,8 fps. El
+límite `CAP 60` del overlay es el límite de frames de la configuración del kit, no
+una medida.
 
 Evidencia local de esta ronda: `final_overlay.png` (overlay recortado, `NEW 17.0
 FPS`, `FRAME 51.0 ms`, `GPU 4.1 ms`), `refocus_ov.png` (`NEW 24.5 FPS`, `FRAME
-39.4 ms`), `final_scene.png` y `cur2_scene.png` (la escena completa), y las líneas
+39.4 ms`), `final_scene.png` y `cur2_scene.png` (la escena completa),
+`mv1_move_*.png` y `mv1_after_move.png` (la secuencia con `w` pulsada), y las líneas
 `perf:` de `RECOMP_PERF_STATS=1` con `live_frames_max=1`, `seh_frames=0/s`,
 `frames live=0 enters_total=1550`. Sin avisos de WebGPU ni abortos en el registro
 de la página.
+
+### Dónde está ahora el coste
+
+Tras los dos arreglos el hilo del invitado ya no tiene un dueño único, y por eso
+esta ronda se detiene: no queda ninguna corrección grande que pueda validar sin
+arriesgar el *scheduler*. El perfil reparte el tiempo entre
+`__pthread_cond_timedwait` 13,6 %, los *trampolines* `invoke_*` de Emscripten con
+`get`/`getWasmTableEntry`/`wasm-to-js` ~9 %, lecturas de reloj ~9 %, código
+traducido del juego ~11 %, *staging* de D3D9 3,9 %, `imports_dispatch` 2,1 % y
+`printf_core` 1,2 %. Desactivar la captura de excepciones C++ quitaría los
+`invoke_*` (wasm→JS→wasm), pero `interp.cpp` depende de `throw`/`catch` para las
+faltas de memoria del invitado y la ganancia estimada es de ~2 fps: no se hizo.
 
 ## Gameplay controlable verificado en el navegador: CJ camina por Los Santos (2026-10-21)
 

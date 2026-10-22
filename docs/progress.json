@@ -990,13 +990,14 @@
     "verified": [
       "The scene renders: final_scene.png and cur2_scene.png show the alley with CJ, the street, trees and the HUD, with no WebGPU validation warning and no abort in the page log.",
       "The earlier BufferOffset (122454) is not a multiple of 4 WebGPU error introduced by narrowing the dirty range is gone after widening the range to a four-byte boundary.",
+      "The narrowed upload range is correct under moving geometry, which a static screenshot cannot show: holding w for 40 s produced 72 distinct view captures out of 72 samples, and mv1_after_move.png shows CJ out of the alley with the street billboard, palms, buildings, a parked car, the radar and the HUD, with no stale triangles. With the city in view the cost rises to 12.0-12.8 FPS at 1154-1249 draws per frame.",
       "The SEH leak is closed on the shipped image: live_frames_max is 1, seh_frames and chain_visits read 0/s, and frames reports live=0 with enters_total=1550."
     ],
     "not_verified": [
       "Missions, vehicles, audio actually heard, saving and loading.",
       "Stability beyond about 35 minutes of wall time.",
       "Draw coverage across the whole city.",
-      "The frame rate figure is one static alley scene, not a traversal. CAP 60 in the overlay is the kit's configured frame limit, not a measured cap."
+      "The 17.8 FPS figure is one static alley scene, not a traversal; the same street while walking measures 12.0-12.8 FPS. CAP 60 in the overlay is the kit's configured frame limit, not a measured cap."
     ],
     "remaining_profile": {
       "guest_thread": "After both fixes the guest thread has no dominant cost: __pthread_cond_timedwait 13.6%, Emscripten invoke_* exception trampolines with get/getWasmTableEntry/wasm-to-js about 11%, clock reads about 9%, translated game code about 11%, D3D9 staging 3.9%, imports_dispatch 2.1%, printf_core 1.2%.",
@@ -1007,13 +1008,17 @@
         "final_overlay.png",
         "refocus_ov.png",
         "final_scene.png",
-        "cur2_scene.png"
+        "cur2_scene.png",
+        "mv1_move_000.png",
+        "mv1_move_032.png",
+        "mv1_after_move.png"
       ],
       "counter_runs": [
         "gp2 (18.1-19.5 FPS, before the clock experiments)",
         "gp6 (guest-thread profile after the staging fix)",
         "final (17.8 FPS mean over 5 STAT reports)",
-        "fin (perf counters, live_frames_max=1)"
+        "fin (perf counters, live_frames_max=1)",
+        "mv1 (40 s of held w, 72 of 72 distinct captures, 12.3 FPS at ~1200 draws)"
       ]
     },
     "blockers": [
