@@ -1,5 +1,112 @@
 # Estado actual
 
+## Rendimiento: de 17,8 a 22,9 FPS medidos, y la aritmética que descarta los 60 FPS (2026-10-22)
+
+Medido en el navegador con el wasm `sha256 087ca85c…` (266.416.245 bytes), servido
+en `http://127.0.0.1:8771/gtasa-singleplayer/`, en el mismo callejón de Los Santos
+de la ronda anterior: CJ, la valla, la BMX y el HUD de objetivo, con ~750–760
+*draws* por frame. El build **sigue sin ser bit-reproducible**, así que el hash
+identifica un artefacto y no un estado del código.
+
+| Medida | Ronda anterior (`67e599f6…`) | Esta ronda (`087ca85c…`) |
+|---|---|---|
+| `STAT d3d9` media | 17,1–17,8 fps | **22,87 fps** (6 informes) |
+| `FRAME` | 39,4–56,3 ms | **43,7 ms** |
+| `draws/frame` | 751–787 | 750–760 |
+| `GPU` | 3,5–4,2 ms | 3,5–4,2 ms |
+
+La GPU sigue sin ser el cuello: 3,5–4,2 ms de un frame de 43,7 ms. Todo lo ganado
+en esta ronda está en el hilo del invitado.
+
+### La progresión, medida paso a paso
+
+Cada fila es un build distinto medido con el mismo protocolo (asentar 340 s,
+leer los últimos informes `STAT`). El ruido entre ejecuciones del mismo fuente es
+de ±1 fps, así que las filas separadas por menos que eso no prueban nada por sí
+solas; se conservan porque el conjunto sí es monótono.
+
+| fps | Cambio |
+|---|---|
+| 17,8–18,1 | Punto de partida de la ronda (`-fno-exceptions` en `runtime`, `dx`, `gpu_backend`, `host`) |
+| **20,1** | Diagnóstico `ARGC_UNKNOWN` con marca `argc_warned` por *trampolín* + reloj de `sched_wait_locked` solo con `perf_stats::on()` |
+| 20,6 | `-fno-exceptions` también en `mods` y `host_common` (con `-fexceptions` por fichero en `interp.cpp`, `overlay.cpp`, `indexed_frame.cpp`) |
+| 19,5 | Muestreo 1-de-16 del reloj del *checkpoint* de importaciones — dentro del ruido, se queda por ser gratis |
+| **21,1** | Descripción del *trampolín* perezosa: `imports_describe` deja de construir la cadena en cada *dispatch* |
+| **22,4** | Arena estable de descripciones (`desc_arena()`), así el *dispatch* guarda un puntero en vez de copiar |
+| **22,9** | `SCHED_SLICE_SECONDS` de 0,001 a 0,004 |
+
+Total: **17,8 → 22,9 fps (+29 %)** en la misma escena estática.
+
+### La causa real del `printf_core` que llevaba dos rondas en el perfil
+
+El perfil tenía un 1,74 % en `printf_core` sin dueño aparente. Estaba en
+`dx/d3d9.cpp:579`: el shim instala `g_return_observer` de forma **incondicional**,
+y ese observador llama a `describe()` en **cada dispatch** de importación. No era
+un `printf` de depuración olvidado: era la descripción de la función construyendo
+una `std::string` por llamada para un observador que casi siempre la ignora.
+
+La corrección no es quitar el observador —lo usan los modos de diagnóstico—, sino
+que `Tramp` guarde un `desc_c` que apunte a una arena que nunca se mueve
+(`desc_arena()`, un `std::deque<std::string>`; `deque` no invalida las referencias
+de los elementos ya insertados). El *dispatch* pasa entonces un puntero y no
+copia ni formatea nada. `printf_core` desaparece del perfil.
+
+### Lo que se intentó y no se quedó
+
+- **`SUPPORT_LONGJMP=wasm`.** Era la vía para eliminar los ~25 `invoke_*` que
+  quedan en las importaciones. El enlace falla con
+  `undefined symbol: emscripten_longjmp` en `liblua.a` y en los *chunks* de
+  `recomp_gen`: habría que recompilar **todos** los objetos en ese modo, no solo
+  el runtime, y además el `setjmp`/`longjmp` de Emscripten es load-bearing para el
+  SEH del invitado. Descartado por invasivo para los ~2 fps estimados.
+- **`-fno-exceptions` solo.** No basta: Emscripten emite los `invoke_*` en los
+  sitios de llamada indirecta por su `setjmp`/`longjmp` en JS, con independencia
+  de cómo se compilen las excepciones de C++. Quedan 25–26 en la sección de
+  importaciones, y su traza es `recomp_run` ← `invoke_vii` ← `run_entry`, es decir
+  el SJLJ de Emscripten y no una excepción de C++.
+- **Poda de *flags* en el traductor.** Eliminaría ~1,54 M accesos a
+  `c->eflags_`, pero 341 de 19.207 funciones tienen *flags* vivas a la entrada y
+  188 de 69.866 sitios de llamada las tienen vivas después: el riesgo de
+  incorrección no compensa ~1,5 fps.
+
+### Por qué 60 FPS no están al alcance, con aritmética
+
+A 22,9 fps el frame dura 43,7 ms y el hilo del invitado los reparte así:
+
+| Parte | % del frame | ms por frame |
+|---|---|---|
+| Código traducido del invitado | 43,6 % | **~19,0** |
+| Runtime + shims | 22,8 % | ~10,0 |
+| Frontera JS | 22,2 % | ~9,7 |
+| Espera del *scheduler* | 11,4 % | ~5,0 |
+
+El presupuesto de 60 fps es **16,7 ms por frame**, menos que los ~19 ms que ya
+consume **solo** el código traducido del invitado. Aun con un runtime de coste
+cero el techo sería ~50 fps, y eso sin contar GPU, presentación ni el
+`scheduler`. La vía realista es llegar a ~25–30 fps recortando la frontera JS y
+el runtime, no a 60.
+
+### Qué se verificó en el navegador
+
+- `move_verify.py final1 40`: con `w` pulsada 40 s, **68 de 68** capturas
+  distintas entre sí, `problems: []`, a 19,4 fps de media con 757–774 *draws*.
+  El mundo responde a la entrada y no reproduce una cinemática.
+- `shot_final.png`: CJ, la valla, las palmeras, el semáforo, los edificios, el
+  radar y el HUD, sin avisos de validación de WebGPU y sin abortos.
+- El audio corre: 2.147 mensajes `dsound` con búferes reproduciéndose
+  (`first play on channel …`), sin *underruns*.
+- `presenter: FAULT: target pool stalled for 250ms` aparece **una sola vez**, en
+  el arranque; muestreado a 0 s y 40 s el contador sigue en 1, así que no recurre.
+
+### Qué sigue sin verificarse
+
+Misiones, vehículos, audio **escuchado** (los búferes se reproducen; nadie ha
+confirmado que suenen), guardado y carga, estabilidad más allá de ~35 minutos y
+cobertura de la ciudad entera. Las cifras de arriba son **una escena estática**:
+al caminar por la misma calle la media baja a 19,4 fps, y con la ciudad a la vista
+y ~850–970 *draws* por frame baja a 15–17 fps. `CAP 60` en el overlay es el
+límite configurado del kit, no una medida.
+
 ## Rendimiento: de 0,4–0,6 FPS a 17–24,5 FPS en gameplay (2026-10-22)
 
 Medido en el navegador con el wasm `sha256 67e599f6…` (266.404.198 bytes), servido

@@ -10,7 +10,7 @@
   "original_intro_verified": false,
   "first_original_mission_verified": false,
   "original_vehicle_physics_verified": false,
-  "last_triage_utc": "2026-10-22T01:30:00+00:00",
+  "last_triage_utc": "2026-10-22T08:17:40+00:00",
   "triage_scope": "Performance round on wasm sha256 67e599f6... (266404198 bytes): gameplay in the Los Santos alley now measures 17.0-24.5 FPS with 39.4-56.3 ms frames and 3.5-4.2 ms of GPU time, up from 0.4-0.6 FPS with 1828.5 ms frames; the same street while walking measures 12.0-12.8 FPS at about 1200 draws per frame. Two root causes were fixed: a translator rule never emitted the SEH frame leave at 0x004835ef (the runtime predicate could not retire that epilogue shape either), and D3D9 staging allocated and freed a full-resource copy per Lock/Unlock while marking the whole buffer dirty. Details under browser_performance_triage. Missions, vehicles, audio, save/load and city-wide traversal remain unmeasured, and the build is not bit-reproducible.",
   "scope": "Current isolated executable; prototype rendering and older-image boot probes are separate evidence",
   "recreation": {
@@ -931,6 +931,124 @@
     ]
   },
   "browser_performance_triage": {
+    "updated_utc": "2026-10-22T08:17:40+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "served_wasm_sha256": "087ca85c9b6ad20118e8d9e70ae8b61a1c6fbb555e0b606a7106d7949b9408d2",
+    "wasm_bytes": 266416245,
+    "previous_wasm_sha256": "67e599f6ebea029733fcdb8b65f1a6d42a98886ebe57a78f37fdbab4450d30bd",
+    "reproducibility": "The build is still not bit-reproducible: earlier rounds produced c2bd157f... (266404081 bytes) and 67e599f6... (266404198 bytes) from the same sources, so a hash identifies an artifact and not a source state.",
+    "target": {
+      "requested": "stable 60 FPS",
+      "measured_result": "not reachable",
+      "arithmetic": "At 22.9 FPS the frame lasts 43.7 ms and the guest thread spends 43.6% of it (~19.0 ms) in translated guest code alone, against the 16.7 ms budget of a 60 FPS frame. Even a zero-cost runtime would ceiling near 50 FPS, and that ignores GPU, presentation and the scheduler. The realistic path is 25-30 FPS by cutting the JS boundary and the runtime."
+    },
+    "measurement": {
+      "scene": "The same Los Santos alley as the previous round: CJ, the fence, the bicycle, the objective HUD, ~750-760 draws per frame.",
+      "url": "http://127.0.0.1:8771/gtasa-singleplayer/ with RECOMP_STRICT_UNKNOWN=1, RECOMP_LOG=1 and RECOMP_D3D9_STATS=1",
+      "method": "Settle 340 s, then read the tail STAT d3d9 lines the shim prints every 300 presented frames. Focus is held with Emulation.setFocusEmulationEnabled because the game pauses itself when the document loses activation. Run-to-run noise on the same source is about +/-1 FPS.",
+      "before": {
+        "artifact": "67e599f6... (previous round, same scene and protocol)",
+        "stat_d3d9_fps_mean": "17.1-17.8",
+        "frame_ms": "39.4-56.3",
+        "draws_per_frame": "751-787",
+        "gpu_ms": "3.5-4.2"
+      },
+      "after": {
+        "stat_d3d9_fps_mean": 22.87,
+        "stat_d3d9_reports": 6,
+        "frame_ms": 43.7,
+        "draws_per_frame": "750-760",
+        "gpu_ms": "3.5-4.2",
+        "walking_fps_mean": 19.37,
+        "walking_draws_per_frame": "757-774",
+        "dense_area_fps": "15-17 at 844-970 draws per frame"
+      },
+      "progression": [
+        "17.8-18.1: round baseline, -fno-exceptions on runtime, dx, gpu_backend and host",
+        "20.1: ARGC_UNKNOWN diagnostic gated by a per-trampoline argc_warned flag, plus sched_wait_locked clock reads guarded by perf_stats::on()",
+        "20.6: -fno-exceptions also on mods and host_common, with per-file -fexceptions for interp.cpp, overlay.cpp and indexed_frame.cpp",
+        "19.5: import checkpoint clock sampled 1 in 16 (within noise, kept because it is free)",
+        "21.1: lazy trampoline description, so imports_describe stops building the string on every dispatch",
+        "22.4: stable description arena (desc_arena()), so dispatch stores a pointer instead of copying",
+        "22.9: SCHED_SLICE_SECONDS raised from 0.001 to 0.004"
+      ]
+    },
+    "root_causes": [
+      "dx/d3d9.cpp:579 installs g_return_observer unconditionally, and that observer calls describe() on every import dispatch. It was the unexplained printf_core 1.74% in the profile: a std::string built per call for an observer that almost always ignores it.",
+      "The ARGC_UNKNOWN diagnostic formatted and logged on every dispatch of a trampoline whose argc could not be inferred, which is a hot path for the game's indirect imports.",
+      "sched_wait_locked read the monotonic clock on every wait even when perf stats were off, so the scheduler paid a clock read per handoff."
+    ],
+    "fixes": [
+      "runtime/imports.cpp: desc_arena() is a std::deque<std::string> whose already-inserted elements never move, and Tramp::desc_c points into it, so dispatch passes a pointer and never copies or formats. printf_core leaves the profile.",
+      "runtime/imports.cpp: a per-trampoline argc_warned flag makes the ARGC_UNKNOWN diagnostic fire once instead of on every dispatch.",
+      "runtime/imports.cpp: the import checkpoint clock is sampled 1 in 16 via a thread-local static __thread uint32_t counter.",
+      "runtime/kernel32.cpp: sched_wait_locked clock reads are guarded by perf_stats::on(), and SCHED_SLICE_SECONDS goes from 0.001 to 0.004.",
+      "CMakeLists.txt in runtime, dx, host, host/gpu and mods build with -fno-exceptions for web targets, with per-file -fexceptions for interp.cpp, overlay.cpp and indexed_frame.cpp, which need throw/catch."
+    ],
+    "reverted_experiments": [
+      "SUPPORT_LONGJMP=wasm, to remove the remaining invoke_* trampolines: the link fails with 'undefined symbol: emscripten_longjmp' in liblua.a and in the recomp_gen chunks, because every translation unit would have to be rebuilt in that mode, and Emscripten's setjmp/longjmp is load-bearing for guest SEH. Too invasive for the estimated ~2 FPS.",
+      "-fno-exceptions alone does not remove the invoke_* wrappers: 25-26 remain in the wasm import section because Emscripten's JS setjmp/longjmp emits them at indirect call sites regardless of C++ exception settings. Their stack is recomp_run <- invoke_vii <- run_entry, i.e. Emscripten SJLJ and not a C++ exception.",
+      "Full CFG flag liveness in the translator would remove ~1.54M c->eflags_ accesses, but 341 of 19207 functions have flags live at entry and 188 of 69866 call sites have flags live after a call, so the soundness risk does not justify ~1.5 FPS.",
+      "Implementing os_monotonic_ns with emscripten_get_now() (previous round, still valid): _emscripten_get_now rose from 9.6% to 28.7% of the guest thread."
+    ],
+    "verified": [
+      "The scene renders correctly on the shipped image: shot_final.png shows CJ, the fence, palms, the traffic light, buildings, the radar and the HUD, with no WebGPU validation warning and no abort in the page log.",
+      "Movement responds to input: holding w for 40 s gave 68 distinct view captures out of 68 samples with problems: [], at 19.37 FPS mean and 757-774 draws per frame.",
+      "Audio is running: 2147 dsound messages with buffers starting playback ('first play on channel ...'), and no underrun or starvation message.",
+      "The single 'presenter: FAULT: target pool stalled for 250ms' happens once at startup; the fault count sampled at 0 s and 40 s stays at 1, so it does not recur.",
+      "V8 full module compilation passes for the shipped wasm: 212865 functions."
+    ],
+    "not_verified": [
+      "Missions, vehicles, audio actually heard (buffers start, nobody confirmed they sound), saving and loading.",
+      "Stability beyond about 35 minutes of wall time.",
+      "Draw coverage across the whole city.",
+      "The 22.9 FPS figure is one static alley scene. Walking the same street measures 19.4 FPS mean, and a denser view at 844-970 draws per frame measures 15-17 FPS. CAP 60 in the overlay is the kit's configured frame limit, not a measured cap."
+    ],
+    "remaining_profile": {
+      "guest_thread": "At 22.9 FPS the frame splits into translated guest code 43.6% (~19.0 ms), runtime and shims 22.8%, JS boundary 22.2% and scheduler wait 11.4%. The clock is no longer a top cost: _emscripten_get_now fell from 8.28% to 4.49%. printf_core no longer appears.",
+      "hot_symbols_at_22_5_fps": {
+        "__pthread_cond_timedwait": "8.38%",
+        "get": "6.05%",
+        "_emscripten_get_now": "4.49%",
+        "getWasmTableEntry": "3.58%",
+        "recomp_call": "3.39%",
+        "__timedwait_cp": "3.01%",
+        "stage_lock": "1.61%"
+      },
+      "not_done": "Fixed-function vertex blending, and any change that touches the scheduler contract, remain open. The realistic next gains are in the JS boundary (22.2%) and the runtime shims (22.8%), not in the translated code, which is already the irreducible 43.6%."
+    },
+    "evidence": {
+      "screenshots": [
+        "shot_final.png"
+      ],
+      "counter_runs": [
+        "exc1 (17.8-18.1 FPS, -fno-exceptions on runtime/dx/gpu/host)",
+        "clk1 (20.1 FPS, argc_warned + sched_wait_locked clock gating)",
+        "mods1 (20.6 FPS, -fno-exceptions on mods and host_common)",
+        "clk2 (19.5 FPS, import checkpoint sampling, within noise)",
+        "lazy1 (21.1 FPS, lazy description)",
+        "arena1 (22.4 FPS, description arena)",
+        "wait1 (22.5 FPS, perf-gated wait clock)",
+        "slice4 (22.87 FPS mean over 6 STAT reports, final build)",
+        "final1 (40 s of held w, 68 of 68 distinct captures, 19.37 FPS at 757-774 draws)"
+      ],
+      "profile_runs": [
+        "wait1 (guest-thread self-time buckets at 22.5 FPS)"
+      ],
+      "artifacts": {
+        "served_wasm_sha256": "087ca85c9b6ad20118e8d9e70ae8b61a1c6fbb555e0b606a7106d7949b9408d2",
+        "wasm_bytes": 266416245,
+        "vendor_patch_bytes": 514901,
+        "vendor_pin": "eb32cc42623e0e9e868b9d27423a57d5a5cba56b"
+      }
+    },
+    "blockers": [
+      "Fixed-function vertex blending (D3DRS_VERTEXBLEND/D3DRS_INDEXEDVERTEXBLENDENABLE) is still unimplemented for streams that rely on it.",
+      "Native d3d9_ffp_tests cannot run here, and tools/recomp/tests is only partially runnable (missing numpy, missing when/emu/native fixtures, and a kit-relative build/recomp/gen/table.c).",
+      "The build is not bit-reproducible, so a wasm hash identifies an artifact and not a source state."
+    ]
+  },
+  "browser_performance_triage_previous_round": {
     "updated_utc": "2026-10-22T01:30:00+00:00",
     "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
     "served_wasm_sha256": "67e599f6ebea029733fcdb8b65f1a6d42a98886ebe57a78f37fdbab4450d30bd",
@@ -1031,6 +1149,8 @@
     "blockers": [
       "Fixed-function vertex blending (D3DRS_VERTEXBLEND/D3DRS_INDEXEDVERTEXBLENDENABLE) is still unimplemented for streams that rely on it.",
       "Native d3d9_ffp_tests cannot run here, and tools/recomp/tests is only partially runnable (missing numpy, a fixture, and a kit-relative build/recomp/gen/table.c)."
-    ]
+    ],
+    "superseded_by": "browser_performance_triage",
+    "note": "Kept as historical evidence for the shipped artifact 67e599f6... . Its figures belong to that artifact and that round only."
   }
 }
