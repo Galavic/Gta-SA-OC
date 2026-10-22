@@ -2601,7 +2601,7 @@ index cae581c..5264e4e 100644
          Tex *bound[16];
          for (uint32_t s = 0; s < 16; ++s) {
 diff --git a/host/gpu/webgpu/d3d9_webgpu.cpp b/host/gpu/webgpu/d3d9_webgpu.cpp
-index 03c2df2..098b7a1 100644
+index 03c2df2..411b934 100644
 --- a/host/gpu/webgpu/d3d9_webgpu.cpp
 +++ b/host/gpu/webgpu/d3d9_webgpu.cpp
 @@ -576,8 +576,8 @@ class WebGpuRenderer final : public D9Backend {
@@ -2626,7 +2626,23 @@ index 03c2df2..098b7a1 100644
          WGPURenderPipeline pso = pipeline(ps, vkey);
          if (!pso) {
              skip("no pipeline");
-@@ -1429,14 +1433,15 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1016,6 +1020,7 @@ class WebGpuRenderer final : public D9Backend {
+     // Space in this frame's ring buffers; the data is written at once.
+     WGPUBuffer ring_write(const void *bytes, uint64_t size, uint64_t *offset,
+                           WGPUBufferUsage usage = WGPUBufferUsage_Uniform) {
++        ++writes_;
+         Ring &r = usage == WGPUBufferUsage_Uniform ? uniform_ring_ : vertex_ring_;
+         const uint64_t align = usage == WGPUBufferUsage_Uniform ? uniform_align_ : 4;
+         const uint64_t aligned = round_up(size, 4);
+@@ -1179,6 +1184,7 @@ class WebGpuRenderer final : public D9Backend {
+     void submit() {
+         if (!encoder_)
+             return;
++        ++submits_;
+         end_pass();
+         WGPUQuerySet qs = query_set_;
+         WGPUBuffer resolve = nullptr, readback = nullptr;
+@@ -1429,14 +1435,15 @@ class WebGpuRenderer final : public D9Backend {
  
      // ---- shaders and pipelines ---------------------------------------------------
      WGPUShaderModule module(uint64_t code_key, const d9sh::Program &p, const d9msl::PixelVariant &v,
@@ -2646,7 +2662,7 @@ index 03c2df2..098b7a1 100644
          WGPUShaderModule m = nullptr;
          if (ok) {
              WGPUShaderSourceWGSL s = WGPU_SHADER_SOURCE_WGSL_INIT;
-@@ -1606,12 +1611,14 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1606,12 +1613,14 @@ class WebGpuRenderer final : public D9Backend {
          int32_t bias;
          float slope;
          uint32_t colors;
@@ -2662,7 +2678,7 @@ index 03c2df2..098b7a1 100644
          key = mix(key, (uint64_t)(uintptr_t)p.layout->pipeline);
          for (int i = 0; i < 4; ++i)
              key = mix(key, (uint64_t)pass_formats_[i] + 1000 * (uint64_t)i);
-@@ -1729,8 +1736,10 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1729,8 +1738,10 @@ class WebGpuRenderer final : public D9Backend {
          pd.vertex.bufferCount = p.vl->buffers.size();
          pd.vertex.buffers = p.vl->buffers.data();
          pd.primitive.topology = p.topology;
@@ -2674,6 +2690,67 @@ index 03c2df2..098b7a1 100644
          pd.primitive.frontFace = WGPUFrontFace_CW;
          pd.primitive.cullMode = p.cull;
          pd.depthStencil = pass_depth_view_ ? &ds : nullptr;
+@@ -1738,6 +1749,7 @@ class WebGpuRenderer final : public D9Backend {
+         pd.fragment = &fs;
+         WGPURenderPipeline pso = wgpuDeviceCreateRenderPipeline(device_, &pd);
+         pipelines_[key] = pso;
++        ++new_pipelines_;
+         last_pipeline_key_ = key;
+         last_pipeline_ = pso;
+         return pso;
+@@ -1781,6 +1793,7 @@ class WebGpuRenderer final : public D9Backend {
+         d.entryCount = e.size();
+         d.entries = e.data();
+         WGPUBindGroup g = wgpuDeviceCreateBindGroup(device_, &d);
++        ++new_groups_;
+         groups_[key] = g;
+         return g;
+     }
+@@ -1953,6 +1966,7 @@ class WebGpuRenderer final : public D9Backend {
+         pd.fragment = &fs;
+         WGPURenderPipeline pso = wgpuDeviceCreateRenderPipeline(device_, &pd);
+         pipelines_[key] = pso;
++        ++new_pipelines_;
+         return pso;
+     }
+     WGPURenderPipeline clear_pipeline(bool color, bool depth, bool stencil) {
+@@ -2131,12 +2145,23 @@ class WebGpuRenderer final : public D9Backend {
+                 "d3d9 webgpu: frame %llu: %.1f fps, %.0f draws/frame, %zu textures, %zu pipelines",
+                 (unsigned long long)presents_, fps, double(draws_ - report_draws_) / double(frames),
+                 textures_.size(), pipelines_.size());
++        fprintf(stderr,
++                ", %.1f writes/frame, %.2f new groups/frame, %.2f new pipelines/frame, "
++                "%.2f submits/frame",
++                double(writes_ - report_writes_) / double(frames),
++                double(new_groups_ - report_groups_) / double(frames),
++                double(new_pipelines_ - report_pipelines_) / double(frames),
++                double(submits_ - report_submits_) / double(frames));
+         for (auto &s : skips_)
+             fprintf(stderr, ", %s %llu", s.first.c_str(), (unsigned long long)s.second);
+         fprintf(stderr, "\n");
+         report_time_ = t;
+         report_frames_ = presents_;
+         report_draws_ = draws_;
++        report_writes_ = writes_;
++        report_groups_ = new_groups_;
++        report_pipelines_ = new_pipelines_;
++        report_submits_ = submits_;
+     }
+ 
+     struct EncoderState {
+@@ -2206,6 +2231,12 @@ class WebGpuRenderer final : public D9Backend {
+     uint64_t draws_ = 0, presents_ = 0, stat_calls_ = 0;
+     double report_time_ = 0;
+     uint64_t report_frames_ = 0, report_draws_ = 0;
++    // Per-frame work the guest cannot see: each of these is a host call, and on
++    // the web every one of them crosses into JavaScript. Reported next to the
++    // draw count because a draw whose upload is a separate host call costs an
++    // order of magnitude more than the draw itself.
++    uint64_t writes_ = 0, new_groups_ = 0, new_pipelines_ = 0, submits_ = 0;
++    uint64_t report_writes_ = 0, report_groups_ = 0, report_pipelines_ = 0, report_submits_ = 0;
+     std::map<std::string, uint64_t> skips_;
+ };
+ 
 diff --git a/host/input_gate.cpp b/host/input_gate.cpp
 index 2dd011b..49f466a 100644
 --- a/host/input_gate.cpp
@@ -4259,7 +4336,7 @@ index 0cefcbe..8e0159e 100644
  const char *interp_last_error(void);
  
 diff --git a/runtime/kernel32.cpp b/runtime/kernel32.cpp
-index 529d27d..c17e63a 100644
+index 529d27d..3ea03c0 100644
 --- a/runtime/kernel32.cpp
 +++ b/runtime/kernel32.cpp
 @@ -1,4 +1,5 @@
@@ -4527,9 +4604,33 @@ index 529d27d..c17e63a 100644
  void win32_reset_command_line_for_test() {
      kernel32_wide_reset_command_line();
      g_cmdline_addr = 0;
-@@ -1501,6 +1663,10 @@ void k_GetDriveTypeA(X86 *c) {
- // drives simulation: 004a5590 uses 005cd92c/005cd930 and the real clock.
- // Return the draw deadline to retire after reading the real host time.
+@@ -1495,12 +1657,29 @@ void k_GetDriveTypeA(X86 *c) {
+ // -------------------------------------------------------------------------
+ // Time
+ // -------------------------------------------------------------------------
+-// Native pacing replaces both draw-loop waits in the pinned executable.
+-// 0049cfc0 selects the second one when game-state 2 has frame-rate flags set;
+-// 0049cfe0 supplies its default 60 (or 24/20/14) Hz limit. Neither deadline
+-// drives simulation: 004a5590 uses 005cd92c/005cd930 and the real clock.
+-// Return the draw deadline to retire after reading the real host time.
++// Native pacing replaces both draw-loop waits, for a game whose draw loop
++// polls GetTickCount. It is unreachable for the pinned executable: that build
++// imports no GetTickCount at all, and its clock is QueryPerformanceCounter
++// through the IAT slot at 0x008580c8 (CTimer at 00561a80). A run traced with
++// RECOMP_TICK_CALLERS never reached k_GetTickCount, which agrees.
++//
++// The addresses this comment used to name were wrong, and acting on them would
++// have silently changed pacing: 0049cfe0 is a bounding-box test over the entity
++// list at 00a9ad70 (72 instructions, called with two arguments), and 0049cfc0
++// is not a function entry at all - it lies inside FUN_0049cec0.
++//
++// Nor is there a frame cap to remove. In one 70 s run fps sat at 24.2-24.4
++// across 430, 489, 690 and 888 draws per frame, and other runs fell to 19.3-21.4
++// at 859-1020 draws; the baton-holder profiler shows ~2% idle with the samples
++// spread over many guest functions and no dominant spin. That is the shape of
++// draw-independent guest simulation work (~41 ms per frame) with the draw path
++// added on top, not of a wait. A frame limiter would show as idle time (it
++// sleeps) or as one hot function (it spins); neither is present.
  static uint32_t native_frame_clock(X86 *c) {
 +#if defined(RECOMP_HOOK_FRAME_CLOCK_BEGIN) && defined(RECOMP_HOOK_FRAME_CLOCK_WAIT) &&             \
 +    defined(RECOMP_HOOK_FRAME_CLOCK_WAIT_CLAMP) &&                                                 \
@@ -4538,7 +4639,7 @@ index 529d27d..c17e63a 100644
      using Clock = std::chrono::steady_clock;
      static FrameDeadline deadline;
      static int active = 0;
-@@ -1537,6 +1703,12 @@ static uint32_t native_frame_clock(X86 *c) {
+@@ -1537,6 +1716,12 @@ static uint32_t native_frame_clock(X86 *c) {
          return RECOMP_HOOK_FRAME_CLOCK_WAIT_DEADLINE;
      }
      return 0;
@@ -4551,7 +4652,7 @@ index 529d27d..c17e63a 100644
  }
  void k_GetTickCount(X86 *c) {
      const uint32_t draw_deadline = native_frame_clock(c);
-@@ -1728,6 +1900,26 @@ void k_InitializeCriticalSection(X86 *c) {
+@@ -1728,6 +1913,26 @@ void k_InitializeCriticalSection(X86 *c) {
      }
      set_eax(c, 0);
  }
@@ -4578,7 +4679,7 @@ index 529d27d..c17e63a 100644
  void k_EnterCriticalSection(X86 *c) {
      imports_call_leaves_surfaces();
      sched_enter_critsec(arg(c, 0));
-@@ -1775,6 +1967,11 @@ void k_ReleaseSemaphore(X86 *c) {
+@@ -1775,6 +1980,11 @@ void k_ReleaseSemaphore(X86 *c) {
      }
      o->count += n;
      set_eax(c, 1);
@@ -4590,7 +4691,7 @@ index 529d27d..c17e63a 100644
  }
  
  void k_CreateEventA(X86 *c) {
-@@ -1822,6 +2019,12 @@ void k_WaitForSingleObject(X86 *c) {
+@@ -1822,6 +2032,12 @@ void k_WaitForSingleObject(X86 *c) {
      set_eax(c, sched_wait_objects(&h, 1, false, arg(c, 1)));
  }
  
@@ -4603,7 +4704,21 @@ index 529d27d..c17e63a 100644
  void k_WaitForMultipleObjects(X86 *c) {
      wait_multiple_objects(c);
  }
-@@ -2196,7 +2399,10 @@ void thread_finish_exit_process();
+@@ -1848,9 +2064,10 @@ void k_WaitForMultipleObjects(X86 *c) {
+ // The baton moves only where Windows would have descheduled the running
+ // thread anyway: a wait that cannot be satisfied yet, Sleep, and the status
+ // poll a spin loop makes (GetExitCodeThread).  A guest that makes no such
+-// call never yields.  That is why the frame limiter's GetTickCount spin is
+-// left alone - nothing it waits for is another thread's to produce, and
+-// yielding on every clock read would cost a context switch per read.
++// call never yields.  That is why a clock spin is left alone - nothing it
++// waits for is another thread's to produce, and yielding on every clock read
++// would cost a context switch per read.  (The pinned executable has no such
++// spin on this clock: it never imports GetTickCount. See native_frame_clock.)
+ //
+ //   RECOMP_CREATETHREAD=skip   record a thread without running it
+ //   RECOMP_CREATETHREAD=sync   run the body to completion in CreateThread
+@@ -2196,7 +2413,10 @@ void thread_finish_exit_process();
  // across a host slice, so the host may call back into the runtime - signalling
  // a guest event, most obviously - without deadlocking against the scheduler.
  void sched_wait_locked(size_t me, double until, double max_slice) {
@@ -4615,7 +4730,7 @@ index 529d27d..c17e63a 100644
      if (until && until <= now)
          return;
  
-@@ -2213,10 +2419,13 @@ void sched_wait_locked(size_t me, double until, double max_slice) {
+@@ -2213,10 +2433,13 @@ void sched_wait_locked(size_t me, double until, double max_slice) {
          // above all - until it holds the baton itself.
          g_in_idle_slice = true;
          // AppKit's event wait cannot hear g_sched_cv. Sleeping there for each
@@ -4630,7 +4745,7 @@ index 529d27d..c17e63a 100644
          g_in_idle_slice = false;
          g_sched_m.lock();
          if (!awaiting_baton || g_baton == me)
-@@ -2225,14 +2434,17 @@ void sched_wait_locked(size_t me, double until, double max_slice) {
+@@ -2225,14 +2448,17 @@ void sched_wait_locked(size_t me, double until, double max_slice) {
  
      // The host has been serviced, or none is installed. Sleep interruptibly,
      // capped so host events and deadlines are still re-examined.
@@ -4649,7 +4764,7 @@ index 529d27d..c17e63a 100644
  }
  
  // ---------------------------------------------------------------------------
-@@ -2258,6 +2470,7 @@ Handoff g_handoffs[16];
+@@ -2258,6 +2484,7 @@ Handoff g_handoffs[16];
  uint32_t g_handoff_count = 0;
  
  void record_handoff_locked(size_t from, size_t to, const char *why) {
@@ -4657,7 +4772,7 @@ index 529d27d..c17e63a 100644
      g_handoffs[g_handoff_count % 16] = Handoff{from, to, why};
      ++g_handoff_count;
  }
-@@ -2698,8 +2911,15 @@ bool guest_yield() {
+@@ -2698,8 +2925,15 @@ bool guest_yield() {
  // call: the frame limiter spins on GetTickCount and would otherwise starve the
  // DirectInput service threads indefinitely, expired 200 ms waits and all.  Any
  // call into the runtime is a checkpoint, and a thread yields at most once per
@@ -4675,7 +4790,7 @@ index 529d27d..c17e63a 100644
  
  } // namespace
  
-@@ -2789,6 +3009,25 @@ void sched_checkpoint() {
+@@ -2789,6 +3023,25 @@ void sched_checkpoint() {
      guest_yield();
  }
  
@@ -4701,7 +4816,7 @@ index 529d27d..c17e63a 100644
  namespace {
  
  // A shim that changed an object's state calls this so a thread blocked on it
-@@ -3373,7 +3612,16 @@ void k_SetThreadPriority(X86 *c) {
+@@ -3373,7 +3626,16 @@ void k_SetThreadPriority(X86 *c) {
  }
  
  void k_ExitProcess(X86 *c) {
@@ -4719,7 +4834,7 @@ index 529d27d..c17e63a 100644
      if (request_process_exit(arg(c, 0)))
          return; // never returns
      publish_process_exit(arg(c, 0));
-@@ -3594,6 +3842,14 @@ void k_lstrlenA(X86 *c) {
+@@ -3594,6 +3856,14 @@ void k_lstrlenA(X86 *c) {
      set_eax(c, (uint32_t)gm_str(arg(c, 0)).size());
  }
  
@@ -4734,7 +4849,7 @@ index 529d27d..c17e63a 100644
  void k_lstrcpyA(X86 *c) {
      uint32_t d = arg(c, 0);
      std::string s = gm_str(arg(c, 1));
-@@ -3943,6 +4199,86 @@ void k_GetLocaleInfoW(X86 *c) {
+@@ -3943,6 +4213,86 @@ void k_GetLocaleInfoW(X86 *c) {
  
  } // namespace
  
@@ -4821,7 +4936,7 @@ index 529d27d..c17e63a 100644
  // ---------------------------------------------------------------------------
  // The run thread's own ending.
  //
-@@ -4218,6 +4554,7 @@ void create_file_named(X86 *c, const std::string &name) {
+@@ -4218,6 +4568,7 @@ void create_file_named(X86 *c, const std::string &name) {
      uint32_t h = handle_new(H_FILE);
      handles()[h].fd = fd;
      handles()[h].path = host;
@@ -4829,7 +4944,7 @@ index 529d27d..c17e63a 100644
      if (deferred) {
          handles()[h].write_pending = true;
          handles()[h].write_flags = wanted;
-@@ -4849,7 +5186,7 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4849,7 +5200,7 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "GetTimeFormatA", 6, nullptr},
      {"KERNEL32.dll", "GetDiskFreeSpaceExA", 4, nullptr},
      {"KERNEL32.dll", "GetLongPathNameA", 3, nullptr},
@@ -4838,7 +4953,7 @@ index 529d27d..c17e63a 100644
      {"KERNEL32.dll", "HeapValidate", 3, nullptr},
      {"KERNEL32.dll", "QueueUserAPC", 3, nullptr},
      {"KERNEL32.dll", "SetConsoleCtrlHandler", 2, nullptr},
-@@ -4864,6 +5201,9 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4864,6 +5215,9 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "InterlockedDecrement", 1, k_InterlockedDecrement},
      {"KERNEL32.dll", "InterlockedExchange", 2, k_InterlockedExchange},
      {"KERNEL32.dll", "InitializeCriticalSection", 1, k_InitializeCriticalSection},
@@ -4848,7 +4963,7 @@ index 529d27d..c17e63a 100644
      {"KERNEL32.dll", "EnterCriticalSection", 1, k_EnterCriticalSection},
      {"KERNEL32.dll", "LeaveCriticalSection", 1, k_LeaveCriticalSection},
      {"KERNEL32.dll", "DeleteCriticalSection", 1, k_DeleteCriticalSection},
-@@ -4874,6 +5214,7 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4874,6 +5228,7 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "ResetEvent", 1, k_ResetEvent},
      {"KERNEL32.dll", "CreateMutexA", 3, k_CreateMutexA},
      {"KERNEL32.dll", "WaitForSingleObject", 2, k_WaitForSingleObject},
@@ -4856,7 +4971,7 @@ index 529d27d..c17e63a 100644
      {"KERNEL32.dll", "WaitForMultipleObjects", 4, k_WaitForMultipleObjects},
      // threads and process exit
      {"KERNEL32.dll", "CreateThread", 6, k_CreateThread},
-@@ -4898,6 +5239,7 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4898,6 +5253,7 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "RtlUnwind", 4, k_RtlUnwind},
      // strings, code pages, locale
      {"KERNEL32.dll", "lstrlenA", 1, k_lstrlenA},

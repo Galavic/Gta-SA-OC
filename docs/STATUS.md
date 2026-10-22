@@ -1,5 +1,85 @@
 # Estado actual
 
+## Rendimiento: no hay limitador que retirar; el techo lo pone la simulación (2026-10-22)
+
+Esta sección **corrige la siguiente**, que daba por hecho que el limitador de frames del
+juego giraba sobre `GetTickCount`. Esa hipótesis queda refutada. La sección anterior se
+conserva como evidencia de lo que se midió entonces y de lo que se creía.
+
+Medido en el navegador con el wasm `sha256 40a0ac86…` (266.527.795 bytes), servido en
+`http://127.0.0.1:8771/gtasa-singleplayer/`. El build **sigue sin ser bit-reproducible**,
+así que el hash identifica un artefacto y no un estado del código.
+
+### El juego no importa `GetTickCount`
+
+La sustitución de `native_frame_clock()` (`vendor/recomp-kit/runtime/kernel32.cpp`) está
+colgada de `k_GetTickCount`: compara la dirección de retorno de cada llamada con los cinco
+ganchos `RECOMP_HOOK_FRAME_CLOCK_*`. Tres hechos:
+
+- El código traducido no contiene ninguna llamada a `GetTickCount`; la cadena no aparece
+  en `build/recomp/gen`.
+- El reloj del juego es `QueryPerformanceCounter` a través de la ranura IAT `0x008580c8`
+  (`FUN_00561a80`: lee el contador y resta la base de `0x00b7cb38`).
+- Un diagnóstico que histogramaba la dirección de retorno de cada `GetTickCount`
+  (`RECOMP_TICK_CALLERS`) no registró ni una sola llamada en dos ejecuciones de gameplay.
+
+Para este ejecutable esa ruta es **inalcanzable**, no solo «sin configurar». Se retiró el
+diagnóstico y se corrigieron los comentarios que afirmaban lo contrario.
+
+### Las direcciones que nombraba ese comentario eran falsas
+
+`kernel32.cpp` afirmaba que `0049cfc0` y `0049cfe0` eran las dos esperas del bucle de
+dibujo. No lo son:
+
+| Dirección | Qué es en realidad |
+|---|---|
+| `0049cfe0` | `FUN_0049cfe0`, 72 instrucciones: test de caja envolvente sobre la lista de entidades de `0x00a9ad70`, con dos argumentos, llamado desde `chunk_021.c:3524` y `:3557` |
+| `0049cfc0` | no es entrada de función: cae dentro de `FUN_0049cec0` |
+
+Cablear esas direcciones no habría dado un error: habría cambiado el ritmo del juego en
+silencio.
+
+### No hay techo artificial: el coste es la simulación
+
+| Escena (misma sesión) | *draws*/frame | fps |
+|---|---|---|
+| callejón, 4 informes | 430 / 489 / 690 / 888 | 24,3 / 24,2 / 24,4 / 24,3 |
+| callejón | 584 | 20,1 |
+| otras ejecuciones | 743 / 757 / 788 | 24,3 / 23,4 / 23,1 |
+| escenas más cargadas | 859 / 917 / 1020 | 21,4 / 19,4 / 19,3 |
+
+Dos hechos descartan un limitador:
+
+- fps se queda en 24,2–24,4 entre 430 y 888 *draws*. Si mandara el coste por *draw*, 430
+  tendría que ir muy por encima de 888.
+- El muestreador del batón (`RECOMP_PROFILE=1&RECOMP_PROFILE_INTERVAL_MS=2000`) da
+  **1–4 muestras inactivas de 130–131 por ventana (≈1–3 %)** y reparte el resto entre
+  muchas funciones (`FUN_007fa320`, `FUN_0070fa70`, `FUN_00561a80`,
+  `sub_007f99b0.blk_007f99b0`), sin ninguna dominante.
+
+Un limitador que duerme aparecería como inactividad; uno que gira, como una sola función
+caliente. No aparece ninguna de las dos: son ~41 ms de trabajo de simulación
+independiente del número de *draws*, con el dibujado sumándose encima cuando la escena
+pesa. **No hay nada que «desbloquear»: llegar a 60 fps exige que el trabajo del invitado
+sea ~2,5× más rápido.** No se ha conseguido y no se reclama.
+
+### Trabajo por frame del camino WebGPU (nuevo, medido)
+
+El informe `d3d9 webgpu:` publica ahora, junto a los *draws*, el trabajo de host que el
+invitado no ve (`host/gpu/webgpu/d3d9_webgpu.cpp`):
+
+| Medida | 917 *draws* | 1020 *draws* |
+|---|---|---|
+| `writes/frame` | 956,8 | 1061,3 |
+| `new groups/frame` | 423,7 | 434,0 |
+| `new pipelines/frame` | 0,00 | 0,01 |
+| `submits/frame` | 83,7 | 85,9 |
+
+Es decir: ~1 escritura de uniformes por *draw* (`wgpuQueueWriteBuffer`), ~0,46 bind groups
+creados por *draw* y ~84 `wgpuQueueSubmit` por frame, con las *pipelines* ya cacheadas.
+Los recuentos están medidos; **su coste en ms no**, así que son un candidato a reducir, no
+una mejora demostrada.
+
 ## Rendimiento: el invitado no duerme, y el limitador de frames del juego gira sobre el reloj (2026-10-22)
 
 Medido en el navegador con el wasm `sha256 6276422a…` (266.527.447 bytes), servido en

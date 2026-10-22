@@ -1253,5 +1253,85 @@
         "FUN_00748710.blk_00748da0": "25-45% of samples, a loop calling Sleep(0x64) and reading the clock"
       }
     }
+  },
+  "browser_performance_triage_frame_cap_refuted": {
+    "updated_utc": "2026-10-22T16:10:00+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "served_wasm_sha256": "40a0ac8637054fc05afd8dd4a526ff36c61534d7567727e2f84b11934ec459bb",
+    "wasm_bytes": 266527795,
+    "previous_wasm_sha256": "6276422ac3d827609dd85fdcd45e3f3e05cc6db9b9ced711b2795133fb0351b4",
+    "reproducibility": "The build is still not bit-reproducible, so a hash identifies an artifact and not a source state.",
+    "target": "Raise browser gameplay frame rate toward 60 FPS, or establish with evidence what prevents it.",
+    "correction": "This round refutes the previous round's conclusion that the game's frame limiter spins on GetTickCount. The previous entry is kept as historical evidence.",
+    "the_game_never_imports_GetTickCount": {
+      "substitution_is_unreachable": "native_frame_clock() in runtime/kernel32.cpp is keyed on k_GetTickCount: it compares each call's return address against the five RECOMP_HOOK_FRAME_CLOCK_* values. The pinned executable never reaches it.",
+      "evidence": [
+        "The generated translation contains no call to GetTickCount; the string does not occur in build/recomp/gen.",
+        "The game's clock is QueryPerformanceCounter through the IAT slot at 0x008580c8; FUN_00561a80 reads that counter and subtracts the base at 0x00b7cb38.",
+        "A diagnostic (RECOMP_TICK_CALLERS) that histogrammed the return address of every GetTickCount call recorded zero calls across two gameplay runs, while the same build reported 92k-560k clock reads per second through the QPC path."
+      ],
+      "diagnostic_removed": "The histogram was removed before the final artifact: it can never fire for this executable, so it was unverifiable code rather than a tool."
+    },
+    "the_addresses_in_that_comment_were_wrong": {
+      "0049cfe0": "Not a draw wait. FUN_0049cfe0, 72 instructions, is a bounding-box test over the entity list at 0x00a9ad70, called with two arguments from chunk_021.c:3524 and :3557, with float compares.",
+      "0049cfc0": "Not a function entry: it lies inside FUN_0049cec0 (78 instructions).",
+      "why_this_mattered": "Wiring those addresses would not have failed. It would have changed game pacing silently, which is why they were not wired."
+    },
+    "no_frame_cap_to_remove": {
+      "measurement": {
+        "scene": "The same Los Santos alley; one 70 s run plus earlier runs at the same point.",
+        "method": "The shim's STAT d3d9 lines every 300 presented frames, read from window.recompLog; plus the runtime sampler RECOMP_PROFILE=1 with RECOMP_PROFILE_INTERVAL_MS=2000. Gameplay confirmed by draws > 100 before any number is trusted.",
+        "fps_by_draw_count_same_run": {
+          "430": 24.3,
+          "489": 24.2,
+          "584": 20.1,
+          "690": 24.4,
+          "888": 24.3
+        },
+        "fps_by_draw_count_other_runs": {
+          "743": 24.3,
+          "757": 23.4,
+          "788": 23.1,
+          "859": 21.4,
+          "917": 19.4,
+          "1020": 19.3
+        }
+      },
+      "why_this_rules_out_a_limiter": [
+        "fps sits at 24.2-24.4 between 430 and 888 draws. If per-draw cost were the binding constraint, 430 would have to be far above 888.",
+        "The baton-holder sampler reports 1-4 idle samples out of 130-131 per 2 s window (about 1-3%), and spreads the rest over many guest functions (FUN_007fa320, FUN_0070fa70, FUN_00561a80, sub_007f99b0.blk_007f99b0) with no dominant one.",
+        "A limiter that sleeps would show as idle time; a limiter that spins would show as one hot function. Neither is present."
+      ],
+      "conclusion": "The frame costs about 41 ms of guest simulation work that is largely independent of the draw count, with the draw path added on top in heavier scenes. There is nothing to unlock: 60 FPS at this scene would need the guest's work to be about 2.5x faster. That was not achieved and is not claimed."
+    },
+    "webgpu_per_frame_host_work_measured": {
+      "where": "host/gpu/webgpu/d3d9_webgpu.cpp: the d3d9 webgpu: report now prints these next to draws/frame.",
+      "counters_added": [
+        "writes/frame (ring_write calls, each a wgpuQueueWriteBuffer)",
+        "new groups/frame (wgpuDeviceCreateBindGroup cache misses)",
+        "new pipelines/frame (wgpuDeviceCreateRenderPipeline cache misses)",
+        "submits/frame (wgpuQueueSubmit)"
+      ],
+      "measured": {
+        "917_draws": {
+          "writes_per_frame": 956.8,
+          "new_groups_per_frame": 423.67,
+          "new_pipelines_per_frame": 0.0,
+          "submits_per_frame": 83.74
+        },
+        "1020_draws": {
+          "writes_per_frame": 1061.3,
+          "new_groups_per_frame": 434.02,
+          "new_pipelines_per_frame": 0.01,
+          "submits_per_frame": 85.87
+        }
+      },
+      "reading": "About one uniform write per draw, about 0.46 bind groups created per draw and about 84 submits per frame, with pipelines already cached. The counts are measured; their cost in milliseconds is not, so they are a candidate to reduce and not a demonstrated gain."
+    },
+    "what_was_not_done": [
+      "No frame-clock hook was wired: the mechanism it depends on is unreachable for this game.",
+      "No claim of 60 FPS, of playable status, or of a completion percentage.",
+      "Missions, vehicles, audio actually heard, save/load and stability beyond about 35 minutes remain unverified."
+    ]
   }
 }
