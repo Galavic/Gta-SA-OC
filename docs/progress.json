@@ -11,7 +11,7 @@
   "first_original_mission_verified": false,
   "original_vehicle_physics_verified": false,
   "last_triage_utc": "2026-10-22T01:30:00+00:00",
-  "triage_scope": "Performance round on wasm sha256 c2bd157f... (266404081 bytes): gameplay in the Los Santos alley now measures 17.0-24.5 FPS with 39.4-51.0 ms frames and 3.5-4.2 ms of GPU time, up from 0.4-0.6 FPS with 1828.5 ms frames. Two root causes were fixed: a translator rule never emitted the SEH frame leave at 0x004835ef (the runtime predicate could not retire that epilogue shape either), and D3D9 staging allocated and freed a full-resource copy per Lock/Unlock while marking the whole buffer dirty. Details under browser_performance_triage. Missions, vehicles, audio, save/load and city-wide traversal remain unmeasured, and the frame rate figure is one static scene.",
+  "triage_scope": "Performance round on wasm sha256 67e599f6... (266404198 bytes): gameplay in the Los Santos alley now measures 17.0-24.5 FPS with 39.4-56.3 ms frames and 3.5-4.2 ms of GPU time, up from 0.4-0.6 FPS with 1828.5 ms frames; the same street while walking measures 12.0-12.8 FPS at about 1200 draws per frame. Two root causes were fixed: a translator rule never emitted the SEH frame leave at 0x004835ef (the runtime predicate could not retire that epilogue shape either), and D3D9 staging allocated and freed a full-resource copy per Lock/Unlock while marking the whole buffer dirty. Details under browser_performance_triage. Missions, vehicles, audio, save/load and city-wide traversal remain unmeasured, and the build is not bit-reproducible.",
   "scope": "Current isolated executable; prototype rendering and older-image boot probes are separate evidence",
   "recreation": {
     "updated_utc": "2026-10-14T23:29:46Z",
@@ -933,9 +933,11 @@
   "browser_performance_triage": {
     "updated_utc": "2026-10-22T01:30:00+00:00",
     "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
-    "served_wasm_sha256": "c2bd157f09cbc6452e47c91089f33e68833fb1804581b19d537b679311983368",
-    "wasm_bytes": 266404081,
+    "served_wasm_sha256": "67e599f6ebea029733fcdb8b65f1a6d42a98886ebe57a78f37fdbab4450d30bd",
+    "wasm_bytes": 266404198,
     "previous_wasm_sha256": "32630437df5985f01def37c504f75b7f4634f8866decc8a4576443ed28de7965",
+    "intermediate_wasm_sha256": "c2bd157f09cbc6452e47c91089f33e68833fb1804581b19d537b679311983368",
+    "reproducibility": "The build is not bit-reproducible: the same sources produced c2bd157f... (266404081 bytes) and then 67e599f6... (266404198 bytes), so a hash identifies an artifact and not a source state.",
     "measurement": {
       "scene": "The same Los Santos alley as target7d: CJ, the fence, the bicycle, the objective HUD.",
       "url": "http://127.0.0.1:8771/gtasa-singleplayer/ with RECOMP_STRICT_UNKNOWN=1 and RECOMP_D3D9_STATS=1",
@@ -952,12 +954,12 @@
       },
       "after": {
         "new_fps": "17.0-24.5",
-        "frame_ms": "39.4-51.0",
-        "p95_ms": "51.7-72.0",
+        "frame_ms": "39.4-56.3",
+        "p95_ms": "51.7-73.4",
         "gpu_ms": "3.5-4.2",
-        "stat_d3d9_fps_mean": 17.8,
-        "stat_d3d9_reports": 5,
-        "draws_per_frame": "748-775",
+        "stat_d3d9_fps_mean": "17.1-17.8 across runs",
+        "stat_d3d9_reports": 4,
+        "draws_per_frame": "751-787",
         "textures": 1637,
         "pipelines": 205,
         "seh_frames_per_second": 0,
@@ -984,8 +986,9 @@
       "dx/d3d9.cpp and dx/com.h: the staging block survives the lock (stage_bytes) for vertex and index buffers only; a texture frees it on unlock so a second full image is not held per texture for the whole session. Unlock uploads only the locked range, widened outward to a four-byte multiple because the backend write offset must be aligned."
     ],
     "reverted_experiments": [
-      "Implementing os_monotonic_ns with emscripten_get_now() instead of clock_gettime: _emscripten_get_now rose from 9.6% to 28.7% of the guest thread and the frame rate fell to 8-11 FPS. Reverted.",
-      "Reading the scheduler checkpoint clock once every 16 calls: 18-19 FPS fell to 15-16 FPS, because the 1 ms slice is what hands the baton to the render thread. Reverted."
+      "Implementing os_monotonic_ns with emscripten_get_now() instead of clock_gettime: _emscripten_get_now rose from 9.6% to 28.7% of the guest thread in the profile. Reverted on that direct measurement.",
+      "Reading the scheduler checkpoint clock once every 16 calls: first rejected on a comparison that was invalid because the two sides were sampled at different points of asset loading (frames 8101-9601 against 11101-12601). Re-measured with the stable protocol (settle 340 s, read the tail STAT reports) it gives 19.1 FPS against 18.6-19.6 without the change, so it is within noise and was dropped for adding scheduler latency without a measurable gain.",
+      "Lesson recorded for later rounds: frame rate figures are only comparable between runs that reach the same point of the scene, which is why the protocol settles 340 s and discards the loading-phase reports."
     ],
     "verified": [
       "The scene renders: final_scene.png and cur2_scene.png show the alley with CJ, the street, trees and the HUD, with no WebGPU validation warning and no abort in the page log.",
@@ -1005,6 +1008,8 @@
     },
     "evidence": {
       "screenshots": [
+        "ship_overlay.png",
+        "ship_scene.png",
         "final_overlay.png",
         "refocus_ov.png",
         "final_scene.png",
@@ -1017,6 +1022,8 @@
         "gp2 (18.1-19.5 FPS, before the clock experiments)",
         "gp6 (guest-thread profile after the staging fix)",
         "final (17.8 FPS mean over 5 STAT reports)",
+        "gate (19.1 FPS, the re-measured checkpoint experiment, dropped)",
+        "ship (17.1 FPS mean over 4 STAT reports on the shipped artifact)",
         "fin (perf counters, live_frames_max=1)",
         "mv1 (40 s of held w, 72 of 72 distinct captures, 12.3 FPS at ~1200 draws)"
       ]

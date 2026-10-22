@@ -2,17 +2,19 @@
 
 ## Rendimiento: de 0,4–0,6 FPS a 17–24,5 FPS en gameplay (2026-10-22)
 
-Medido en el navegador con el wasm `sha256 c2bd157f…` (266.404.081 bytes),
-servido en `http://127.0.0.1:8771/gtasa-singleplayer/`, en el mismo callejón de
-Los Santos con CJ, la valla y la bicicleta.
+Medido en el navegador con el wasm `sha256 67e599f6…` (266.404.198 bytes), servido
+en `http://127.0.0.1:8771/gtasa-singleplayer/`, en el mismo callejón de Los Santos
+con CJ y la BMX. El build **no es bit-reproducible**: el mismo fuente produjo
+`c2bd157f…` (266.404.081 bytes) en la ronda anterior y `67e599f6…` ahora, así que
+un hash identifica un artefacto, no un estado del código.
 
-| Medida | Antes (`target7d`, `32630437…`) | Ahora (`c2bd157f…`) |
+| Medida | Antes (`target7d`, `32630437…`) | Ahora (`67e599f6…`) |
 |---|---|---|
 | `NEW FPS` del overlay | 0,4–0,6 | **17,0–24,5** |
-| `FRAME` | 1828,5 ms | **39,4–51,0 ms** |
-| `P95` | 2281,5 ms | 51,7–72,0 ms |
+| `FRAME` | 1828,5 ms | **39,4–56,3 ms** |
+| `P95` | 2281,5 ms | 51,7–73,4 ms |
 | `GPU` | 3,9 ms | 3,5–4,2 ms |
-| `STAT d3d9` | 11,8–14,5 fps | media **17,8 fps** en 5 informes |
+| `STAT d3d9` | 11,8–14,5 fps | media **17,1–17,8 fps** |
 | `seh_frames` | 200–260 M/s | **0/s** |
 | `chain_visits` | 8–28 M/s | **0/s** |
 | `live_frames_max` | 845 | **1** |
@@ -85,16 +87,26 @@ Con la ciudad a la vista el coste sube y la cifra baja: **12,0–12,8 fps con
 1154–1249 *draws* por frame** frente a 17,8 fps con ~760 en el callejón. Es la
 medida honesta del recorrido, y sigue siendo una sola calle, no la ciudad entera.
 
-### Dos intentos medidos y revertidos
+### Dos intentos medidos y descartados
 
-Ninguno de los dos se quedó, y ambos están aquí para que no se repitan:
+Ninguno de los dos se quedó. Ambos están aquí para que no se repitan, y el segundo
+además advierte de cómo una comparación mal hecha casi deja pasar una conclusión
+falsa:
 
 - Implementar `os_monotonic_ns` con `emscripten_get_now()` en vez de
-  `clock_gettime`: `_emscripten_get_now` subió del 9,6 % al **28,7 %** y el
-  rendimiento cayó a 8–11 fps. Revertido.
-- Leer el reloj del *checkpoint* una vez cada 16 llamadas: 18–19 → **15–16 fps**,
-  porque el *slice* de 1 ms es justo lo que entrega el batón al hilo de render.
-  Revertido.
+  `clock_gettime`. La medida directa es del perfil, no del fps: `_emscripten_get_now`
+  pasó del 9,6 % al **28,7 %** del hilo del invitado. Revertido.
+- Leer el reloj del *checkpoint* una vez cada 16 llamadas. Se descartó primero con
+  una comparación que resultó **inválida**: los dos lados se habían medido en
+  fases distintas de la carga (frames 8101–9601 frente a 11101–12601), así que la
+  caída atribuida al cambio era la escena, no el código. Re-medido con el protocolo
+  estable (asentar 340 s y leer los últimos informes `STAT`) da **19,1 fps frente a
+  18,6–19,6** del build sin el cambio: está dentro del ruido. Se descarta por no
+  aportar nada medible a cambio de añadir latencia al *scheduler*.
+
+La lección vale para el resto del documento: las cifras de fps solo son comparables
+entre ejecuciones que llegan al mismo punto de la escena, y por eso el protocolo
+asienta 340 s y descarta los informes de la fase de carga.
 
 ### Qué sigue sin verificarse
 
@@ -104,13 +116,13 @@ estática** (el callejón); en movimiento por la misma calle baja a 12,0–12,8 
 límite `CAP 60` del overlay es el límite de frames de la configuración del kit, no
 una medida.
 
-Evidencia local de esta ronda: `final_overlay.png` (overlay recortado, `NEW 17.0
-FPS`, `FRAME 51.0 ms`, `GPU 4.1 ms`), `refocus_ov.png` (`NEW 24.5 FPS`, `FRAME
-39.4 ms`), `final_scene.png` y `cur2_scene.png` (la escena completa),
-`mv1_move_*.png` y `mv1_after_move.png` (la secuencia con `w` pulsada), y las líneas
-`perf:` de `RECOMP_PERF_STATS=1` con `live_frames_max=1`, `seh_frames=0/s`,
-`frames live=0 enters_total=1550`. Sin avisos de WebGPU ni abortos en el registro
-de la página.
+Evidencia local de esta ronda: `ship_overlay.png` (overlay recortado, `NEW 18.5
+FPS`, `FRAME 56.3 ms`, `GPU 3.8 ms`), `final_overlay.png` (`NEW 17.0 FPS`, `FRAME
+51.0 ms`), `refocus_ov.png` (`NEW 24.5 FPS`, `FRAME 39.4 ms`), `ship_scene.png`,
+`final_scene.png` y `cur2_scene.png` (la escena completa), `mv1_move_*.png` y
+`mv1_after_move.png` (la secuencia con `w` pulsada), y las líneas `perf:` de
+`RECOMP_PERF_STATS=1` con `live_frames_max=1`, `seh_frames=0/s`, `frames live=0
+enters_total=1550`. Sin avisos de WebGPU ni abortos en el registro de la página.
 
 ### Dónde está ahora el coste
 
