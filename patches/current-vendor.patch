@@ -158,6 +158,33 @@ index 20fdc15..99886d4 100644
  - Allow native game adapters to place their own cursors at absolute touch
    positions in logical game pixels. Placement can discard pending DirectInput
    X/Y movement without losing button, wheel or keyboard input.
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 10a37a1..7a558df 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -15,6 +15,22 @@ if(EMSCRIPTEN)
+   # EM_ASM and EM_JS, in SDL and in the web host, need the GNU dialects.
+   set(CMAKE_C_EXTENSIONS ON)
+   set(CMAKE_CXX_EXTENSIONS ON)
++  # Wasm exception handling instead of Emscripten's JavaScript setjmp/longjmp.
++  #
++  # With the JS implementation, any indirect call in a translation unit that can
++  # throw is compiled to an invoke_* import: a wasm -> JS -> wasm round trip
++  # that copies the arguments and reconstructs the frame. The translated guest
++  # code dispatches every call through a function pointer
++  # (recomp_call -> recomp_base_ptrs[i](c)), and the game is C++ reached through
++  # vtables, so that wrapper sat on thousands of calls per frame and showed up
++  # as its own slice of the profile.
++  #
++  # With -fwasm-exceptions the same dispatch is a plain wasm call_indirect and
++  # longjmp unwinds the wasm stack natively, which is what the resumable-stack
++  # design (translate.resumable_stacks) actually needs. Every object in the
++  # image has to agree, so this is a whole-build flag and not a per-target one.
++  add_compile_options(-fwasm-exceptions)
++  add_link_options(-fwasm-exceptions -sSUPPORT_LONGJMP=wasm)
+ endif()
+ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+ if(ANDROID)
 diff --git a/cmake/Translate.cmake b/cmake/Translate.cmake
 index 2542377..a291325 100644
 --- a/cmake/Translate.cmake
@@ -259,10 +286,10 @@ index bb8776b..8ad7e88 100644
  `game` needs your installation, `gpu` needs a Metal device, `device` needs a
  real Metal and audio device (the offline audio render is not what a hosted CI
 diff --git a/dx/CMakeLists.txt b/dx/CMakeLists.txt
-index a16dd2f..707f95e 100644
+index a16dd2f..8205cc6 100644
 --- a/dx/CMakeLists.txt
 +++ b/dx/CMakeLists.txt
-@@ -2,13 +2,19 @@ set(POP_DX_SOURCES
+@@ -2,7 +2,7 @@ set(POP_DX_SOURCES
    com.cpp dx.cpp host_api.cpp display_stubs.cpp ddraw.cpp d3d.cpp d3d11.cpp dxgi.cpp d3dcompiler.cpp
    d3dx10.cpp dsound.cpp dshow.cpp mp3_source.cpp dinput.cpp dinput_joystick.cpp xinput.cpp qmixer.cpp
    mss32.cpp redbook.cpp avi.cpp waveout.cpp fmod.cpp soundlib.cpp galaxy_stub.cpp riff.cpp bink.cpp video_frame.cpp mf_media.cpp
@@ -271,19 +298,7 @@ index a16dd2f..707f95e 100644
    d3dx9.cpp)
  
  add_library(recomp_dx OBJECT ${POP_DX_SOURCES})
- target_link_libraries(recomp_dx PUBLIC recomp_runtime)
- pop_link_video(recomp_dx)
- target_compile_options(recomp_dx PRIVATE ${POP_WARN_HOST})
-+if(EMSCRIPTEN)
-+  # Every D3D9 state change and draw reaches the host backend through a vtable,
-+  # and an indirect call compiled with exceptions is an invoke_* wrapper - a
-+  # wasm -> JS -> wasm round trip per draw. Nothing here throws.
-+  target_compile_options(recomp_dx PRIVATE -fno-exceptions)
-+endif()
- pop_optimize(recomp_dx 2)
- 
- # The same shims with every host callback a strong no-op: a binary linking
-@@ -22,6 +28,18 @@ target_compile_options(recomp_dx_null PRIVATE ${POP_WARN_HOST})
+@@ -22,6 +22,18 @@ target_compile_options(recomp_dx_null PRIVATE ${POP_WARN_HOST})
  pop_optimize(recomp_dx_null 1)
  
  if(NOT IOS AND NOT ANDROID)
@@ -302,7 +317,7 @@ index a16dd2f..707f95e 100644
  # host_api.h is a C header too. The C11 consumer is an object the DX tests
  # link; the header is also parsed as C++17 on its own.
  add_library(host_api_header_test OBJECT tests/host_api_header_test.c)
-@@ -40,6 +58,11 @@ target_link_libraries(dx_tests PRIVATE recomp_platform recomp_dx recomp_runtime)
+@@ -40,6 +52,11 @@ target_link_libraries(dx_tests PRIVATE recomp_platform recomp_dx recomp_runtime)
  target_compile_options(dx_tests PRIVATE ${POP_WARN_HOST})
  pop_optimize(dx_tests 1)
  pop_test_binary(dx_tests)
@@ -2527,48 +2542,10 @@ index 7771a52..ba75885 100644
          {"DirectShow graph playback", test_dshow_graph_playback},
          {"palette versions", test_palette_versions},
 diff --git a/host/CMakeLists.txt b/host/CMakeLists.txt
-index 58e79fd..39b2f1f 100644
+index 58e79fd..6179fe5 100644
 --- a/host/CMakeLists.txt
 +++ b/host/CMakeLists.txt
-@@ -7,6 +7,12 @@ add_library(host_common OBJECT boot.cpp report_lock.cpp)
- target_include_directories(host_common PUBLIC ${POP_ROOT} ${POP_ROOT}/runtime)
- target_link_libraries(host_common PUBLIC recomp_runtime)
- target_compile_options(host_common PRIVATE ${POP_WARN_HOST})
-+if(EMSCRIPTEN)
-+  # The boot chain calls the runtime and the guest through function pointers;
-+  # with exceptions on, each of those is an invoke_* wrapper. See the note in
-+  # runtime/CMakeLists.txt.
-+  target_compile_options(host_common PRIVATE -fno-exceptions)
-+endif()
- pop_optimize(host_common 1)
- 
- # The launcher's portable core (host/launcher/): finding, checking and
-@@ -129,6 +135,12 @@ endif()
- 
- # pop_host(<target> [GEN] [UI_LAYER] [OPT <n>] SOURCES ... LIBS ... FRAMEWORKS ...):
- # a host or a test binary over the runtime, shims, mods and Lua.
-+if(EMSCRIPTEN)
-+  # The one host source that throws (invalid frame dimensions); everything else
-+  # is compiled without exceptions. See the note in runtime/CMakeLists.txt.
-+  set_source_files_properties(${HOST}/indexed_frame.cpp
-+    PROPERTIES COMPILE_OPTIONS "-fexceptions")
-+endif()
- function(pop_host target)
-   cmake_parse_arguments(ARG "GEN;UI_LAYER" "OPT" "SOURCES;FRAMEWORKS;LIBS" ${ARGN})
-   if(ANDROID AND target STREQUAL "recomp_app")
-@@ -141,6 +153,11 @@ function(pop_host target)
-                                                ${POP_ROOT}/host ${POP_ROOT}/third_party/lua
-                                                ${CMAKE_BINARY_DIR}/generated)
-   target_compile_options(${target} PRIVATE ${POP_WARN_HOST} ${POP_OBJC_ARC})
-+  if(EMSCRIPTEN)
-+    # Same reason as the runtime and the D3D9 shims: an indirect call in a
-+    # translation unit compiled with exceptions becomes an invoke_* wrapper.
-+    target_compile_options(${target} PRIVATE -fno-exceptions)
-+  endif()
-   if(ARG_UI_LAYER)
-     target_compile_definitions(${target} PRIVATE POPM_PRESENT_HAS_UI_LAYER=1)
-   endif()
-@@ -266,7 +283,13 @@ if(TARGET recomp_gen)
+@@ -266,7 +266,13 @@ if(TARGET recomp_gen)
      file(REMOVE_RECURSE ${web_resources})
      file(MAKE_DIRECTORY ${web_resources})
      file(COPY ${POP_ROOT}/tools/recomp/baseline/classic-modes.json DESTINATION ${web_resources})
@@ -2583,21 +2560,6 @@ index 58e79fd..39b2f1f 100644
        file(COPY ${POP_BUILD_ROOT}/recomp/symbols.json DESTINATION ${web_resources})
      endif()
      if(EXISTS ${RECOMP_GAME_DIR}/mods/core)
-diff --git a/host/gpu/CMakeLists.txt b/host/gpu/CMakeLists.txt
-index df968f0..27a9ad7 100644
---- a/host/gpu/CMakeLists.txt
-+++ b/host/gpu/CMakeLists.txt
-@@ -20,6 +20,10 @@ if(EMSCRIPTEN)
-   set_target_properties(gpu_backend PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${POP_ARCHIVE_DIR})
-   target_include_directories(gpu_backend PUBLIC ${POP_ROOT} ${CMAKE_CURRENT_SOURCE_DIR})
-   target_compile_options(gpu_backend PRIVATE ${POP_WARN_HOST})
-+  # The device is reached through a vtable for every recorded draw and state
-+  # change, and an indirect call compiled with exceptions is an invoke_* wrapper
-+  # (wasm -> JS -> wasm). Nothing here throws.
-+  target_compile_options(gpu_backend PRIVATE -fno-exceptions)
-   target_compile_options(gpu_backend PUBLIC --use-port=emdawnwebgpu)
-   target_link_options(gpu_backend PUBLIC --use-port=emdawnwebgpu)
-   target_link_libraries(gpu_backend PUBLIC recomp_platform)
 diff --git a/host/gpu/metal/d3d9_metal.mm b/host/gpu/metal/d3d9_metal.mm
 index 3e94e82..75c5bff 100644
 --- a/host/gpu/metal/d3d9_metal.mm
@@ -2839,52 +2801,11 @@ index d983f15..d23a6e4 100644
          fprintf(stderr,
                  "[pointer-game] drawable %d,%d hit %d at %d,%d delivered %d guest %d,%d bounds "
                  "%d,%d,%d,%d\n",
-diff --git a/mods/CMakeLists.txt b/mods/CMakeLists.txt
-index 92f27b0..3730332 100644
---- a/mods/CMakeLists.txt
-+++ b/mods/CMakeLists.txt
-@@ -31,6 +31,14 @@ add_library(recomp_mods OBJECT ${POP_MODS_SOURCES})
- target_include_directories(recomp_mods PUBLIC ${POP_ROOT} ${POP_ROOT}/runtime)
- target_link_libraries(recomp_mods PUBLIC lua recomp_runtime recomp_builtin_defaults)
- target_compile_options(recomp_mods PRIVATE ${POP_WARN_HOST})
-+if(EMSCRIPTEN)
-+  # Same reason as the runtime: an indirect call compiled with exceptions is an
-+  # invoke_* wrapper, a wasm -> JS -> wasm round trip. The mod layer's hooks and
-+  # its guest seams are reached from the guest's own call path. overlay.cpp is
-+  # the one file that catches.
-+  set_source_files_properties(overlay.cpp PROPERTIES COMPILE_OPTIONS "-fexceptions")
-+  target_compile_options(recomp_mods PRIVATE -fno-exceptions)
-+endif()
- pop_optimize(recomp_mods 2)
- if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-   # std::atomic::is_lock_free in the page tracker needs libatomic with clang + libstdc++.
 diff --git a/runtime/CMakeLists.txt b/runtime/CMakeLists.txt
-index 10a5e39..74ac55f 100644
+index 10a5e39..863e859 100644
 --- a/runtime/CMakeLists.txt
 +++ b/runtime/CMakeLists.txt
-@@ -23,6 +23,21 @@ add_custom_command(
- list(APPEND POP_RUNTIME_SOURCES ${POP_BUNDLED_FONTS_CPP})
- 
- add_library(recomp_runtime OBJECT ${POP_RUNTIME_SOURCES})
-+if(EMSCRIPTEN)
-+  # Every indirect call in a translation unit compiled with C++ exceptions
-+  # becomes an Emscripten invoke_* wrapper, and each wrapper is a wasm -> JS ->
-+  # wasm round trip. This runtime is built on indirect calls: import dispatch
-+  # reaches each shim through fn(c), and the D3D9 device reaches its backend
-+  # through a vtable. The guest makes thousands of such calls per frame, so the
-+  # runtime is compiled without exceptions - everywhere except the interpreter,
-+  # whose bounded execution uses a private Fault exception.
-+  #
-+  # The interpreter's bounded execution uses a private Fault exception. Both
-+  # its own catch sites and consumers' links must retain exception support.
-+  set_source_files_properties(interp.cpp PROPERTIES COMPILE_OPTIONS "-fexceptions")
-+  target_compile_options(recomp_runtime PRIVATE -fno-exceptions)
-+  target_link_options(recomp_runtime INTERFACE -fexceptions)
-+endif()
- target_include_directories(recomp_runtime PUBLIC ${POP_ROOT} ${CMAKE_CURRENT_SOURCE_DIR})
- target_link_libraries(recomp_runtime PUBLIC recomp_platform)
- target_compile_options(recomp_runtime PRIVATE ${POP_WARN_HOST})
-@@ -43,6 +58,10 @@ endif()
+@@ -43,6 +43,10 @@ endif()
  # recomp_call, which the test provides.
  if(NOT IOS AND NOT ANDROID)
  add_executable(interp_tests tests/interp_tests.cpp interp.cpp)
@@ -2895,7 +2816,7 @@ index 10a5e39..74ac55f 100644
  target_include_directories(interp_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
  target_compile_options(interp_tests PRIVATE ${POP_WARN_HOST})
  pop_test_binary(interp_tests)
-@@ -79,6 +98,17 @@ add_test(NAME runtime_tests COMMAND runtime_tests WORKING_DIRECTORY ${POP_ROOT})
+@@ -79,6 +83,17 @@ add_test(NAME runtime_tests COMMAND runtime_tests WORKING_DIRECTORY ${POP_ROOT})
  # code through the interpreter. It takes two seconds when that returns.
  set_tests_properties(runtime_tests PROPERTIES LABELS game TIMEOUT 600
                       ENVIRONMENT RECOMP_PYTHON=${Python3_EXECUTABLE})
@@ -2913,7 +2834,7 @@ index 10a5e39..74ac55f 100644
  add_executable(gdi_tests tests/gdi_tests.cpp tests/stub_recomp_call.cpp)
  target_link_libraries(gdi_tests PRIVATE recomp_platform recomp_runtime)
  target_compile_options(gdi_tests PRIVATE ${POP_WARN_HOST})
-@@ -94,6 +124,22 @@ set_tests_properties(gdi_draw_tests PROPERTIES LABELS nogame)
+@@ -94,6 +109,22 @@ set_tests_properties(gdi_draw_tests PROPERTIES LABELS nogame)
  endif()
  
  if(POP_REAL_GEN AND NOT IOS AND NOT ANDROID)
@@ -2936,7 +2857,7 @@ index 10a5e39..74ac55f 100644
    # The headless parity fixture: null host, real generated code, core mods installed.
    add_executable(pop_fixture fixture.cpp)
    target_link_libraries(pop_fixture PRIVATE recomp_platform recomp_runtime recomp_snapshot recomp_dx_null recomp_mods lua)
-@@ -119,6 +165,12 @@ if(POP_REAL_GEN AND NOT IOS AND NOT ANDROID)
+@@ -119,6 +150,12 @@ if(POP_REAL_GEN AND NOT IOS AND NOT ANDROID)
      pop_optimize(profile_tests 1)
      pop_link_gen(profile_tests)
      pop_test_binary(profile_tests)
@@ -3114,7 +3035,7 @@ index 06d5e2b..c57d587 100644
  // _setjmp / _longjmp intrinsics. See intrinsics.h for the two substitution
  // forms and why the two-call one is correct.
 diff --git a/runtime/imports.cpp b/runtime/imports.cpp
-index ec1d2b1..1cba64c 100644
+index ec1d2b1..0fef5b0 100644
 --- a/runtime/imports.cpp
 +++ b/runtime/imports.cpp
 @@ -1,8 +1,10 @@
@@ -3209,7 +3130,7 @@ index ec1d2b1..1cba64c 100644
  }
  
  uint8_t imports_argc(uint32_t trampoline) {
-@@ -388,6 +417,115 @@ ImportCallObserver imports_set_call_observer_get(void) {
+@@ -388,6 +417,129 @@ ImportCallObserver imports_set_call_observer_get(void) {
      return g_call_observer;
  }
  
@@ -3269,6 +3190,20 @@ index ec1d2b1..1cba64c 100644
 +constexpr uint32_t HIST_SLOTS = 8192u; // 32 MiB at 4 KiB pages
 +uint32_t g_page_hist[HIST_SLOTS + 1];
 +
++// The page histogram exists for the watchdog, and the per-trampoline call
++// counter for diagnostics. Dispatch runs about half a million times a second,
++// so both are a store into shared memory on the hottest path in the runtime,
++// and neither is read unless a switch asks for it: the histogram only from
++// watchdog_flush_hist, the counter only from imports_call_count(dll, name).
++bool import_stats_on() {
++    static const bool on = [] {
++        const char *tls = recomp_env("WATCHDOG_TLS");
++        const char *cs = recomp_env("WATCHDOG_CS");
++        return (tls && *tls) || (cs && *cs);
++    }();
++    return on;
++}
++
 +uint32_t *page_hist_slot(uint32_t ret) {
 +    if (ret < HIST_LO || ret - HIST_LO >= HIST_SLOTS * 4096u)
 +        return &g_page_hist[HIST_SLOTS];
@@ -3325,7 +3260,7 @@ index ec1d2b1..1cba64c 100644
  // Dispatch a guest import trampoline at a scheduler checkpoint.
  // Copy dispatch metadata before calling a shim, then restore EIP/ESP according to its calling convention.
  namespace {
-@@ -411,13 +549,37 @@ bool imports_dispatch(X86 *c, uint32_t target) {
+@@ -411,13 +563,37 @@ bool imports_dispatch(X86 *c, uint32_t target) {
      // runs before the shim so the guest state is a consistent call boundary -
      // except at an atomic import, and inside a sched_atomic_enter stretch.
      uint32_t idx = (target - TRAMP_BASE) / TRAMP_STRIDE;
@@ -3365,7 +3300,7 @@ index ec1d2b1..1cba64c 100644
          c->eip = rd32(c->r[R_ESP]);
          c->r[R_ESP] += 4;
          set_eax(c, 0);
-@@ -428,16 +590,27 @@ bool imports_dispatch(X86 *c, uint32_t target) {
+@@ -428,16 +604,32 @@ bool imports_dispatch(X86 *c, uint32_t target) {
      // reference to the element across the call.
      void (*fn)(X86 *) = tramps()[idx].fn;
      uint8_t argc = tramps()[idx].argc;
@@ -3373,11 +3308,15 @@ index ec1d2b1..1cba64c 100644
 -    // across that call, and do not retain a pointer into the movable vector.
 -    char desc[512];
 -    snprintf(desc, sizeof desc, "%s", tramps()[idx].desc.c_str());
+-    ++tramps()[idx].calls;
 +    // A guest exception can longjmp across fn(c), so nothing with a destructor
 +    // may be live across that call. The description is a pointer into the
 +    // trampoline arena, which never moves: no copy, no printf, and it stays
 +    // valid after a shim allocates more trampolines.
 +    const char *desc = tramps()[idx].desc_c;
++    // The logging switches, read once each. Dispatch runs about half a million
++    // times a second, so a function call per query is worth avoiding here.
++    static const int verbose = log_level();
 +    if (strict && (!fn || argc == ARGC_UNKNOWN)) {
 +        LOGW("strict imports: refusing %s (%s)", desc,
 +             !fn ? "no implementation" : "unknown calling convention");
@@ -3385,26 +3324,28 @@ index ec1d2b1..1cba64c 100644
 +        fflush(stderr);
 +        abort();
 +    }
-     ++tramps()[idx].calls;
++    if (import_stats_on())
++        ++tramps()[idx].calls;
      ++g_import_calls;
  
      uint32_t ret_addr = rd32(c->r[R_ESP]);
 -    LOGV("-> %s (esp=%08x ret=%08x)", desc, c->r[R_ESP], ret_addr);
 -    recomp_seh_validate_chain(c, "import enter", desc);
-+    ++*page_hist_slot(ret_addr);
-+    if (log_level() >= 2) {
++    if (import_stats_on())
++        ++*page_hist_slot(ret_addr);
++    if (verbose >= 2) {
 +        LOGV("-> %s (esp=%08x ret=%08x)", desc, c->r[R_ESP], ret_addr);
 +        recomp_seh_validate_chain(c, "import enter", desc);
 +    }
  
      // The arguments as they are NOW, before the shim runs: a stdcall shim pops
      // them, so after the call they are gone and this is the only point they
-@@ -469,25 +642,33 @@ bool imports_dispatch(X86 *c, uint32_t target) {
+@@ -469,25 +661,33 @@ bool imports_dispatch(X86 *c, uint32_t target) {
      // Read after the shim ran, so the pointer is into the table as it is now.
      if (g_return_observer)
          g_return_observer(desc, c->r[R_EAX]);
 -    LOGV("<- %s (eax=%08x)", desc, c->r[R_EAX]);
-+    if (log_level() >= 2)
++    if (verbose >= 2)
 +        LOGV("<- %s (eax=%08x)", desc, c->r[R_EAX]);
  
      uint32_t pop = 4;
@@ -3436,12 +3377,12 @@ index ec1d2b1..1cba64c 100644
      c->r[R_ESP] += pop;
      c->eip = ret_addr;
 -    recomp_seh_validate_chain(c, "import leave", desc);
-+    if (log_level() >= 2)
++    if (verbose >= 2)
 +        recomp_seh_validate_chain(c, "import leave", desc);
      return true;
  }
  
-@@ -511,6 +692,8 @@ thread_local Callbacks callbacks;
+@@ -511,6 +711,8 @@ thread_local Callbacks callbacks;
  } // namespace
  
  uint32_t recomp_callback_depth(void) {
@@ -3450,7 +3391,7 @@ index ec1d2b1..1cba64c 100644
      return (uint32_t)callbacks.stack.size();
  }
  
-@@ -598,4 +781,5 @@ void imports_init() {
+@@ -598,4 +800,5 @@ void imports_init() {
      gdi::register_text();
      extern void msimg32_register();
      msimg32_register();
@@ -4318,7 +4259,7 @@ index 0cefcbe..8e0159e 100644
  const char *interp_last_error(void);
  
 diff --git a/runtime/kernel32.cpp b/runtime/kernel32.cpp
-index 529d27d..b166523 100644
+index 529d27d..c17e63a 100644
 --- a/runtime/kernel32.cpp
 +++ b/runtime/kernel32.cpp
 @@ -1,4 +1,5 @@
@@ -4716,7 +4657,7 @@ index 529d27d..b166523 100644
      g_handoffs[g_handoff_count % 16] = Handoff{from, to, why};
      ++g_handoff_count;
  }
-@@ -2698,8 +2911,13 @@ bool guest_yield() {
+@@ -2698,8 +2911,15 @@ bool guest_yield() {
  // call: the frame limiter spins on GetTickCount and would otherwise starve the
  // DirectInput service threads indefinitely, expired 200 ms waits and all.  Any
  // call into the runtime is a checkpoint, and a thread yields at most once per
@@ -4726,13 +4667,15 @@ index 529d27d..b166523 100644
 +//
 +// The slice is a hand-off budget, not a latency target: each one costs a
 +// condvar wake and a baton round trip, and at a thousand of them a second that
-+// was a tenth of the guest thread. Four milliseconds still services the audio
-+// and streaming workers far more often than their own deadlines need.
-+const double SCHED_SLICE_SECONDS = 0.004;
++// was a tenth of the guest thread. Sixteen milliseconds is still several times
++// faster than the deadlines the audio and streaming workers run to: a
++// DirectSound buffer here is tens of milliseconds long, and the read-ahead
++// worker polls a queue rather than a clock.
++const double SCHED_SLICE_SECONDS = 0.016;
  
  } // namespace
  
-@@ -2789,6 +3007,23 @@ void sched_checkpoint() {
+@@ -2789,6 +3009,25 @@ void sched_checkpoint() {
      guest_yield();
  }
  
@@ -4740,23 +4683,25 @@ index 529d27d..b166523 100644
 +// RetryLoadFile, for example, polls a worker-owned read entry through ordinary
 +// translated calls and never enters the runtime while the read is pending, so
 +// the runnable worker would wait forever for a baton only a guest import could
-+// hand it.  Sampling every 64th call keeps the clock read off the hot path;
-+// sched_checkpoint still applies its one-per-millisecond limit, its single-
-+// thread fast path and its atomic-stretch test.
++// hand it.  Sampling every 256th call keeps the clock read off the hot path;
++// sched_checkpoint still applies its own slice limit, its single-thread fast
++// path and its atomic-stretch test, so the only cost of the coarser sampling
++// is that a poll loop can overrun the slice by a few hundred calls, which is
++// tens of microseconds.
 +static __thread uint32_t t_guest_call_checkpoints = 0;
 +
 +void recomp_guest_checkpoint() {
-+    perf_stats::report();
-+    if (++t_guest_call_checkpoints < 64)
++    if (++t_guest_call_checkpoints < 256)
 +        return;
 +    t_guest_call_checkpoints = 0;
++    perf_stats::report();
 +    sched_checkpoint();
 +}
 +
  namespace {
  
  // A shim that changed an object's state calls this so a thread blocked on it
-@@ -3373,7 +3608,16 @@ void k_SetThreadPriority(X86 *c) {
+@@ -3373,7 +3612,16 @@ void k_SetThreadPriority(X86 *c) {
  }
  
  void k_ExitProcess(X86 *c) {
@@ -4774,7 +4719,7 @@ index 529d27d..b166523 100644
      if (request_process_exit(arg(c, 0)))
          return; // never returns
      publish_process_exit(arg(c, 0));
-@@ -3594,6 +3838,14 @@ void k_lstrlenA(X86 *c) {
+@@ -3594,6 +3842,14 @@ void k_lstrlenA(X86 *c) {
      set_eax(c, (uint32_t)gm_str(arg(c, 0)).size());
  }
  
@@ -4789,7 +4734,7 @@ index 529d27d..b166523 100644
  void k_lstrcpyA(X86 *c) {
      uint32_t d = arg(c, 0);
      std::string s = gm_str(arg(c, 1));
-@@ -3943,6 +4195,86 @@ void k_GetLocaleInfoW(X86 *c) {
+@@ -3943,6 +4199,86 @@ void k_GetLocaleInfoW(X86 *c) {
  
  } // namespace
  
@@ -4876,7 +4821,7 @@ index 529d27d..b166523 100644
  // ---------------------------------------------------------------------------
  // The run thread's own ending.
  //
-@@ -4218,6 +4550,7 @@ void create_file_named(X86 *c, const std::string &name) {
+@@ -4218,6 +4554,7 @@ void create_file_named(X86 *c, const std::string &name) {
      uint32_t h = handle_new(H_FILE);
      handles()[h].fd = fd;
      handles()[h].path = host;
@@ -4884,7 +4829,7 @@ index 529d27d..b166523 100644
      if (deferred) {
          handles()[h].write_pending = true;
          handles()[h].write_flags = wanted;
-@@ -4849,7 +5182,7 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4849,7 +5186,7 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "GetTimeFormatA", 6, nullptr},
      {"KERNEL32.dll", "GetDiskFreeSpaceExA", 4, nullptr},
      {"KERNEL32.dll", "GetLongPathNameA", 3, nullptr},
@@ -4893,7 +4838,7 @@ index 529d27d..b166523 100644
      {"KERNEL32.dll", "HeapValidate", 3, nullptr},
      {"KERNEL32.dll", "QueueUserAPC", 3, nullptr},
      {"KERNEL32.dll", "SetConsoleCtrlHandler", 2, nullptr},
-@@ -4864,6 +5197,9 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4864,6 +5201,9 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "InterlockedDecrement", 1, k_InterlockedDecrement},
      {"KERNEL32.dll", "InterlockedExchange", 2, k_InterlockedExchange},
      {"KERNEL32.dll", "InitializeCriticalSection", 1, k_InitializeCriticalSection},
@@ -4903,7 +4848,7 @@ index 529d27d..b166523 100644
      {"KERNEL32.dll", "EnterCriticalSection", 1, k_EnterCriticalSection},
      {"KERNEL32.dll", "LeaveCriticalSection", 1, k_LeaveCriticalSection},
      {"KERNEL32.dll", "DeleteCriticalSection", 1, k_DeleteCriticalSection},
-@@ -4874,6 +5210,7 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4874,6 +5214,7 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "ResetEvent", 1, k_ResetEvent},
      {"KERNEL32.dll", "CreateMutexA", 3, k_CreateMutexA},
      {"KERNEL32.dll", "WaitForSingleObject", 2, k_WaitForSingleObject},
@@ -4911,7 +4856,7 @@ index 529d27d..b166523 100644
      {"KERNEL32.dll", "WaitForMultipleObjects", 4, k_WaitForMultipleObjects},
      // threads and process exit
      {"KERNEL32.dll", "CreateThread", 6, k_CreateThread},
-@@ -4898,6 +5235,7 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4898,6 +5239,7 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "RtlUnwind", 4, k_RtlUnwind},
      // strings, code pages, locale
      {"KERNEL32.dll", "lstrlenA", 1, k_lstrlenA},

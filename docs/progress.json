@@ -10,8 +10,8 @@
   "original_intro_verified": false,
   "first_original_mission_verified": false,
   "original_vehicle_physics_verified": false,
-  "last_triage_utc": "2026-10-22T08:17:40+00:00",
-  "triage_scope": "Performance round on wasm sha256 67e599f6... (266404198 bytes): gameplay in the Los Santos alley now measures 17.0-24.5 FPS with 39.4-56.3 ms frames and 3.5-4.2 ms of GPU time, up from 0.4-0.6 FPS with 1828.5 ms frames; the same street while walking measures 12.0-12.8 FPS at about 1200 draws per frame. Two root causes were fixed: a translator rule never emitted the SEH frame leave at 0x004835ef (the runtime predicate could not retire that epilogue shape either), and D3D9 staging allocated and freed a full-resource copy per Lock/Unlock while marking the whole buffer dirty. Details under browser_performance_triage. Missions, vehicles, audio, save/load and city-wide traversal remain unmeasured, and the build is not bit-reproducible.",
+  "last_triage_utc": "2026-10-22T14:20:00+00:00",
+  "triage_scope": "Performance round on wasm sha256 6276422a... (266527447 bytes): -fwasm-exceptions plus -sSUPPORT_LONGJMP=wasm applied globally removed all 26 invoke_* imports (331 total remain), and the unconditional per-dispatch instrumentation was gated. Gameplay in the Los Santos alley measures 23.4-24.4 FPS at 743-777 draws, against 22.87 FPS before. The round's opening hypothesis, that the game's own frame limiter was sleeping the guest and left 2x of headroom, is REFUTED by the runtime's baton sampler: the guest is idle only 0-7% of samples. The previous round's claim that 60 FPS is out of reach with arithmetic is corrected: it rests on a profile that could not see the executing thread. The remaining dominant cost is the game's frame limiter spinning on GetTickCount (~40-55k clock reads per frame); wiring the kit's audited frame-clock substitution needs five hook addresses this variant does not define. Details under browser_performance_triage_frame_limiter_round. Missions, vehicles, audio heard, save/load and city-wide coverage remain unverified.",
   "scope": "Current isolated executable; prototype rendering and older-image boot probes are separate evidence",
   "recreation": {
     "updated_utc": "2026-10-14T23:29:46Z",
@@ -1152,5 +1152,106 @@
     ],
     "superseded_by": "browser_performance_triage",
     "note": "Kept as historical evidence for the shipped artifact 67e599f6... . Its figures belong to that artifact and that round only."
+  },
+  "browser_performance_triage_frame_limiter_round": {
+    "updated_utc": "2026-10-22T14:20:00+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "served_wasm_sha256": "6276422ac3d827609dd85fdcd45e3f3e05cc6db9b9ced711b2795133fb0351b4",
+    "wasm_bytes": 266527447,
+    "previous_wasm_sha256": "087ca85c9b6ad20118e8d9e70ae8b61a1c6fbb555e0b606a7106d7949b9408d2",
+    "reproducibility": "The build is still not bit-reproducible, so a hash identifies an artifact and not a source state. The same round produced eff31fbef... (266527925 bytes) and 6276422a... (266527447 bytes) before and after a change that was then reverted, so the two differ by more than the revert.",
+    "target": "Raise browser gameplay frame rate toward 60 FPS, or establish with evidence what prevents it.",
+    "measurement": {
+      "scene": "The same Los Santos alley as the previous rounds: CJ, the fence, the bicycle, the objective HUD.",
+      "url": "http://127.0.0.1:8771/gtasa-singleplayer/ with RECOMP_STRICT_UNKNOWN=1, RECOMP_LOG=1, RECOMP_D3D9_STATS=1 and RECOMP_PERF_STATS=1",
+      "method": "The shim's STAT d3d9 lines, printed every 300 presented frames, read from window.recompLog, which is the page's own bounded log; plus the kit overlay and the runtime's perf counters. Focus is held with Emulation.setFocusEmulationEnabled. Gameplay is confirmed by draws > 100 before any number is trusted.",
+      "before": {
+        "stat_d3d9_fps_mean": 22.87,
+        "stat_d3d9_reports": 6,
+        "draws_per_frame": "750-760",
+        "invoke_imports": 26
+      },
+      "after": {
+        "stat_d3d9_fps_mean_at_743_777_draws": "23.4-24.4",
+        "stat_d3d9_reports_per_run": "5-8",
+        "stat_d3d9_fps_at_859_draws": 21.4,
+        "invoke_imports": 0,
+        "total_function_imports": 331,
+        "wasm_functions": 213145
+      },
+      "draw_count_is_not_constant": "The draw count drifted between 743 and 1000 in the same alley within one session, and cost per frame grows with it, so two runs are only comparable at the same count. The 21.4 FPS figure is 859 draws, not a regression."
+    },
+    "root_cause_measured_this_round": {
+      "the_guest_is_not_sleeping": "The runtime's own sampler (RECOMP_PROFILE=1, RECOMP_PROFILE_INTERVAL_MS=2000) samples the baton holder at 1 kHz and counts a sample idle when that thread is not inside a translated function. Across about 45 two-second windows during gameplay: 24 windows at 0.0-1.5% idle, 15 at 1.6-3.9%, 6 at 4.6-6.9%. The guest executes translated code 93-100% of the time.",
+      "hypothesis_this_rejects": "The round opened on the hypothesis that GTA SA's own default 30 FPS frame limiter was sleeping the guest and that the CPU therefore had about 2x of headroom. It does not: there is no idle time to reclaim.",
+      "what_the_time_is_actually_spent_on": {
+        "FUN_00561a80": "20-30% of sampled time. Eight instructions: reads an imported function pointer, calls it, subtracts a time base. This is the shape of CTimer::GetTimeInMilliseconds.",
+        "FUN_00748710.blk_00748da0": "25-45% of sampled time. A loop that calls Sleep(0x64) and reads the clock.",
+        "clock_reads_per_second": "940000-1324000",
+        "clock_reads_per_frame": "40000-55000 at 24 FPS",
+        "imports_per_second": "1119629-1530872",
+        "imports_per_frame": "47000-64000 at 24 FPS",
+        "guest_calls_per_second": "545000-690000"
+      },
+      "the_limiter_spins_instead_of_sleeping": "The kit already documented this: runtime/kernel32.cpp:1715 says \"this game's frame limiter spins here\" and :2054 says \"the frame limiter's GetTickCount spin is left alone\". GTA San Andreas paces frames by calling GetTickCount in a loop until its deadline passes; it does not Sleep."
+    },
+    "fixes": [
+      "vendor/recomp-kit/CMakeLists.txt: -fwasm-exceptions and -sSUPPORT_LONGJMP=wasm are applied globally for EMSCRIPTEN targets. With the JavaScript setjmp/longjmp, any indirect call in a unit that can throw compiles to an invoke_* import, a wasm -> JS -> wasm round trip that copies arguments and rebuilds the frame; the translated guest dispatches every call through a function pointer, so that wrapper sat on tens of thousands of calls per frame. The shipped wasm now has 0 invoke_* imports out of 331, and V8 compiles the whole module.",
+      "vendor/recomp-kit/CMakeLists.txt, runtime/, dx/, host/, host/gpu/, mods/: the five per-target -fno-exceptions blocks from the previous round were removed. They were a detour that left the 26 invoke_* in place, because Emscripten's JS SJLJ emits them regardless of the C++ exception setting.",
+      "runtime/imports.cpp: the per-page watchdog histogram and the per-trampoline call counter now sit behind import_stats_on(), true only with RECOMP_WATCHDOG_TLS or RECOMP_WATCHDOG_CS. Both were unconditional stores into shared memory on a path that runs about a million times a second, and neither is read without those switches.",
+      "runtime/imports.cpp: log_level() is read once into a static const int verbose inside imports_dispatch instead of being called per dispatch."
+    ],
+    "reverted_experiments": [
+      "-sGROWABLE_ARRAYBUFFERS=2, which the linker recommends for -pthread + ALLOW_MEMORY_GROWTH and which would address exactly the non-wasm slowness that bounds this build. It breaks the WebGPU backend: \"Uncaught TypeError: Failed to execute 'setBindGroup' on GPURenderPassEncoder: The provided ArrayBuffer value must not be resizable\".",
+      "Serving the guest's millisecond clock from the monotonic reads the scheduler already takes (host_publish_millis, about a million reads/s without a host call). Measured neutral, 23.96 FPS against 23.84, and reverted: in wasm os_monotonic_ns() is not the trip into JS that the clock counter suggested, so the saving did not justify touching the time path.",
+      "Scaling the guest clock 2x to separate \"out of CPU\" from \"waiting for its own limiter\". The game hangs in the menu because its fade logic depends on real time, so the experiment answers nothing. Reverted with the clock cache."
+    ],
+    "corrected_claim": "The previous round's section states that 60 FPS is out of reach \"with arithmetic\" because translated code alone already costs ~19 ms of the 16.7 ms budget. That figure remains consistent, but the conclusion is NOT established: the split came from a profile that attributed time by worker samples, which read as 97% in __pthread_cond_timedwait, while the baton sampler that measures the thread actually executing reports 0-7% idle. The dominant share of what that profile called translated code is a wait loop on the clock (CTimer::GetTimeInMilliseconds), not simulation work, and it is exactly the part the kit already knows how to replace. 60 FPS is neither demonstrated nor ruled out.",
+    "next_step_identified": {
+      "what": "Wire the audited frame-limiter substitution: native_frame_clock() in runtime/kernel32.cpp:1665 retires both draw-loop deadlines and lets the kit pace frames through mods_display_fps().",
+      "why_it_is_not_done": "It only compiles when the variant defines RECOMP_HOOK_FRAME_CLOCK_BEGIN, _WAIT, _WAIT_CLAMP, _CLAMP_DEADLINE and _WAIT_DEADLINE, and variants/singleplayer/game.toml has no [hooks] section, so in this build that path is dead code and the game's limiter spins untouched.",
+      "what_it_needs": "Auditing the five addresses. The comment at kernel32.cpp:1660 names 0049cfc0 (deadline begin; it selects the second wait when game-state 2 has frame-rate flags) and 0049cfe0 (the default 60, or 24/20/14 Hz limit), and records that neither deadline drives simulation (004a5590 uses 005cd92c/005cd930 and the real clock). The two waits and the two deadline addresses are unconfirmed, and they were not wired from guesswork: a wrong address does not fail, it silently changes the game's pacing."
+    },
+    "verified": [
+      "The game boots from the original menu into gameplay on the shipped image: draws > 100 confirmed (711-1000 draws) before measuring, after discarding three attempts where a keypress consumed during the menu fade left the page in the menu at ~300 FPS over 10 draws.",
+      "The served wasm has 0 invoke_* imports out of 331, and V8 compiles the whole module.",
+      "Audio runs: dsound messages with buffers starting playback (\"first play on channel ...\") and no underrun.",
+      "The guest reads the clock 0.94-1.32 million times a second and dispatches 1.1-1.5 million imports a second during gameplay, with no abort and no WebGPU validation warning.",
+      "The baton-holder idle share was measured directly rather than inferred."
+    ],
+    "not_verified": [
+      "Missions, vehicles, audio actually heard, saving and loading.",
+      "Stability beyond about 35 minutes of wall time.",
+      "Draw coverage across the whole city.",
+      "Any figure at a different draw count than the one it was taken at. The alley drifts between 743 and 1000 draws, and 21.4 FPS at 859 draws is not comparable with 24.4 FPS at 743.",
+      "Whether the frame-limiter substitution actually raises the frame rate. It is the identified next step, not a measured result."
+    ],
+    "blockers": [
+      "The frame-limiter substitution needs five audited hook addresses that this variant does not define, and guessing them changes game pacing silently.",
+      "Fixed-function vertex blending (D3DRS_VERTEXBLEND / D3DRS_INDEXEDVERTEXBLENDENABLE) is still unimplemented for streams that rely on it.",
+      "Native d3d9_ffp_tests cannot run here, and tools/recomp/tests is only partially runnable (missing numpy, missing when/emu/native fixtures, and a kit-relative build/recomp/gen/table.c).",
+      "The build is not bit-reproducible, so a wasm hash identifies an artifact and not a source state."
+    ],
+    "evidence": {
+      "counter_runs": [
+        "eh2 (24.33 FPS mean over 3 STAT reports at 743 draws, first -fwasm-exceptions build, 0 invoke_*)",
+        "eh5 (23.38 FPS mean over 5 reports at 757 draws, after the stats gating)",
+        "clk1 (23.84 FPS mean over 8 reports at 758 draws, first clock-cache build)",
+        "clk2 (23.96 FPS mean over 8 reports at 751 draws, clock cache actually reaching raw_millis)",
+        "ship (21.40 FPS over 1 report at 859 draws, final shipped image 6276422a...)"
+      ],
+      "idle_measurements": {
+        "method": "RECOMP_PROFILE=1&RECOMP_PROFILE_INTERVAL_MS=2000, profile live lines read from window.recompLog",
+        "windows": 45,
+        "idle_0_0_to_1_5_pct": 24,
+        "idle_1_6_to_3_9_pct": 15,
+        "idle_4_6_to_6_9_pct": 6,
+        "conclusion": "The guest is CPU-bound on translated code; there is no sleeping to reclaim."
+      },
+      "hot_guest_functions": {
+        "FUN_00561a80": "20-30% of samples, 8 instructions, the CTimer::GetTimeInMilliseconds shape",
+        "FUN_00748710.blk_00748da0": "25-45% of samples, a loop calling Sleep(0x64) and reading the clock"
+      }
+    }
   }
 }

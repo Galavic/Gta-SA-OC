@@ -1,5 +1,149 @@
 # Estado actual
 
+## Rendimiento: el invitado no duerme, y el limitador de frames del juego gira sobre el reloj (2026-10-22)
+
+Medido en el navegador con el wasm `sha256 6276422a…` (266.527.447 bytes), servido en
+`http://127.0.0.1:8771/gtasa-singleplayer/`, en el mismo callejón de Los Santos. El
+build **sigue sin ser bit-reproducible**, así que el hash identifica un artefacto y no
+un estado del código.
+
+| Medida | Ronda anterior (`087ca85c…`) | Esta ronda (`6276422a…`) |
+|---|---|---|
+| `STAT d3d9` media, ~750 *draws* | 22,87 fps (6 informes) | **23,4–24,4 fps** (5–8 informes por ejecución) |
+| `STAT d3d9` media, 859 *draws* | — | 21,4 fps (1 informe) |
+| `invoke_*` en las importaciones | 26 | **0** (de 331 importaciones totales) |
+
+La mejora en fps a igual número de *draws* es modesta y en parte cae dentro del ruido de
+±1 fps; lo que sí es un cambio estructural es la desaparición de los 26 `invoke_*`.
+
+**El recuento de *draws* no es constante dentro de una misma sesión**: derivó entre 743 y
+1000 en el mismo callejón. Como el coste por frame crece con los *draws*, dos ejecuciones
+solo son comparables al mismo recuento. La cifra de 21,4 fps corresponde a 859 *draws*, no
+a un empeoramiento.
+
+### Lo que se corrigió en el build
+
+`-fwasm-exceptions` + `-sSUPPORT_LONGJMP=wasm` **globalmente** para los objetivos web
+(`vendor/recomp-kit/CMakeLists.txt`, dentro de `if(EMSCRIPTEN)`). Con el `setjmp`/`longjmp`
+en JavaScript, cualquier llamada indirecta de una unidad que pueda lanzar se compila como
+una importación `invoke_*`: un viaje wasm → JS → wasm que copia los argumentos y
+reconstruye el marco. El código traducido despacha **todas** las llamadas por puntero
+(`recomp_call` → `recomp_base_ptrs[i](c)`), así que ese envoltorio estaba en decenas de
+miles de llamadas por frame. Con `-fwasm-exceptions` el mismo despacho es un
+`call_indirect` normal.
+
+Los cinco bloques `-fno-exceptions` que la ronda anterior había puesto en `runtime/`,
+`dx/`, `host/`, `host/gpu/` y `mods/` se retiraron: eran un rodeo que dejaba 26
+`invoke_*` en su sitio, porque el SJLJ de Emscripten los emite igual. El recuento de
+funciones pasó de 213.144 a 213.145; V8 compila el módulo completo sin errores.
+
+También se sacó del camino caliente la instrumentación que corría incondicionalmente en
+cada *dispatch* (`runtime/imports.cpp`): el histograma por página y el contador por
+*trampolín* ahora están tras `import_stats_on()`, que solo es cierto con
+`RECOMP_WATCHDOG_TLS`/`RECOMP_WATCHDOG_CS`, y `log_level()` se lee una vez en un
+`static const int verbose` en lugar de en cada llamada. Con ~50.000 *dispatches* por
+frame eso eran tres accesos a memoria compartida y una llamada por importación.
+
+### La medición que faltaba: el invitado no duerme
+
+El perfilador del propio runtime (`RECOMP_PROFILE=1&RECOMP_PROFILE_INTERVAL_MS=2000`)
+muestrea a 1 kHz **el hilo que tiene el batón** y cuenta como `idle` las muestras en las
+que no está dentro de una función traducida. En ~45 ventanas de 2 s durante gameplay:
+
+| `idle` | ventanas |
+|---|---|
+| 0,0–1,5 % | 24 |
+| 1,6–3,9 % | 15 |
+| 4,6–6,9 % | 6 |
+
+**El invitado está ejecutando código traducido el 93–100 % del tiempo.** Esto descarta
+la hipótesis con la que arrancó la ronda —que el limitador de frames del juego (30 fps
+por defecto) estuviera durmiendo al invitado y que por tanto hubiera 2× de margen—. No
+hay tal margen: el CPU ya está ocupado.
+
+### Dónde va ese tiempo: el limitador gira sobre el reloj
+
+El mismo muestreador atribuye el tiempo a funciones del invitado, y dos se llevan casi
+todo en el callejón:
+
+| Función | Muestras | Qué es |
+|---|---|---|
+| `FUN_00561a80` | 20–30 % | 8 instrucciones: lee un puntero importado y resta la base de tiempo. Es la forma de `CTimer::GetTimeInMilliseconds`. |
+| `FUN_00748710.blk_00748da0` | 25–45 % | Bucle con `Sleep(0x64)` y lecturas del reloj. |
+
+Los contadores del runtime lo confirman: a ~24 fps el invitado lee el reloj
+**0,94–1,32 millones de veces por segundo**, es decir **~40.000–55.000 lecturas por
+frame**, y despacha 1,1–1,5 millones de importaciones por segundo (~47.000–64.000 por
+frame, coherente con ~50 importaciones por *draw*).
+
+El propio código del kit ya lo tenía escrito: *«this game's frame limiter spins on
+GetTickCount»* (`runtime/kernel32.cpp:1715`) y *«the frame limiter's GetTickCount spin is
+left alone»* (`:2054`). GTA San Andreas **no duerme** para limitar los frames: gira
+llamando a `GetTickCount` hasta que vence su plazo.
+
+### El siguiente paso concreto, y por qué no se aplicó aquí
+
+El kit ya sabe sustituir ese giro: `native_frame_clock()` (`runtime/kernel32.cpp:1665`)
+retira los dos plazos del bucle de dibujo y deja que el kit marque el ritmo con
+`mods_display_fps()`. Pero esa sustitución **solo se compila si el variante define**
+`RECOMP_HOOK_FRAME_CLOCK_BEGIN`, `_WAIT`, `_WAIT_CLAMP`, `_CLAMP_DEADLINE` y
+`_WAIT_DEADLINE`, y `variants/singleplayer/game.toml` **no tiene sección `[hooks]`**. En
+este build esa ruta es código muerto y el limitador del juego gira sin tocar.
+
+Cablearla exige auditar las cinco direcciones. El comentario de `kernel32.cpp:1660`
+identifica `0049cfc0` (inicio del plazo; selecciona el segundo plazo cuando el estado de
+juego 2 tiene *flags* de frame rate) y `0049cfe0` (el límite por defecto de 60, o 24/20/14
+Hz), y avisa de que ninguno de los dos plazos mueve la simulación. Faltan por confirmar
+las dos esperas y las dos direcciones de plazo. **No se cablearon a ojo**: una dirección
+equivocada no da un error, cambia el ritmo del juego en silencio.
+
+### Lo que se intentó y no se quedó
+
+- **`-sGROWABLE_ARRAYBUFFERS=2`.** El enlazador lo recomienda por `-pthread` +
+  `ALLOW_MEMORY_GROWTH`, y atacaría justo la lentitud del código no-wasm. Rompe el
+  backend WebGPU: `Uncaught TypeError: Failed to execute 'setBindGroup' on
+  GPURenderPassEncoder: The provided ArrayBuffer value must not be resizable`. Revertido.
+- **Cachear el reloj de milisegundos del invitado** a partir de las lecturas monotónicas
+  que el planificador ya hace (`host_publish_millis`, ~1 M de lecturas/s servidas sin
+  llamar al *host*). Medido **neutro** (23,96 fps frente a 23,84) y revertido: en wasm
+  `os_monotonic_ns()` no es el viaje a JS que sugería el contador `clock`, así que el
+  ahorro no compensaba tocar el camino de tiempo.
+- **Escalar el reloj del invitado 2×** para separar «sin CPU» de «esperando a su
+  limitador». El juego se cuelga en el menú (su lógica de fundido depende de tiempo
+  real), así que la prueba no sirve. Revertida junto con el caché.
+- **`-fno-exceptions` solo** y **`SUPPORT_LONGJMP=wasm` solo** siguen descartados por lo
+  medido la ronda pasada (quedan los 26 `invoke_*` / el enlace falla en `liblua.a`).
+
+### Corrección a la ronda anterior
+
+La sección siguiente afirma que 60 fps están fuera de alcance «con aritmética», porque
+solo el código traducido ya consume ~19 ms de los 16,7 ms de presupuesto. Esa cifra sigue
+siendo coherente, pero la conclusión **no está establecida**: el desglose salía de un
+perfil que atribuía el tiempo por muestras de los *workers*, que se leían como 97 % en
+`__pthread_cond_timedwait`. El muestreador del batón, que mide al hilo que realmente
+ejecuta, muestra 0–7 % de reposo. Y la parte dominante del «código traducido» es un bucle
+de espera sobre el reloj (`CTimer::GetTimeInMilliseconds`), no trabajo de simulación: es
+justo la parte que el kit ya sabe sustituir. **60 fps no están demostrados ni descartados;
+falta cablear la sustitución auditada del limitador y volver a medir.**
+
+### Qué se verificó en el navegador
+
+- El juego arranca desde el menú original y llega a gameplay: `draws > 100` confirmado
+  antes de medir (711–1000 *draws*), tras descartar tres intentos en los que una pulsación
+  consumida durante el fundido dejaba la página en el menú a ~300 fps sobre 10 *draws*.
+- `invoke_*` = 0 en el wasm servido; V8 compila el módulo completo.
+- El audio corre (mensajes `dsound` con `first play on channel …`), sin *underruns*.
+- El invitado lee el reloj y despacha importaciones a los ritmos citados, sin abortos ni
+  avisos de validación de WebGPU.
+
+### Qué sigue sin verificarse
+
+Misiones, vehículos, audio **escuchado**, guardado y carga, estabilidad más allá de
+~35 minutos y cobertura de la ciudad entera. Las cifras de arriba son **una escena
+estática** y el número de *draws* derivó entre 743 y 1000 dentro de la misma sesión, así
+que las comparaciones entre ejecuciones solo son válidas al mismo recuento. `CAP 60` en el
+overlay es el límite configurado del kit, no una medida.
+
 ## Rendimiento: de 17,8 a 22,9 FPS medidos, y la aritmética que descarta los 60 FPS (2026-10-22)
 
 Medido en el navegador con el wasm `sha256 087ca85c…` (266.416.245 bytes), servido
