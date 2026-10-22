@@ -4,7 +4,27 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 KIT = ROOT / "vendor/recomp-kit"
-base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=KIT).decode().strip()
+
+
+def pinned_base():
+    """The commit the parent repository pins for the dependency.
+
+    The dependency directory is a checkout that carries local modifications, and
+    its own HEAD is not necessarily the published pin: a base commit re-created
+    locally has a different hash even when its tree is equivalent (a Windows
+    checkout differs only by file modes and line endings). The gitlink in the
+    parent index is what a consumer clones, so that is the commit the patch is
+    recorded against.
+    """
+    result = subprocess.run(["git", "ls-tree", "HEAD", "--", "vendor/recomp-kit"],
+                            cwd=ROOT, capture_output=True)
+    fields = result.stdout.decode().split()
+    if result.returncode == 0 and len(fields) >= 3 and fields[0] == "160000":
+        return fields[2]
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=KIT).decode().strip()
+
+
+base = pinned_base()
 patch = subprocess.check_output(["git", "diff", "--binary", "HEAD", "--"], cwd=KIT)
 untracked = subprocess.check_output(["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=KIT)
 allowed = {".cpp", ".h", ".py", ".md", ".cmake", ".txt"}

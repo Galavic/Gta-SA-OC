@@ -1,5 +1,100 @@
 # Estado actual
 
+## Rendimiento: de 0,4–0,6 FPS a 17–24,5 FPS en gameplay (2026-10-22)
+
+Medido en el navegador con el wasm `sha256 c2bd157f…` (266.404.081 bytes),
+servido en `http://127.0.0.1:8771/gtasa-singleplayer/`, en el mismo callejón de
+Los Santos con CJ, la valla y la bicicleta.
+
+| Medida | Antes (`target7d`, `32630437…`) | Ahora (`c2bd157f…`) |
+|---|---|---|
+| `NEW FPS` del overlay | 0,4–0,6 | **17,0–24,5** |
+| `FRAME` | 1828,5 ms | **39,4–51,0 ms** |
+| `P95` | 2281,5 ms | 51,7–72,0 ms |
+| `GPU` | 3,9 ms | 3,5–4,2 ms |
+| `STAT d3d9` | 11,8–14,5 fps | media **17,8 fps** en 5 informes |
+| `seh_frames` | 200–260 M/s | **0/s** |
+| `chain_visits` | 8–28 M/s | **0/s** |
+| `live_frames_max` | 845 | **1** |
+
+La GPU nunca fue el cuello: 3,5–4,2 ms de un frame de 39–51 ms. El coste estaba
+en el hilo del invitado, y el perfil de CPU lo repartía entre `__pthread_cond_timedwait`,
+`recomp_seh_resume_frame`, `ChainWalk::visit` y el código traducido por debajo del 2 %.
+
+### Causa raíz 1: un epílogo SEH que nunca retiraba su frame
+
+Los contadores del propio runtime, no una hipótesis, la señalaron. La tabla por
+dirección nombró un solo sitio: `0x0048130e` (`fn_00481300`) instalaba frames y no
+liberaba ninguno (`enters_total=850`, `live=845`, y la lista solo crecía). Como
+cada dispatch recorre la lista entera dos veces —una en el escaneo de reanudación
+y otra en la pasada de frontera—, un único retiro perdido se convierte en un coste
+que crece con la lista y no baja nunca.
+
+Eran dos defectos independientes:
+
+1. `tools/recomp/translate.py` calculaba `fn.seh_restores` en `prepare()` y **nunca
+   lo consultaba**: la regla que emite `recomp_seh_frame_leave` para
+   `MOV FS:[0], reg` estaba condicionada a `fn.seh_sites`, que está vacío para el
+   bloque de epílogo `body_004835cc` porque su prólogo vive en otro bloque
+   recuperado. Por eso `0x004835ef` (`MOV dword ptr FS:[0x0],ECX`) no emitía nada.
+2. El retiro en `runtime/seh.cpp` usaba `registration < ESP`, y en esta forma de
+   epílogo MSVC la ESP **sigue por debajo** de la registration: el epílogo carga la
+   cabeza de la cadena desde `[ESP+0x1fc]` en ECX y solo saca parte del frame. Aun
+   emitiendo el `leave`, no habría retirado nada.
+
+Correcciones: la regla del traductor consulta `seh_restores`, con
+`seh_unproven_establishment` para no retirar en cuerpos cuyo establecimiento no se
+pudo probar; las emisiones de `recomp_seh_frame_leave` pasan de 6 a 563. En el
+runtime la liveness se decide por **pertenencia a la cadena SEH** —la misma prueba
+que ya aplicaba el escaneo de reanudación—, con una poda acotada
+(`prune_unlinked_frames`, una pasada cada 1024 reanudaciones y solo por encima de
+32 frames) como red de seguridad, y `recomp_callback_depth()` se saca del bucle de
+escaneo.
+
+### Causa raíz 2: el *staging* de D3D9 se asignaba y liberaba en cada *draw*
+
+Con el SEH arreglado el perfil cambió de dueño: `vector<unsigned char>::__insert_with_size`
+14,4 % dentro de `host_d9_buffer_upload` y `heap_alloc` 9,5 % bajo `stage_lock`.
+`stage_lock` pedía un bloque del tamaño completo del recurso en el primer *lock* y
+`stage_unlock` lo copiaba y lo liberaba en el último, así que un juego que bloquea
+un búfer dinámico una vez por *draw* pagaba asignación, dos copias y liberación
+por *draw*. Además `gpu_after_unlock` marcaba **todo** el búfer como sucio, de modo
+que cada *draw* resubía el búfer entero aunque el juego hubiera bloqueado un
+subrango.
+
+Correcciones en `dx/d3d9.cpp` y `dx/com.h`: el bloque de *staging* sobrevive al
+*lock* (`stage_bytes`) solo para búferes de vértices e índices, que son los que se
+reescriben cada *draw*; una textura lo libera al desbloquear para no retener una
+segunda imagen durante toda la sesión. El *Unlock* sube únicamente el rango
+bloqueado, ensanchado hacia fuera hasta un múltiplo de 4 porque el offset de
+escritura del backend debe estar alineado (ensanchar es seguro; estrechar no).
+`__insert_with_size` baja de 4514 ms a 354 ms por ventana de 30 s.
+
+### Dos intentos medidos y revertidos
+
+Ninguno de los dos se quedó, y ambos están aquí para que no se repitan:
+
+- Implementar `os_monotonic_ns` con `emscripten_get_now()` en vez de
+  `clock_gettime`: `_emscripten_get_now` subió del 9,6 % al **28,7 %** y el
+  rendimiento cayó a 8–11 fps. Revertido.
+- Leer el reloj del *checkpoint* una vez cada 16 llamadas: 18–19 → **15–16 fps**,
+  porque el *slice* de 1 ms es justo lo que entrega el batón al hilo de render.
+  Revertido.
+
+### Qué sigue sin verificarse
+
+Misiones, vehículos, audio escuchado, guardado y carga, estabilidad más allá de
+~35 minutos y cobertura de la ciudad entera. La cifra de fps es **una escena
+estática** (el callejón), no un recorrido. El límite `CAP 60` del overlay es el
+límite de frames de la configuración del kit, no una medida.
+
+Evidencia local de esta ronda: `final_overlay.png` (overlay recortado, `NEW 17.0
+FPS`, `FRAME 51.0 ms`, `GPU 4.1 ms`), `refocus_ov.png` (`NEW 24.5 FPS`, `FRAME
+39.4 ms`), `final_scene.png` y `cur2_scene.png` (la escena completa), y las líneas
+`perf:` de `RECOMP_PERF_STATS=1` con `live_frames_max=1`, `seh_frames=0/s`,
+`frames live=0 enters_total=1550`. Sin avisos de WebGPU ni abortos en el registro
+de la página.
+
 ## Gameplay controlable verificado en el navegador: CJ camina por Los Santos (2026-10-21)
 
 La ejecución `target7d`, con el wasm `sha256 32630437…` (266.386.779 bytes),
@@ -39,7 +134,10 @@ Estado del arte en este punto:
 Lo que **no** está verificado: misiones, vehículos, audio audible, guardado,
 estabilidad más allá de ~35 minutos y rendimiento utilizable. La medición es de
 **0,3–0,5 FPS** con tiempos de frame de 2,0–3,8 s, así que el juego es
-técnicamente interactivo pero no jugable en tiempo real. Tampoco se ha medido
+técnicamente interactivo pero no jugable en tiempo real. Esa cifra pertenece a la
+ejecución `target7d` (`32630437…`); el rendimiento medido después en `c2bd157f…` es
+de 17–24,5 FPS, según la sección de rendimiento al principio de este documento.
+Tampoco se ha medido
 cuánto de la ciudad se dibuja sin errores: `target7d` no encontró ningún rechazo
 nuevo en 2316 s, pero eso cubre el callejón y la calle contigua, no la ciudad
 entera.

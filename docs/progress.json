@@ -10,8 +10,8 @@
   "original_intro_verified": false,
   "first_original_mission_verified": false,
   "original_vehicle_physics_verified": false,
-  "last_triage_utc": "2026-10-21T12:44:53.349998+00:00",
-  "triage_scope": "Strict browser run reached the first-mission HUD and the in-game prompt 'Press RETURN to jump on the bike', then stopped at unknown target 005245bd (~565 s). The 3D world, bike and player character were never rendered; the HUD and prompt were drawn over the clear/sky colour. browser_gameplay_verified stays false: no rendered world or controllable character exists yet. Fixed for the next build: 005245bd added as an entry point, runtime interpreter AL,imm8 ALU forms (0x04/0x0c/0x24/0x2c/0x34/0x3c), D3D9 FFP table/vertex fog and specular addition, and the WebGPU indexed line-strip stripIndexFormat.",
+  "last_triage_utc": "2026-10-22T01:30:00+00:00",
+  "triage_scope": "Performance round on wasm sha256 c2bd157f... (266404081 bytes): gameplay in the Los Santos alley now measures 17.0-24.5 FPS with 39.4-51.0 ms frames and 3.5-4.2 ms of GPU time, up from 0.4-0.6 FPS with 1828.5 ms frames. Two root causes were fixed: a translator rule never emitted the SEH frame leave at 0x004835ef (the runtime predicate could not retire that epilogue shape either), and D3D9 staging allocated and freed a full-resource copy per Lock/Unlock while marking the whole buffer dirty. Details under browser_performance_triage. Missions, vehicles, audio, save/load and city-wide traversal remain unmeasured, and the frame rate figure is one static scene.",
   "scope": "Current isolated executable; prototype rendering and older-image boot probes are separate evidence",
   "recreation": {
     "updated_utc": "2026-10-14T23:29:46Z",
@@ -892,8 +892,8 @@
       "No mission is completed and no vehicle was driven.",
       "Audio output was not listened to; only the mixer's counters were observed.",
       "Saving and loading were not exercised.",
-      "Stability beyond about 35 minutes of wall time is unverified.",
-      "Performance is 0.3-0.5 FPS with 2.0-3.8 s frame times: technically interactive, not playable in real time."
+      "Performance was 0.3-0.5 FPS with 2.0-3.8 s frame times on this image (wasm sha256 32630437...): technically interactive, not playable in real time. Superseded by the later measurement on wasm sha256 c2bd157f... recorded under browser_performance_triage.",
+      "Stability beyond about 35 minutes of wall time is unverified."
     ],
     "input_method": "The key is held down with Input.dispatchKeyEvent type=keyDown on the live page while Emulation.setFocusEmulationEnabled keeps the document focused; the guest polls key state for movement rather than consuming discrete presses.",
     "evidence": {
@@ -925,9 +925,100 @@
       ]
     },
     "blockers": [
-      "Real-time performance: 0.3-0.5 FPS.",
+      "Real-time performance was 0.3-0.5 FPS on this image; the later build measures 17-24.5 FPS in one static alley scene, so traversal, missions and vehicle use remain unmeasured.",
       "No mission progress, vehicle use, audio listening or save/load has been exercised.",
       "Native d3d9_ffp_tests and tools/format.py cannot run in this environment."
+    ]
+  },
+  "browser_performance_triage": {
+    "updated_utc": "2026-10-22T01:30:00+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "served_wasm_sha256": "c2bd157f09cbc6452e47c91089f33e68833fb1804581b19d537b679311983368",
+    "wasm_bytes": 266404081,
+    "previous_wasm_sha256": "32630437df5985f01def37c504f75b7f4634f8866decc8a4576443ed28de7965",
+    "measurement": {
+      "scene": "The same Los Santos alley as target7d: CJ, the fence, the bicycle, the objective HUD.",
+      "url": "http://127.0.0.1:8771/gtasa-singleplayer/ with RECOMP_STRICT_UNKNOWN=1 and RECOMP_D3D9_STATS=1",
+      "method": "The kit's own overlay (NEW FPS / FRAME / P95 / GPU) plus the shim's STAT d3d9 lines, which are printed every 300 presented frames. Focus is held with Emulation.setFocusEmulationEnabled because the game pauses itself when the document loses activation.",
+      "before": {
+        "new_fps": "0.4-0.6",
+        "frame_ms": 1828.5,
+        "p95_ms": 2281.5,
+        "gpu_ms": 3.9,
+        "stat_d3d9_fps": "11.8-14.5",
+        "seh_frames_per_second": "200000000-260000000",
+        "chain_visits_per_second": "8000000-28000000",
+        "live_frames_max": 845
+      },
+      "after": {
+        "new_fps": "17.0-24.5",
+        "frame_ms": "39.4-51.0",
+        "p95_ms": "51.7-72.0",
+        "gpu_ms": "3.5-4.2",
+        "stat_d3d9_fps_mean": 17.8,
+        "stat_d3d9_reports": 5,
+        "draws_per_frame": "748-775",
+        "textures": 1637,
+        "pipelines": 205,
+        "seh_frames_per_second": 0,
+        "chain_visits_per_second": 0,
+        "live_frames_max": 1,
+        "seh_frames_live": 0,
+        "seh_frames_enters_total": 1550,
+        "prune": "0/0",
+        "handoff_reasons": {
+          "yield": 160627,
+          "sleep": 33780,
+          "wait": 1066
+        }
+      }
+    },
+    "root_causes": [
+      "The translator computed fn.seh_restores in prepare() and never consulted it: the rule that emits recomp_seh_frame_leave for MOV FS:[0], reg was gated on fn.seh_sites, which is empty for the epilogue block body_004835cc because its prologue lives in another recovered block. Address 0x004835ef therefore emitted no leave, so fn_00481300 installed 845 SEH frames and retired none.",
+      "The runtime retire predicate was registration < ESP, which cannot fire for this MSVC epilogue shape: it loads the chain head from [ESP+0x1fc] into ECX and pops only part of the frame, leaving ESP below the registration.",
+      "stage_lock allocated a full-resource staging block on the first Lock and stage_unlock copied and freed it on the last, so a game that locks a dynamic buffer once per draw paid an allocation, two copies and a free per draw. gpu_after_unlock additionally marked the whole buffer dirty, so every draw re-uploaded the entire vertex or index buffer."
+    ],
+    "fixes": [
+      "tools/recomp/translate.py: the MOV rule now consults fn.seh_restores with a seh_unproven_establishment guard so a body whose establishment could not be proven is not retired. Emissions of recomp_seh_frame_leave go from 6 to 563.",
+      "runtime/seh.cpp: frame liveness is decided by membership in the guest SEH chain, the same test recomp_seh_resume_frame already applied, with a bounded prune_unlinked_frames net (one pass every 1024 resumptions and only above 32 live frames). recomp_callback_depth() is hoisted out of the scan loop.",
+      "dx/d3d9.cpp and dx/com.h: the staging block survives the lock (stage_bytes) for vertex and index buffers only; a texture frees it on unlock so a second full image is not held per texture for the whole session. Unlock uploads only the locked range, widened outward to a four-byte multiple because the backend write offset must be aligned."
+    ],
+    "reverted_experiments": [
+      "Implementing os_monotonic_ns with emscripten_get_now() instead of clock_gettime: _emscripten_get_now rose from 9.6% to 28.7% of the guest thread and the frame rate fell to 8-11 FPS. Reverted.",
+      "Reading the scheduler checkpoint clock once every 16 calls: 18-19 FPS fell to 15-16 FPS, because the 1 ms slice is what hands the baton to the render thread. Reverted."
+    ],
+    "verified": [
+      "The scene renders: final_scene.png and cur2_scene.png show the alley with CJ, the street, trees and the HUD, with no WebGPU validation warning and no abort in the page log.",
+      "The earlier BufferOffset (122454) is not a multiple of 4 WebGPU error introduced by narrowing the dirty range is gone after widening the range to a four-byte boundary.",
+      "The SEH leak is closed on the shipped image: live_frames_max is 1, seh_frames and chain_visits read 0/s, and frames reports live=0 with enters_total=1550."
+    ],
+    "not_verified": [
+      "Missions, vehicles, audio actually heard, saving and loading.",
+      "Stability beyond about 35 minutes of wall time.",
+      "Draw coverage across the whole city.",
+      "The frame rate figure is one static alley scene, not a traversal. CAP 60 in the overlay is the kit's configured frame limit, not a measured cap."
+    ],
+    "remaining_profile": {
+      "guest_thread": "After both fixes the guest thread has no dominant cost: __pthread_cond_timedwait 13.6%, Emscripten invoke_* exception trampolines with get/getWasmTableEntry/wasm-to-js about 11%, clock reads about 9%, translated game code about 11%, D3D9 staging 3.9%, imports_dispatch 2.1%, printf_core 1.2%.",
+      "not_done": "Disabling C++ exception catching would remove the invoke_* wasm-to-JS-to-wasm trampolines, but interp.cpp relies on throw/catch for guest memory faults and the gain measured indirectly is about 2 FPS, so it was not attempted."
+    },
+    "evidence": {
+      "screenshots": [
+        "final_overlay.png",
+        "refocus_ov.png",
+        "final_scene.png",
+        "cur2_scene.png"
+      ],
+      "counter_runs": [
+        "gp2 (18.1-19.5 FPS, before the clock experiments)",
+        "gp6 (guest-thread profile after the staging fix)",
+        "final (17.8 FPS mean over 5 STAT reports)",
+        "fin (perf counters, live_frames_max=1)"
+      ]
+    },
+    "blockers": [
+      "Fixed-function vertex blending (D3DRS_VERTEXBLEND/D3DRS_INDEXEDVERTEXBLENDENABLE) is still unimplemented for streams that rely on it.",
+      "Native d3d9_ffp_tests cannot run here, and tools/recomp/tests is only partially runnable (missing numpy, a fixture, and a kit-relative build/recomp/gen/table.c)."
     ]
   }
 }

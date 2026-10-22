@@ -303,7 +303,7 @@ index a16dd2f..8205cc6 100644
  set_tests_properties(dx_tests PROPERTIES LABELS nogame)
  
 diff --git a/dx/com.h b/dx/com.h
-index 0a87829..e3fbfda 100644
+index 0a87829..9dc43e3 100644
 --- a/dx/com.h
 +++ b/dx/com.h
 @@ -47,6 +47,7 @@ enum ComIface : uint16_t {
@@ -352,7 +352,22 @@ index 0a87829..e3fbfda 100644
  };
  
  // A DirectInput joystick axis's DIPROP_RANGE, DIPROP_DEADZONE and
-@@ -352,7 +360,11 @@ struct ComObj {
+@@ -266,6 +274,14 @@ struct ComObj {
+     uint32_t ckey_dst_lo = 0, ckey_dst_hi = 0;
+     bool has_ckey_src = false, has_ckey_dst = false;
+     int32_t lock_count = 0;
++    // Capacity of the staging block stage_lock keeps across locks, and the byte
++    // range the guest may have written since the last upload. A Lock only
++    // permits writes inside the range it was given, so only that range is
++    // uploaded again on Unlock; D3D9 leaves writes outside it undefined.
++    // stage_bytes is zero when `pixels` is not ours to free.
++    uint32_t stage_bytes = 0;
++    uint32_t lock_lo = 0;
++    uint32_t lock_hi = 0;
+     // Once handed a writable Lock pointer, the guest may keep using it forever.
+     bool retained_pointer = false;
+     bool is_primary = false;
+@@ -352,7 +368,11 @@ struct ComObj {
      uint32_t dsh_stream = 0;       // multimedia stream: the audio media stream it carries
      uint32_t dsh_graph = 0;        // multimedia stream: its filter graph, once asked for
      uint32_t dsh_notify_flags = 0; // graph: IMediaEventEx::SetNotifyFlags
@@ -366,7 +381,7 @@ index 0a87829..e3fbfda 100644
      uint32_t dsh_state = 0;                               // STREAMSTATE_STOP 0 / STREAMSTATE_RUN 1
      uint32_t md_buffer = 0, md_length = 0, md_actual = 0; // audio data: the guest buffer
 diff --git a/dx/d3d9.cpp b/dx/d3d9.cpp
-index 1973efb..4233000 100644
+index 1973efb..b64b026 100644
 --- a/dx/d3d9.cpp
 +++ b/dx/d3d9.cpp
 @@ -19,8 +19,10 @@
@@ -418,12 +433,12 @@ index 1973efb..4233000 100644
 +    wr32(p + 4, m.h);
 +    wr32(p + 8, m.refresh);
 +    wr32(p + 12, m.format);
- }
++}
 +// (this, Adapter, Format)
 +void D9_GetAdapterModeCount(X86 *c) {
 +    uint32_t format = arg(c, 2);
 +    set_eax(c, format >= 21 && format <= 23 ? (uint32_t)std::size(kDisplayModes) : 0);
-+}
+ }
 +// (this, Adapter, Format, Mode, pMode)
  void D9_EnumAdapterModes(X86 *c) {
 -    put_display_mode(arg(c, 4));
@@ -522,7 +537,116 @@ index 1973efb..4233000 100644
      device_forget_buffers(dev);
      ComObj *bb = device_backbuffer(dev);
      dev->render_target = bb ? bb->id : 0;
-@@ -1328,6 +1347,35 @@ void Dev_GetDepthStencilSurface(X86 *c) {
+@@ -627,8 +646,12 @@ static uint32_t resource_alloc(ComObj *o, uint32_t bytes) {
+     if (!bytes)
+         return 0;
+     o->blob.assign(bytes, 0);
+-    o->pixels = 0;
+-    o->pixels_bytes = bytes;
++    if (o->stage_bytes) {
++        heap_free(o->pixels);
++        o->pixels = 0;
++        o->stage_bytes = 0;
++    }
++    o->lock_lo = o->lock_hi = 0;
+     return 1;
+ }
+ 
+@@ -645,18 +668,37 @@ static void gpu_before_lock(ComObj *s);
+ static void gpu_after_unlock(ComObj *o, uint32_t lo, uint32_t hi);
+ static void gpu_forget(ComObj *o);
+ 
+-static uint32_t stage_lock(ComObj *o) {
++static uint32_t stage_lock(ComObj *o, uint32_t lo, uint32_t hi) {
+     if (!o || o->blob.empty())
+         return 0;
+     if (o->lock_count == 0)
+         gpu_before_lock(o);
+     if (o->lock_count++ == 0) {
+-        o->pixels = heap_alloc((uint32_t)o->blob.size(), false, 16);
+-        if (!o->pixels) {
+-            o->lock_count = 0;
+-            return 0;
++        // The staging block outlives a single lock. A game that locks a dynamic
++        // buffer once per draw would otherwise allocate, copy and free the whole
++        // resource every draw, which measured as the largest single cost on the
++        // guest thread. Grow it only when the resource itself grew.
++        if (o->stage_bytes < o->blob.size()) {
++            if (o->stage_bytes)
++                heap_free(o->pixels);
++            o->pixels = heap_alloc((uint32_t)o->blob.size(), false, 16);
++            if (!o->pixels) {
++                o->stage_bytes = 0;
++                o->lock_count = 0;
++                return 0;
++            }
++            o->stage_bytes = (uint32_t)o->blob.size();
+         }
+         memcpy(gm_ptr(o->pixels), o->blob.data(), o->blob.size());
++        o->lock_lo = lo;
++        o->lock_hi = hi;
++    } else {
++        // Nested locks accumulate: the union of every range handed out is what
++        // the guest may have touched by the time the last Unlock arrives.
++        if (lo < o->lock_lo)
++            o->lock_lo = lo;
++        if (hi > o->lock_hi)
++            o->lock_hi = hi;
+     }
+     return o->pixels;
+ }
+@@ -666,10 +708,17 @@ static void stage_unlock(ComObj *o) {
+         return;
+     if (--o->lock_count == 0 && o->pixels) {
+         memcpy(o->blob.data(), gm_ptr(o->pixels), o->blob.size());
+-        heap_free(o->pixels);
+-        o->pixels = 0;
+         d9_raster_invalidate(o->id);
+-        gpu_after_unlock(o, 0, (uint32_t)o->blob.size());
++        gpu_after_unlock(o, o->lock_lo, o->lock_hi);
++        o->lock_lo = o->lock_hi = 0;
++        // Keep the staging block only for the buffers a game rewrites every
++        // draw. A texture is locked once while it loads, so keeping its copy
++        // would hold a second image for the whole session.
++        if (o->kind != K_D3D9VB && o->kind != K_D3D9IB) {
++            heap_free(o->pixels);
++            o->pixels = 0;
++            o->stage_bytes = 0;
++        }
+     }
+ }
+ 
+@@ -678,6 +727,8 @@ static void d3d9_resource_destroy(ComObj *o) {
+         heap_free(o->pixels);
+     o->pixels = 0;
+     o->lock_count = 0;
++    o->stage_bytes = 0;
++    o->lock_lo = o->lock_hi = 0;
+     o->pixels_bytes = 0;
+     std::vector<uint8_t>().swap(o->blob);
+     d9_raster_invalidate(o->id);
+@@ -941,6 +992,20 @@ static void gpu_after_unlock(ComObj *o, uint32_t lo, uint32_t hi) {
+     if (!o)
+         return;
+     if (o->kind == K_D3D9VB || o->kind == K_D3D9IB) {
++        // The upload offset reaches the backend as a buffer write offset, which
++        // every backend requires to be four-byte aligned, and a Lock may hand
++        // out a two-byte-aligned range (an index buffer, for instance). Widen
++        // the range outwards rather than narrowing it: a few extra bytes cost
++        // nothing and the range must still cover every byte the guest wrote.
++        const uint32_t size = (uint32_t)o->blob.size();
++        lo &= ~3u;
++        if (hi > size)
++            hi = size;
++        hi = (hi + 3u) & ~3u;
++        if (hi > size)
++            hi = size;
++        if (hi <= lo)
++            return;
+         GpuMirror &m = gpu_mirrors()[o->id];
+         if (m.dirty_hi <= m.dirty_lo) {
+             m.dirty_lo = lo;
+@@ -1328,6 +1393,35 @@ void Dev_GetDepthStencilSurface(X86 *c) {
      com_ret(c, D3D_OK9);
  }
  
@@ -558,7 +682,7 @@ index 1973efb..4233000 100644
  void Dev_SetRenderTarget(X86 *c) {
      ComObj *dev = this_device9(c);
      ComObj *s = com_this(arg(c, 2));
-@@ -1402,7 +1450,221 @@ void Dev_SetVertexDeclaration(X86 *c) {
+@@ -1402,7 +1496,221 @@ void Dev_SetVertexDeclaration(X86 *c) {
      if (dev) {
          dev->current_viewport = (d && d->kind == K_D3D9DECL) ? d->id : 0;
          d9_pipeline(dev->id).declaration = dev->current_viewport;
@@ -780,7 +904,7 @@ index 1973efb..4233000 100644
      com_ret(c, D3D_OK9);
  }
  
-@@ -1580,15 +1842,86 @@ static void target_viewport(ComObj *dev, const HostD9Target &t, int32_t vp[4]) {
+@@ -1580,15 +1888,85 @@ static void target_viewport(ComObj *dev, const HostD9Target &t, int32_t vp[4]) {
      vp[3] = rt ? (int32_t)rt->height : (int32_t)dev->height;
  }
  
@@ -822,9 +946,8 @@ index 1973efb..4233000 100644
 +        ComObj *decl = vertex_supplied ? nullptr : com_get(pl.declaration);
 +        const std::vector<uint8_t> *declaration =
 +            decl && decl->kind == K_D3D9DECL ? &decl->blob : nullptr;
-+        if (d9_ffp_prepare(pl, fvf, rt ? rt->width : dev->width,
-+                           rt ? rt->height : dev->height, ff, why, vertex_supplied,
-+                           pixel_supplied, declaration)) {
++        if (d9_ffp_prepare(pl, fvf, rt ? rt->width : dev->width, rt ? rt->height : dev->height, ff,
++                           why, vertex_supplied, pixel_supplied, declaration)) {
 +            saved_vs = pl.vs;
 +            saved_ps = pl.ps;
 +            saved_vs_key = pl.vs_key;
@@ -875,7 +998,7 @@ index 1973efb..4233000 100644
      d.target = gpu_target(dev);
      target_viewport(dev, d.target, d.viewport);
      d.depth_range[0] = pl.viewport_z[0];
-@@ -1607,6 +1940,10 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
+@@ -1607,6 +1985,10 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
      d.vs_size = (uint32_t)pl.vs.size();
      d.ps = pl.ps.data();
      d.ps_size = (uint32_t)pl.ps.size();
@@ -886,7 +1009,7 @@ index 1973efb..4233000 100644
      d.vconst = &pl.vconst[0][0];
      d.vconst_count = std::min<uint32_t>(vs.max_const, 256);
      d.pconst = &pl.pconst[0][0];
-@@ -1614,7 +1951,7 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
+@@ -1614,7 +1996,7 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
      ComObj *decl = com_get(pl.declaration);
      if (!decl || decl->kind != K_D3D9DECL) {
          log_once("d3d9.gpu.nodecl", "d3d9: a draw with no vertex declaration is skipped");
@@ -895,7 +1018,7 @@ index 1973efb..4233000 100644
      }
      d.decl = decl->blob.data();
      d.decl_size = (uint32_t)decl->blob.size();
-@@ -1649,19 +1986,28 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
+@@ -1649,19 +2031,28 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
      bool color_write = !pl.rs_set[168] || (pl.rs[168] & 0xf) != 0;
      bool z_write = (!pl.rs_set[14] || pl.rs[14]) && (!pl.rs_set[7] || pl.rs[7]);
      gpu_target_drawn(dev, color_write, z_write);
@@ -927,7 +1050,7 @@ index 1973efb..4233000 100644
  }
  
  // (this, PrimitiveType, StartVertex, PrimitiveCount)
-@@ -1675,8 +2021,7 @@ void Dev_DrawPrimitive(X86 *c) {
+@@ -1675,8 +2066,7 @@ void Dev_DrawPrimitive(X86 *c) {
          d.primitive = arg(c, 1);
          d.primitive_count = arg(c, 3);
          d.start = arg(c, 2);
@@ -937,7 +1060,7 @@ index 1973efb..4233000 100644
          return;
      }
      ComObj *vb = dev ? com_get(dev->back_obj) : nullptr;
-@@ -1688,7 +2033,10 @@ void Dev_DrawPrimitive(X86 *c) {
+@@ -1688,7 +2078,10 @@ void Dev_DrawPrimitive(X86 *c) {
          call.vertex_bytes = vb->blob.size() - dev->lock_off;
          call.stride = dev->rate;
          call.first = arg(c, 2);
@@ -949,7 +1072,7 @@ index 1973efb..4233000 100644
      }
      com_ret(c, D3D_OK9);
  }
-@@ -1701,6 +2049,7 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
+@@ -1701,6 +2094,7 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
      ComObj *dev = this_device9(c);
      if (dev && gpu_on()) {
          ComObj *ibo = com_get(d9_pipeline(dev->id).index_buffer);
@@ -957,7 +1080,7 @@ index 1973efb..4233000 100644
          if (ibo) {
              gpu_sync_buffer(ibo);
              HostD9Draw d{};
-@@ -1710,9 +2059,9 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
+@@ -1710,9 +2104,9 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
              d.base_vertex = (int32_t)arg(c, 2);
              d.index_buffer = ibo->id;
              d.index_size = ibo->rmask ? ibo->rmask : 2;
@@ -969,7 +1092,7 @@ index 1973efb..4233000 100644
          return;
      }
      ComObj *vb = dev ? com_get(dev->back_obj) : nullptr;
-@@ -1729,7 +2078,10 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
+@@ -1729,7 +2123,10 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
          call.index_size = ib->rmask ? ib->rmask : 2;
          call.base_vertex = (int32_t)arg(c, 2);
          call.first = arg(c, 5);
@@ -981,7 +1104,7 @@ index 1973efb..4233000 100644
      }
      com_ret(c, D3D_OK9);
  }
-@@ -1801,6 +2153,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
+@@ -1801,6 +2198,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
              describe_draw_inputs(c, arg(c, 3), arg(c, 4), arg(c, 2) + 2);
      }
      if (ComObj *dev = this_device9(c); dev && gpu_on()) {
@@ -989,7 +1112,7 @@ index 1973efb..4233000 100644
          HostD9Draw d{};
          d.primitive = arg(c, 1);
          d.primitive_count = arg(c, 2);
-@@ -1809,9 +2162,9 @@ void Dev_DrawPrimitiveUP(X86 *c) {
+@@ -1809,9 +2207,9 @@ void Dev_DrawPrimitiveUP(X86 *c) {
              d.stream[0].stride = arg(c, 4);
              d.inline_vertices = gm_ptr(arg(c, 3));
              d.inline_bytes = bytes;
@@ -1001,7 +1124,7 @@ index 1973efb..4233000 100644
          return;
      }
      D9DrawCall call;
-@@ -1819,8 +2172,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
+@@ -1819,8 +2217,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
      call.prim_count = arg(c, 2);
      call.vertices = arg(c, 3);
      call.stride = arg(c, 4);
@@ -1011,7 +1134,7 @@ index 1973efb..4233000 100644
  }
  
  // (this, PrimitiveType, MinVertexIndex, NumVertices, PrimitiveCount,
-@@ -1831,6 +2183,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
+@@ -1831,6 +2228,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
               "indices at %08x",
               g_draws, prim_name(arg(c, 1)), arg(c, 4), arg(c, 3), arg(c, 8), arg(c, 7), arg(c, 5));
      if (ComObj *dev = this_device9(c); dev && gpu_on()) {
@@ -1019,7 +1142,7 @@ index 1973efb..4233000 100644
          HostD9Draw d{};
          d.primitive = arg(c, 1);
          d.primitive_count = arg(c, 4);
-@@ -1844,9 +2197,9 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
+@@ -1844,9 +2242,9 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
              d.inline_indices = gm_ptr(arg(c, 5));
              d.inline_index_bytes = ibytes;
              d.index_size = isize;
@@ -1031,7 +1154,7 @@ index 1973efb..4233000 100644
          return;
      }
      D9DrawCall call;
-@@ -1856,8 +2209,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
+@@ -1856,8 +2254,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
      call.stride = arg(c, 8);
      call.indices = arg(c, 5);
      call.index_size = arg(c, 6) == 102 ? 4 : 2;
@@ -1041,7 +1164,7 @@ index 1973efb..4233000 100644
  }
  
  // ---------------------------------------------------------------------------
-@@ -1885,7 +2237,22 @@ RES_STUB(Tex, AddDirtyRect)
+@@ -1885,7 +2282,22 @@ RES_STUB(Tex, AddDirtyRect)
  RES_STUB(Tex, AddDirtyRectCube)
  RES_STUB(Surf, GetDC)
  RES_STUB(Surf, ReleaseDC)
@@ -1065,7 +1188,57 @@ index 1973efb..4233000 100644
  
  // (this, riid, ppContainer): the texture a level or face belongs to, or the
  // device when the surface stands alone.
-@@ -2258,6 +2625,14 @@ static const ComMethod g_decl9[] = {
+@@ -1930,12 +2342,20 @@ void Res_GetDevice(X86 *c) {
+ // a no-op: there is nothing to upload to yet.
+ static void buffer_lock(X86 *c) {
+     ComObj *o = com_this_arg(c);
+-    uint32_t offset = arg(c, 1), out = arg(c, 3);
++    uint32_t offset = arg(c, 1), size = arg(c, 2), out = arg(c, 3);
+     if (!o || !out) {
+         com_ret(c, D3DERR_INVALIDCALL);
+         return;
+     }
+-    uint32_t staged = offset < o->blob.size() ? stage_lock(o) : 0;
++    // A Lock only permits writes inside the range it was given, so that range is
++    // what Unlock has to upload again; SizeToLock 0 means "to the end". The
++    // range is only read when the lock actually lands inside the resource.
++    uint32_t staged = 0;
++    if (offset < o->blob.size()) {
++        const uint32_t room = (uint32_t)o->blob.size() - offset;
++        const uint32_t hi = (size && size <= room) ? offset + size : (uint32_t)o->blob.size();
++        staged = stage_lock(o, offset, hi);
++    }
+     com_out_ptr(out, staged ? staged + offset : 0);
+     com_ret(c, staged ? D3D_OK9 : E_OUTOFMEMORY);
+ }
+@@ -1970,7 +2390,7 @@ void Surf_LockRect(X86 *c) {
+         com_ret(c, D3DERR_INVALIDCALL);
+         return;
+     }
+-    uint32_t staged = stage_lock(s);
++    uint32_t staged = stage_lock(s, 0, (uint32_t)s->blob.size());
+     wr32(out, s->pitch);
+     wr32(out + 4, staged);
+     com_ret(c, staged ? D3D_OK9 : E_OUTOFMEMORY);
+@@ -2051,7 +2471,7 @@ void Tex_LockRectCube(X86 *c) {
+         com_ret(c, D3DERR_INVALIDCALL);
+         return;
+     }
+-    uint32_t staged = stage_lock(s);
++    uint32_t staged = stage_lock(s, 0, (uint32_t)s->blob.size());
+     wr32(out, s->pitch);
+     wr32(out + 4, staged);
+     com_ret(c, staged ? D3D_OK9 : E_OUTOFMEMORY);
+@@ -2113,7 +2533,7 @@ void Tex_LockRect(X86 *c) {
+         com_ret(c, D3DERR_INVALIDCALL);
+         return;
+     }
+-    uint32_t staged = stage_lock(s);
++    uint32_t staged = stage_lock(s, 0, (uint32_t)s->blob.size());
+     wr32(out, s->pitch);
+     wr32(out + 4, staged);
+     com_ret(c, staged ? D3D_OK9 : E_OUTOFMEMORY);
+@@ -2258,6 +2678,14 @@ static const ComMethod g_decl9[] = {
      {"GetDeclaration", 3, Decl_GetDeclaration},
  };
  
@@ -1080,7 +1253,7 @@ index 1973efb..4233000 100644
  static const ComMethod g_query9[] = {
      {"QueryInterface", 3, com_QueryInterface},
      {"AddRef", 1, com_AddRef},
-@@ -2361,6 +2736,126 @@ void Dev_SetRenderState(X86 *c) {
+@@ -2361,6 +2789,126 @@ void Dev_SetRenderState(X86 *c) {
      com_ret(c, D3D_OK9);
  }
  
@@ -1207,7 +1380,7 @@ index 1973efb..4233000 100644
  // (this, Sampler, Type, Value)
  void Dev_SetSamplerState(X86 *c) {
      ComObj *dev = this_device9(c);
-@@ -2593,6 +3088,15 @@ void d3d9_register() {
+@@ -2593,6 +3141,15 @@ void d3d9_register() {
      com_bind(IF_D3DINDEXBUFFER9, K_D3D9IB);
      com_bind(IF_D3DVERTEXDECL9, K_D3D9DECL);
      com_bind(IF_D3DQUERY9, K_D3D9QUERY);
@@ -2848,16 +3021,21 @@ index 06d5e2b..c57d587 100644
  // _setjmp / _longjmp intrinsics. See intrinsics.h for the two substitution
  // forms and why the two-call one is correct.
 diff --git a/runtime/imports.cpp b/runtime/imports.cpp
-index ec1d2b1..b1956ef 100644
+index ec1d2b1..9450ab5 100644
 --- a/runtime/imports.cpp
 +++ b/runtime/imports.cpp
-@@ -1,4 +1,5 @@
+@@ -1,8 +1,10 @@
  #include "imports.h"
 +#include "../platform/os.h"
  #include "gdi32_internal.h"
  #include "user32_internal.h"
  #include "kernel32_internal.h"
-@@ -13,9 +14,11 @@ void sched_checkpoint();
+ #include "seh.h"
++#include "perf_stats.h"
+ #include "profile.h"
+ #include "mods_seam.h"
+ 
+@@ -13,9 +15,11 @@ void sched_checkpoint();
  #include <map>
  #include <set>
  #include <cctype>
@@ -2869,7 +3047,7 @@ index ec1d2b1..b1956ef 100644
  
  namespace {
  
-@@ -129,6 +132,11 @@ bool imports_has_dll(const char *dll_lower) {
+@@ -129,6 +133,11 @@ bool imports_has_dll(const char *dll_lower) {
      return registered_dlls().count(lower_dll(dll_lower)) != 0;
  }
  
@@ -2881,7 +3059,7 @@ index ec1d2b1..b1956ef 100644
  uint32_t imports_alloc_trampoline(const char *dll, const char *name, void (*fn)(X86 *),
                                    uint8_t argc_stdcall) {
      std::string k = key_of(dll, name);
-@@ -388,6 +396,115 @@ ImportCallObserver imports_set_call_observer_get(void) {
+@@ -388,6 +397,115 @@ ImportCallObserver imports_set_call_observer_get(void) {
      return g_call_observer;
  }
  
@@ -2997,8 +3175,12 @@ index ec1d2b1..b1956ef 100644
  // Dispatch a guest import trampoline at a scheduler checkpoint.
  // Copy dispatch metadata before calling a shim, then restore EIP/ESP according to its calling convention.
  namespace {
-@@ -413,11 +530,18 @@ bool imports_dispatch(X86 *c, uint32_t target) {
+@@ -411,13 +529,22 @@ bool imports_dispatch(X86 *c, uint32_t target) {
+     // runs before the shim so the guest state is a consistent call boundary -
+     // except at an atomic import, and inside a sched_atomic_enter stretch.
      uint32_t idx = (target - TRAMP_BASE) / TRAMP_STRIDE;
++    if (perf_stats::on())
++        ++perf_stats::import_calls;
      if (idx >= tramps().size() || !tramps()[idx].atomic)
          sched_checkpoint();
 +    const char *strict_option = recomp_env("STRICT_IMPORTS");
@@ -3016,7 +3198,7 @@ index ec1d2b1..b1956ef 100644
          c->eip = rd32(c->r[R_ESP]);
          c->r[R_ESP] += 4;
          set_eax(c, 0);
-@@ -432,10 +556,18 @@ bool imports_dispatch(X86 *c, uint32_t target) {
+@@ -432,10 +559,18 @@ bool imports_dispatch(X86 *c, uint32_t target) {
      // across that call, and do not retain a pointer into the movable vector.
      char desc[512];
      snprintf(desc, sizeof desc, "%s", tramps()[idx].desc.c_str());
@@ -3035,7 +3217,16 @@ index ec1d2b1..b1956ef 100644
      LOGV("-> %s (esp=%08x ret=%08x)", desc, c->r[R_ESP], ret_addr);
      recomp_seh_validate_chain(c, "import enter", desc);
  
-@@ -598,4 +730,5 @@ void imports_init() {
+@@ -511,6 +646,8 @@ thread_local Callbacks callbacks;
+ } // namespace
+ 
+ uint32_t recomp_callback_depth(void) {
++    if (perf_stats::on())
++        ++perf_stats::callback_depth_calls;
+     return (uint32_t)callbacks.stack.size();
+ }
+ 
+@@ -598,4 +735,5 @@ void imports_init() {
      gdi::register_text();
      extern void msimg32_register();
      msimg32_register();
@@ -3903,10 +4094,16 @@ index 0cefcbe..8e0159e 100644
  const char *interp_last_error(void);
  
 diff --git a/runtime/kernel32.cpp b/runtime/kernel32.cpp
-index 529d27d..63745e2 100644
+index 529d27d..9b09a8a 100644
 --- a/runtime/kernel32.cpp
 +++ b/runtime/kernel32.cpp
-@@ -98,8 +98,9 @@ struct HObj {
+@@ -1,4 +1,5 @@
+ #include "seh.h"
++#include "perf_stats.h"
+ #include "profile.h"
+ #include "game_config.h"
+ // kernel32.cpp - KERNEL32 shims: heap, files, modules, TLS, sync objects,
+@@ -98,8 +99,9 @@ struct HObj {
      HKind kind = H_NONE;
      std::string object_name; // Named events, mutexes and mappings share a kernel object.
      uint32_t references = 1;
@@ -3918,7 +4115,7 @@ index 529d27d..63745e2 100644
      // H_FILE opened for writing on an existing file: the open went through
      // the read tier, and the write tier is resolved by the first write. See
      // file_promote_for_write.
-@@ -313,9 +314,23 @@ void win32_set_file_ops(int (*resolve)(const char *, int, char *, size_t),
+@@ -313,9 +315,23 @@ void win32_set_file_ops(int (*resolve)(const char *, int, char *, size_t),
      win32_invalidate_dir_cache();
  }
  
@@ -3944,7 +4141,7 @@ index 529d27d..63745e2 100644
  static std::vector<std::string> normalise_components(const std::string &guest_path) {
      std::string p = guest_path;
      bool absolute = false;
-@@ -337,14 +352,18 @@ static std::vector<std::string> normalise_components(const std::string &guest_pa
+@@ -337,14 +353,18 @@ static std::vector<std::string> normalise_components(const std::string &guest_pa
          comps.push_back(c);
  
      std::vector<std::string> norm;
@@ -3966,7 +4163,7 @@ index 529d27d..63745e2 100644
          norm.push_back(c);
      }
      // An absolute path spelled through the guest root - which GetModuleFileNameA
-@@ -805,9 +824,28 @@ void k_CreateFileA(X86 *c) {
+@@ -805,9 +825,28 @@ void k_CreateFileA(X86 *c) {
      create_file_named(c, gm_str(arg(c, 0)));
  }
  
@@ -3996,7 +4193,7 @@ index 529d27d..63745e2 100644
      if (!o) {
          if (handle_get(arg(c, 0), H_STD)) {
              if (pread)
-@@ -824,21 +862,102 @@ void k_ReadFile(X86 *c) {
+@@ -824,21 +863,102 @@ void k_ReadFile(X86 *c) {
          set_eax(c, 0);
          return;
      }
@@ -4100,7 +4297,7 @@ index 529d27d..63745e2 100644
  void k_WriteFile(X86 *c) {
      uint32_t h = arg(c, 0), buf = arg(c, 1), want = arg(c, 2), pwrote = arg(c, 3);
      HObj *o = handle_any(h);
-@@ -1145,6 +1264,36 @@ uint32_t call_dll_entry(X86 *c, const LoaderModule &m, uint32_t reason) {
+@@ -1145,6 +1265,36 @@ uint32_t call_dll_entry(X86 *c, const LoaderModule &m, uint32_t reason) {
      return result;
  }
  
@@ -4137,7 +4334,7 @@ index 529d27d..63745e2 100644
  void load_library_named(X86 *c, const std::string &module_name) {
      std::string name = library_name(module_name);
      auto it = modules().find(name);
-@@ -1245,7 +1394,14 @@ void k_GetProcAddress(X86 *c) {
+@@ -1245,7 +1395,14 @@ void k_GetProcAddress(X86 *c) {
              dll = kv.first;
              break;
          }
@@ -4153,7 +4350,7 @@ index 529d27d..63745e2 100644
      if (!a) {
          log_once(("gpa:" + dll + "!" + proc).c_str(),
                   "GetProcAddress(%s, \"%s\") -> 0 (no shim registered)",
-@@ -1302,6 +1458,11 @@ void k_GetCommandLineA(X86 *c) {
+@@ -1302,6 +1459,11 @@ void k_GetCommandLineA(X86 *c) {
      get_command_line(c);
  }
  } // namespace
@@ -4165,7 +4362,7 @@ index 529d27d..63745e2 100644
  void win32_reset_command_line_for_test() {
      kernel32_wide_reset_command_line();
      g_cmdline_addr = 0;
-@@ -1501,6 +1662,10 @@ void k_GetDriveTypeA(X86 *c) {
+@@ -1501,6 +1663,10 @@ void k_GetDriveTypeA(X86 *c) {
  // drives simulation: 004a5590 uses 005cd92c/005cd930 and the real clock.
  // Return the draw deadline to retire after reading the real host time.
  static uint32_t native_frame_clock(X86 *c) {
@@ -4176,7 +4373,7 @@ index 529d27d..63745e2 100644
      using Clock = std::chrono::steady_clock;
      static FrameDeadline deadline;
      static int active = 0;
-@@ -1537,6 +1702,12 @@ static uint32_t native_frame_clock(X86 *c) {
+@@ -1537,6 +1703,12 @@ static uint32_t native_frame_clock(X86 *c) {
          return RECOMP_HOOK_FRAME_CLOCK_WAIT_DEADLINE;
      }
      return 0;
@@ -4189,7 +4386,7 @@ index 529d27d..63745e2 100644
  }
  void k_GetTickCount(X86 *c) {
      const uint32_t draw_deadline = native_frame_clock(c);
-@@ -1728,6 +1899,26 @@ void k_InitializeCriticalSection(X86 *c) {
+@@ -1728,6 +1900,26 @@ void k_InitializeCriticalSection(X86 *c) {
      }
      set_eax(c, 0);
  }
@@ -4216,7 +4413,7 @@ index 529d27d..63745e2 100644
  void k_EnterCriticalSection(X86 *c) {
      imports_call_leaves_surfaces();
      sched_enter_critsec(arg(c, 0));
-@@ -1775,6 +1966,11 @@ void k_ReleaseSemaphore(X86 *c) {
+@@ -1775,6 +1967,11 @@ void k_ReleaseSemaphore(X86 *c) {
      }
      o->count += n;
      set_eax(c, 1);
@@ -4228,7 +4425,7 @@ index 529d27d..63745e2 100644
  }
  
  void k_CreateEventA(X86 *c) {
-@@ -1822,6 +2018,12 @@ void k_WaitForSingleObject(X86 *c) {
+@@ -1822,6 +2019,12 @@ void k_WaitForSingleObject(X86 *c) {
      set_eax(c, sched_wait_objects(&h, 1, false, arg(c, 1)));
  }
  
@@ -4241,7 +4438,35 @@ index 529d27d..63745e2 100644
  void k_WaitForMultipleObjects(X86 *c) {
      wait_multiple_objects(c);
  }
-@@ -2789,6 +2991,22 @@ void sched_checkpoint() {
+@@ -2216,7 +2419,9 @@ void sched_wait_locked(size_t me, double until, double max_slice) {
+         // handoff makes short mouse/keyboard workers cost a full 2 ms slice,
+         // many times per rendered frame while the pointer moves. Poll events
+         // first, then wait on the notification the returning worker signals.
++        double idle_start = sched_now();
+         waiter(awaiting_baton ? 0.0 : slice);
++        perf_stats::note_wait(sched_now() - idle_start);
+         g_in_idle_slice = false;
+         g_sched_m.lock();
+         if (!awaiting_baton || g_baton == me)
+@@ -2232,7 +2437,9 @@ void sched_wait_locked(size_t me, double until, double max_slice) {
+         return;
+     if (wait > 1.0)
+         wait = 1.0;
++    double wait_start = sched_now();
+     g_sched_cv.wait_for(g_sched_m, std::chrono::duration<double>(wait));
++    perf_stats::note_wait(sched_now() - wait_start);
+ }
+ 
+ // ---------------------------------------------------------------------------
+@@ -2258,6 +2465,7 @@ Handoff g_handoffs[16];
+ uint32_t g_handoff_count = 0;
+ 
+ void record_handoff_locked(size_t from, size_t to, const char *why) {
++    perf_stats::note_handoff(why);
+     g_handoffs[g_handoff_count % 16] = Handoff{from, to, why};
+     ++g_handoff_count;
+ }
+@@ -2789,6 +2997,23 @@ void sched_checkpoint() {
      guest_yield();
  }
  
@@ -4255,6 +4480,7 @@ index 529d27d..63745e2 100644
 +static __thread uint32_t t_guest_call_checkpoints = 0;
 +
 +void recomp_guest_checkpoint() {
++    perf_stats::report();
 +    if (++t_guest_call_checkpoints < 64)
 +        return;
 +    t_guest_call_checkpoints = 0;
@@ -4264,7 +4490,7 @@ index 529d27d..63745e2 100644
  namespace {
  
  // A shim that changed an object's state calls this so a thread blocked on it
-@@ -3373,7 +3591,16 @@ void k_SetThreadPriority(X86 *c) {
+@@ -3373,7 +3598,16 @@ void k_SetThreadPriority(X86 *c) {
  }
  
  void k_ExitProcess(X86 *c) {
@@ -4282,7 +4508,7 @@ index 529d27d..63745e2 100644
      if (request_process_exit(arg(c, 0)))
          return; // never returns
      publish_process_exit(arg(c, 0));
-@@ -3594,6 +3821,14 @@ void k_lstrlenA(X86 *c) {
+@@ -3594,6 +3828,14 @@ void k_lstrlenA(X86 *c) {
      set_eax(c, (uint32_t)gm_str(arg(c, 0)).size());
  }
  
@@ -4297,7 +4523,7 @@ index 529d27d..63745e2 100644
  void k_lstrcpyA(X86 *c) {
      uint32_t d = arg(c, 0);
      std::string s = gm_str(arg(c, 1));
-@@ -3943,6 +4178,86 @@ void k_GetLocaleInfoW(X86 *c) {
+@@ -3943,6 +4185,86 @@ void k_GetLocaleInfoW(X86 *c) {
  
  } // namespace
  
@@ -4384,7 +4610,7 @@ index 529d27d..63745e2 100644
  // ---------------------------------------------------------------------------
  // The run thread's own ending.
  //
-@@ -4218,6 +4533,7 @@ void create_file_named(X86 *c, const std::string &name) {
+@@ -4218,6 +4540,7 @@ void create_file_named(X86 *c, const std::string &name) {
      uint32_t h = handle_new(H_FILE);
      handles()[h].fd = fd;
      handles()[h].path = host;
@@ -4392,7 +4618,7 @@ index 529d27d..63745e2 100644
      if (deferred) {
          handles()[h].write_pending = true;
          handles()[h].write_flags = wanted;
-@@ -4849,7 +5165,7 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4849,7 +5172,7 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "GetTimeFormatA", 6, nullptr},
      {"KERNEL32.dll", "GetDiskFreeSpaceExA", 4, nullptr},
      {"KERNEL32.dll", "GetLongPathNameA", 3, nullptr},
@@ -4401,7 +4627,7 @@ index 529d27d..63745e2 100644
      {"KERNEL32.dll", "HeapValidate", 3, nullptr},
      {"KERNEL32.dll", "QueueUserAPC", 3, nullptr},
      {"KERNEL32.dll", "SetConsoleCtrlHandler", 2, nullptr},
-@@ -4864,6 +5180,9 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4864,6 +5187,9 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "InterlockedDecrement", 1, k_InterlockedDecrement},
      {"KERNEL32.dll", "InterlockedExchange", 2, k_InterlockedExchange},
      {"KERNEL32.dll", "InitializeCriticalSection", 1, k_InitializeCriticalSection},
@@ -4411,7 +4637,7 @@ index 529d27d..63745e2 100644
      {"KERNEL32.dll", "EnterCriticalSection", 1, k_EnterCriticalSection},
      {"KERNEL32.dll", "LeaveCriticalSection", 1, k_LeaveCriticalSection},
      {"KERNEL32.dll", "DeleteCriticalSection", 1, k_DeleteCriticalSection},
-@@ -4874,6 +5193,7 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4874,6 +5200,7 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "ResetEvent", 1, k_ResetEvent},
      {"KERNEL32.dll", "CreateMutexA", 3, k_CreateMutexA},
      {"KERNEL32.dll", "WaitForSingleObject", 2, k_WaitForSingleObject},
@@ -4419,7 +4645,7 @@ index 529d27d..63745e2 100644
      {"KERNEL32.dll", "WaitForMultipleObjects", 4, k_WaitForMultipleObjects},
      // threads and process exit
      {"KERNEL32.dll", "CreateThread", 6, k_CreateThread},
-@@ -4898,6 +5218,7 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4898,6 +5225,7 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "RtlUnwind", 4, k_RtlUnwind},
      // strings, code pages, locale
      {"KERNEL32.dll", "lstrlenA", 1, k_lstrlenA},
@@ -4584,10 +4810,27 @@ index bfe336c..1140cad 100644
 +// Returns false when a DllMain failed; the caller must not run the entry then.
 +bool loader_attach_auxiliary(X86 *c);
 diff --git a/runtime/misc.cpp b/runtime/misc.cpp
-index 3c955d7..e66f702 100644
+index 3c955d7..3c0dbb1 100644
 --- a/runtime/misc.cpp
 +++ b/runtime/misc.cpp
-@@ -811,6 +811,36 @@ void a_RegEnumKeyExW(X86 *c) {
+@@ -6,6 +6,7 @@
+ #include "game_config.h"
+ #include "layout.h"
+ #include "memory.h"
++#include "perf_stats.h"
+ #include "win32.h"
+ #include "loader.h"
+ #include "resources.h"
+@@ -39,6 +40,8 @@ uint64_t now_us() {
+ } // namespace
+ 
+ uint32_t host_millis() {
++    if (perf_stats::on())
++        ++perf_stats::clock_reads;
+     if (g_time_source)
+         return g_time_source();
+     if (!g_epoch_us)
+@@ -811,6 +814,36 @@ void a_RegEnumKeyExW(X86 *c) {
          wr64(arg(c, 7), 0);
      set_eax(c, hr);
  }
@@ -4624,7 +4867,7 @@ index 3c955d7..e66f702 100644
  void a_RegEnumValueW(X86 *c) {
      std::string path = key_path(arg(c, 0), "");
      if (path.empty()) {
-@@ -879,6 +909,48 @@ void a_RegDeleteKeyW(X86 *c) {
+@@ -879,6 +912,48 @@ void a_RegDeleteKeyW(X86 *c) {
      g_registry_dirty = true;
      set_eax(c, 0);
  }
@@ -4673,7 +4916,7 @@ index 3c955d7..e66f702 100644
  void a_RegDeleteValueW(X86 *c) {
      std::string path = key_path(arg(c, 0), "");
      if (path.empty()) {
-@@ -972,6 +1044,31 @@ void o_CoTaskMemFree(X86 *c) {
+@@ -972,6 +1047,30 @@ void o_CoTaskMemFree(X86 *c) {
          heap_free(arg(c, 0));
      set_eax(c, 0);
  }
@@ -4689,8 +4932,7 @@ index 3c955d7..e66f702 100644
 +    uint32_t d1 = rd32(guid);
 +    uint16_t d2 = rd16(guid + 4), d3 = rd16(guid + 6);
 +    char text[64];
-+    snprintf(text, sizeof text,
-+             "{%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
++    snprintf(text, sizeof text, "{%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
 +             (unsigned long)d1, d2, d3, g[8], g[9], g[10], g[11], g[12], g[13], g[14], g[15]);
 +    uint32_t string = heap_alloc(78);
 +    if (!string) {
@@ -4705,7 +4947,7 @@ index 3c955d7..e66f702 100644
  void o_IsEqualGUID(X86 *c) {
      uint32_t a = arg(c, 0), b = arg(c, 1);
      set_eax(c, a && b && gm_valid(a, 16) && gm_valid(b, 16) && !memcmp(g_mem + a, g_mem + b, 16));
-@@ -1061,6 +1158,21 @@ void w_gethostbyname(X86 *c) {
+@@ -1061,6 +1160,21 @@ void w_gethostbyname(X86 *c) {
               gm_str(arg(c, 0), 256).c_str());
      set_eax(c, 0);
  }
@@ -4717,8 +4959,8 @@ index 3c955d7..e66f702 100644
 +    std::string text = gm_str(arg(c, 0), 64);
 +    unsigned a = 0, b = 0, c1 = 0, d = 0;
 +    char tail = 0;
-+    if (sscanf(text.c_str(), "%u.%u.%u.%u%c", &a, &b, &c1, &d, &tail) != 4 ||
-+        a > 255 || b > 255 || c1 > 255 || d > 255) {
++    if (sscanf(text.c_str(), "%u.%u.%u.%u%c", &a, &b, &c1, &d, &tail) != 4 || a > 255 || b > 255 ||
++        c1 > 255 || d > 255) {
 +        set_eax(c, 0xffffffffu); // INADDR_NONE
 +        return;
 +    }
@@ -4727,7 +4969,7 @@ index 3c955d7..e66f702 100644
  void w_inet_ntoa(X86 *c) {
      // The returned pointer is reused across calls, as the real inet_ntoa does.
      // heap_owns re-checks it because mem_init() invalidates the whole heap.
-@@ -2008,6 +2120,9 @@ const ImportShim g_misc_shims[] = {
+@@ -2008,6 +2122,9 @@ const ImportShim g_misc_shims[] = {
      {"ADVAPI32.dll", "RegCloseKey", 1, a_RegCloseKey},
      {"ADVAPI32.dll", "RegQueryValueExA", 6, a_RegQueryValueExA},
      {"ADVAPI32.dll", "RegSetValueExA", 6, a_RegSetValueExA},
@@ -4737,7 +4979,7 @@ index 3c955d7..e66f702 100644
      {"ADVAPI32.dll", "RegOpenKeyExW", 5, a_RegOpenKeyExW},
      {"ADVAPI32.dll", "RegCreateKeyExW", 9, a_RegCreateKeyExW},
      {"ADVAPI32.dll", "RegQueryValueExW", 6, a_RegQueryValueExW},
-@@ -2039,6 +2154,7 @@ const ImportShim g_misc_shims[] = {
+@@ -2039,6 +2156,7 @@ const ImportShim g_misc_shims[] = {
      {"ole32.dll", "CoTaskMemAlloc", 1, o_CoTaskMemAlloc},
      {"ole32.dll", "CoTaskMemFree", 1, o_CoTaskMemFree},
      {"ole32.dll", "IsEqualGUID", 2, o_IsEqualGUID},
@@ -4745,7 +4987,7 @@ index 3c955d7..e66f702 100644
      {"ole32.dll", "CoUninitialize", 0, o_CoUninitialize},
      {"ole32.dll", "PropVariantClear", 1, o_PropVariantClear},
      {"ole32.dll", "PropVariantCopy", 2, o_PropVariantCopy},
-@@ -2164,6 +2280,8 @@ const ImportShim g_misc_shims[] = {
+@@ -2164,6 +2282,8 @@ const ImportShim g_misc_shims[] = {
      {"WINMM.dll", "waveInReset", 1, nullptr},
      {"WINMM.dll", "waveInGetPosition", 3, nullptr},
      // Winsock 2: networking is out of scope, but the pop counts are not.
@@ -4862,10 +5104,27 @@ index 9c58dda..299f4c4 100644
  }
  extern "C" uint32_t recomp_profile_depth() {
 diff --git a/runtime/seh.cpp b/runtime/seh.cpp
-index ac94a12..88bafc2 100644
+index ac94a12..25182be 100644
 --- a/runtime/seh.cpp
 +++ b/runtime/seh.cpp
-@@ -168,7 +168,7 @@ void finish_dispatch(SehDispatch *d) {
+@@ -3,6 +3,7 @@
+ #include "imports.h"
+ #include "memory.h"
+ #include "mods_seam.h"
++#include "perf_stats.h"
+ #include "profile.h"
+ // kernel32.cpp: a guest exception unwinding past an atomic stretch ends it.
+ void sched_atomic_unwind_to_esp(uint32_t esp);
+@@ -122,6 +123,8 @@ struct ChainWalk {
+     uint32_t visited[MAX_LINKS];
+     uint32_t count = 0;
+     void visit(X86 *c, uint32_t reg, uint32_t target) {
++        if (perf_stats::on())
++            ++perf_stats::seh_chain_visits;
+         validate_registration(c, reg, target);
+         if (count == MAX_LINKS)
+             invalid_chain(c, reg, target, "chain exceeds 4096 links");
+@@ -168,7 +171,7 @@ void finish_dispatch(SehDispatch *d) {
      release_dispatch(d);
  }
  
@@ -4874,7 +5133,7 @@ index ac94a12..88bafc2 100644
      uint32_t handler = rd32(reg + 4);
      if (!handler || !gm_valid(handler, 1))
          invalid_chain(c, reg, handler, "invalid handler");
-@@ -176,19 +176,41 @@ uint32_t call_handler(X86 *c, uint32_t reg, SehDispatch *d) {
+@@ -176,19 +179,41 @@ uint32_t call_handler(X86 *c, uint32_t reg, SehDispatch *d) {
           rd32(d->record + 4));
      uint32_t args[] = {d->record, reg, d->context, 0};
      uint32_t disposition = guest_call(c, handler, args, 4);
@@ -4918,7 +5177,15 @@ index ac94a12..88bafc2 100644
  } // namespace
  
  extern "C" {
-@@ -291,6 +313,41 @@ jmp_buf *recomp_seh_frame_adopt(X86 *c) {
+@@ -254,6 +279,7 @@ jmp_buf *recomp_seh_frame_enter(X86 *c) {
+     f->profile_depth = recomp_profile_depth();
+     f->dispatch_depth = state.dispatches.size();
+     f->callback_depth = recomp_callback_depth();
++    perf_stats::note_frame_enter(f->establishing_eip);
+     state.frames.push_back(f); // individually allocated: growing the vector cannot move env
+     LOGV("SEH enter: registration=%08x established=%08x ESP=%08x handler=%08x", f->registration,
+          f->establishing_eip, c->r[R_ESP], rd32(f->registration + 4));
+@@ -291,23 +317,185 @@ jmp_buf *recomp_seh_frame_adopt(X86 *c) {
      return nullptr;
  }
  
@@ -4926,15 +5193,110 @@ index ac94a12..88bafc2 100644
 +    // Called only after recomp_call returned to the persistent dispatcher.
 +    // Every host environment at this callback depth has now expired,
 +    // including one whose CONTEXT moved ESP above its registration.
-+    for (SehFrame *f : state.frames)
-+        if (f->cpu == c && f->callback_depth == recomp_callback_depth() && !f->retired)
++    if (perf_stats::on()) {
++        ++perf_stats::seh_boundary_calls;
++        if (state.frames.size() > perf_stats::seh_live_frames)
++            perf_stats::seh_live_frames = state.frames.size();
++    }
++    const uint32_t depth = recomp_callback_depth();
++    for (SehFrame *f : state.frames) {
++        if (perf_stats::on())
++            ++perf_stats::seh_boundary_frames;
++        if (f->cpu == c && f->callback_depth == depth && !f->retired)
 +            f->orphan = true;
++    }
++}
++
++// Collects the registrations the guest chain currently publishes. False means
++// the chain is not a shape worth acting on - an unusable TEB, a link outside
++// guest memory, or more links than the buffer holds - and callers then fall back
++// to the stack-pointer rule instead of retiring on bad evidence. This walk must
++// not abort: it runs at epilogues that previously never touched the chain.
++constexpr uint32_t kMaxRetireLinks = 128;
++
++static bool collect_chain_links(X86 *c, uint32_t *out, uint32_t &count) {
++    count = 0;
++    if (!c->fs_base || !gm_valid(c->fs_base, 12))
++        return false;
++    for (uint32_t reg = rd32(c->fs_base); reg != END_CHAIN; reg = rd32(reg)) {
++        if (count == kMaxRetireLinks || !gm_valid(reg, 8))
++            return false;
++        out[count++] = reg;
++    }
++    return true;
++}
++
++// Retires the frames the guest chain no longer publishes.
++//
++// The generated epilogue retires a frame where the translator recognized the
++// registration restore. A restore it could not classify leaves the frame in the
++// list for the rest of the process, and every dispatch then walks the whole list
++// twice - once for the resumption scan and once for the boundary pass - so a
++// single missed retire turns into a cost that grows with the list and never
++// comes back down.
++//
++// The resumption scan already decides liveness by one test: the frame's
++// registration must still appear in the guest chain, because a registration the
++// guest has unlinked cannot be unwound to. Applying that same test here, on a
++// bounded budget, retires exactly the frames the scan could never resume. Frames
++// of another context, another callback depth, or an active landing stay put: a
++// landing still needs its stable environment and retires it itself.
++static void prune_unlinked_frames(X86 *c) {
++    if (perf_stats::on())
++        ++perf_stats::prune_passes;
++    uint32_t links[kMaxRetireLinks];
++    uint32_t count = 0;
++    if (!collect_chain_links(c, links, count))
++        return;
++    const uint32_t depth = recomp_callback_depth();
++    for (size_t i = state.frames.size(); i-- > 0;) {
++        SehFrame *f = state.frames[i];
++        if (f->cpu != c || f->retired || f->active_landing)
++            continue;
++        if (f->callback_depth != depth)
++            continue;
++        bool linked = false;
++        for (uint32_t k = 0; k < count; ++k) {
++            if (links[k] == f->registration) {
++                linked = true;
++                break;
++            }
++        }
++        if (linked)
++            continue;
++        state.frames.erase(state.frames.begin() + i);
++        delete f;
++        if (perf_stats::on())
++            ++perf_stats::pruned_frames;
++    }
 +}
 +
 +jmp_buf *recomp_seh_resume_frame(X86 *c) {
++    if (perf_stats::on()) {
++        ++perf_stats::seh_resume_calls;
++        perf_stats::frames_now = state.frames.size();
++        if (state.frames.size() > perf_stats::seh_live_frames)
++            perf_stats::seh_live_frames = state.frames.size();
++    }
++    // A frame is retired by the epilogue the translator emits for the
++    // registration restore. When that restore is not recognized - the guest
++    // restores through a register the rule does not classify, for instance -
++    // the frame stays in the list for the rest of the process, and every
++    // dispatch then walks it twice: once here and once in the boundary pass.
++    // Liveness is chain membership, the same test the scan below applies, so a
++    // bounded pass retires exactly the frames this scan could never resume.
++    static constexpr uint32_t kPruneInterval = 1024;
++    static constexpr size_t kPruneAbove = 32;
++    static uint32_t prune_tick = 0;
++    if (state.frames.size() > kPruneAbove && ++prune_tick % kPruneInterval == 0)
++        prune_unlinked_frames(c);
++    // Hoisted: the depth is the same for every frame in the list.
++    const uint32_t depth = recomp_callback_depth();
 +    for (size_t i = state.frames.size(); i-- > 0;) {
 +        SehFrame *f = state.frames[i];
-+        if (f->cpu != c || !f->orphan || f->retired || f->callback_depth != recomp_callback_depth())
++        if (perf_stats::on())
++            ++perf_stats::seh_resume_frames;
++        if (f->cpu != c || !f->orphan || f->retired || f->callback_depth != depth)
 +            continue;
 +        // CONTEXT continuation may have abandoned several translated host
 +        // frames. Reanchor every still-linked registration, not just FS:[0].
@@ -4959,8 +5321,67 @@ index ac94a12..88bafc2 100644
 +
  void recomp_seh_frame_leave(X86 *c) {
      recomp_seh_validate_chain(c, "leave", "");
++    // The MSVC epilogue restores the chain head from a slot it loaded into a
++    // register, and pops only some of the frame first, so the stack pointer can
++    // still sit below the registration being retired. Comparing against ESP
++    // therefore misses this shape and leaves the frame behind for the rest of
++    // the process. Liveness is what the chain publishes: a registration the
++    // guest has unlinked can no longer be unwound to.
++    uint32_t links[kMaxRetireLinks];
++    uint32_t count = 0;
++    const bool authoritative = collect_chain_links(c, links, count);
++    const uint32_t depth = recomp_callback_depth();
      bool removed = false;
-@@ -425,6 +482,35 @@ void recomp_seh_reset(X86 *c) {
+     for (size_t i = state.frames.size(); i-- > 0;) {
+         SehFrame *f = state.frames[i];
+-        if (f->cpu == c && f->registration < c->r[R_ESP] &&
+-            (f->callback_depth == recomp_callback_depth() || f->active_landing)) {
+-            LOGV("SEH leave: registration=%08x established=%08x EIP=%08x ESP=%08x", f->registration,
+-                 f->establishing_eip, c->eip, c->r[R_ESP]);
+-            if (f->active_landing)
+-                f->retired = true; // intercept still needs this stable environment
+-            else {
+-                state.frames.erase(state.frames.begin() + i);
+-                delete f;
++        if (f->cpu != c || f->retired)
++            continue;
++        if (f->callback_depth != depth && !f->active_landing)
++            continue;
++        bool dead;
++        if (authoritative) {
++            dead = true;
++            for (uint32_t k = 0; k < count; ++k) {
++                if (links[k] == f->registration) {
++                    dead = false;
++                    break;
++                }
+             }
+-            removed = true;
++            // Keep the stack-pointer rule as well: it is the shape the other
++            // epilogues have, and retiring on either signal never retires less
++            // than before.
++            if (!dead)
++                dead = f->registration < c->r[R_ESP] && f->callback_depth == depth;
++        } else {
++            // Pathological chain: fall back to the stack-pointer rule rather
++            // than retiring on no evidence.
++            dead = f->registration < c->r[R_ESP] && f->callback_depth == depth;
+         }
++        if (!dead)
++            continue;
++        LOGV("SEH leave: registration=%08x established=%08x EIP=%08x ESP=%08x", f->registration,
++             f->establishing_eip, c->eip, c->r[R_ESP]);
++        if (f->active_landing)
++            f->retired = true; // intercept still needs this stable environment
++        else {
++            state.frames.erase(state.frames.begin() + i);
++            delete f;
++        }
++        removed = true;
+     }
+     if (!removed)
+         LOGV("SEH leave: no retired frame at ESP=%08x", c->r[R_ESP]);
+@@ -425,6 +613,35 @@ void recomp_seh_reset(X86 *c) {
      }
  }
  
@@ -6444,7 +6865,7 @@ index e31c835..7c0fbff 100644
                                                   ("ESP", True, False)])
  def test_frame_establishment_through_edx_needs_a_zero_base(reg, zeroed, checkpoint):
 diff --git a/tools/recomp/translate.py b/tools/recomp/translate.py
-index 944f2ca..806d49b 100644
+index 944f2ca..97abd6f 100644
 --- a/tools/recomp/translate.py
 +++ b/tools/recomp/translate.py
 @@ -18,13 +18,15 @@ are enabled by the native host, never by the baseline/differential build.
@@ -6766,16 +7187,16 @@ index 944f2ca..806d49b 100644
 +                revisit_condition = (va in seen and not previous_zero
 +                                     and unknown_condition_seen.get(va) is False)
 +                if (va in seen and not revisit_condition) or claimed or va in boundary_set or not (lo <= va < hi):
-                     break
--                got = list(self.md.disasm(self.data[va - self.base:va - self.base + 16],
--                                          va, count=1))
--                if not got or got[0].address + got[0].size > hi:
++                    break
 +                # Audited non-code bytes are never translated: entry, branch
 +                # and fall-through paths all stop here, bounded or not. The
 +                # pointer scan and entry loading already refuse these ranges;
 +                # recovery must not decode through them either.
 +                if self.is_declared_data(va):
-+                    break
+                     break
+-                got = list(self.md.disasm(self.data[va - self.base:va - self.base + 16],
+-                                          va, count=1))
+-                if not got or got[0].address + got[0].size > hi:
 +                ci = self._decode_recovery_instruction(va, self.data)
 +                if ci is None or ci.address + ci.size > hi:
                      if bounds is not None:
@@ -6918,11 +7339,24 @@ index 944f2ca..806d49b 100644
              continue
          if ins.mnem == "POP":
              result.add(i)
-@@ -1594,9 +1789,10 @@ def seh_restore_sites(fn):
+@@ -1594,9 +1789,23 @@ def seh_restore_sites(fn):
      return result
  
  
 -def seh_frame_sites(fn, image=None):
++def seh_unproven_establishment(fn, sites):
++    """True when the body publishes a chain head through ESP that the frame
++    sites did not accept. A restore in such a body is not a retire: there is no
++    frame to retire, and the same unproven base would hide the registration."""
++    for i, ins in enumerate(fn.insns):
++        if ins.mnem != "MOV" or len(ins.ops) != 2 or "FS:" not in ins.ops[0]:
++            continue
++        src = parse_operand(ins.ops[1])
++        if src.kind == "reg" and src.size == 32 and src.reg == R_ESP and i not in sites:
++            return True
++    return False
++
++
 +def seh_frame_sites(fn, image=None, entries=()):
      """Map establishing MOV/helper CALL indices to their handler addresses."""
      sites = {}
@@ -6930,7 +7364,7 @@ index 944f2ca..806d49b 100644
      helper = getattr(image, "seh_constructor_helper", None)
      if helper is not None:
          stub = helper(fn.addr)
-@@ -1605,7 +1801,7 @@ def seh_frame_sites(fn, image=None):
+@@ -1605,7 +1814,7 @@ def seh_frame_sites(fn, image=None):
              # through ECX. Keep its checkpoint live until its return, then
              # let the caller adopt it; never leave setjmp in a dead helper.
              for i, ins in enumerate(fn.insns):
@@ -6939,7 +7373,7 @@ index 944f2ca..806d49b 100644
                      dst, src = [parse_operand(op) for op in ins.ops]
                      if (seh_chain_operand(dst, 2) and dst.base == 2
                              and src.kind == "reg" and src.reg == 1):
-@@ -1624,16 +1820,50 @@ def seh_frame_sites(fn, image=None):
+@@ -1624,16 +1833,50 @@ def seh_frame_sites(fn, image=None):
              stub = helper(target)
              if stub is not None:
                  sites[i] = stub
@@ -6992,7 +7426,7 @@ index 944f2ca..806d49b 100644
              if (not seh_chain_operand(dst, zero_base) or src.kind != "reg" or src.reg != 4
                      or src.size != 32 or not seh_chain_operand(parse_operand(push.ops[0]), zero_base)
                      or not fn.contiguous[i - 1]):
-@@ -1679,11 +1909,27 @@ def noreturn_callees_from(parsed, iat_names, image=None):
+@@ -1679,11 +1922,27 @@ def noreturn_callees_from(parsed, iat_names, image=None):
  
      returns = {fn.addr for fn in parsed
                 if any(i.mnem == "RET" for i in fn.insns) and not ends_process(fn)}
@@ -7020,7 +7454,7 @@ index 944f2ca..806d49b 100644
          last = fn.insns[-1]
          if last.mnem == "CALL":
              target = Translator.branch_target(last)
-@@ -1693,7 +1939,7 @@ def noreturn_callees_from(parsed, iat_names, image=None):
+@@ -1693,7 +1952,7 @@ def noreturn_callees_from(parsed, iat_names, image=None):
              if image is not None:
                  nxt = last.addr + 5 - image.base
                  padded = 0 <= nxt < len(image.data) and image.data[nxt] == 0xCC
@@ -7029,7 +7463,7 @@ index 944f2ca..806d49b 100644
                  out.add(target)
      return out
  
-@@ -1734,6 +1980,9 @@ class Translator(object):
+@@ -1734,6 +1993,9 @@ class Translator(object):
          #: A CALL to one ends its block: the emitter leaves a trap in place of
          #: the fall-through instead of a jump onto the padding that follows.
          self.noreturn_callees = set()
@@ -7039,7 +7473,7 @@ index 944f2ca..806d49b 100644
          self.seh_helpers = set()
          #: Does a pointer to this address name data rather than code? The
          #: driver installs its judgement before the first translation pass
-@@ -1796,7 +2045,21 @@ class Translator(object):
+@@ -1796,7 +2058,21 @@ class Translator(object):
          if ins.mnem != "CALL":
              return False
          t = self.branch_target(ins)
@@ -7062,7 +7496,7 @@ index 944f2ca..806d49b 100644
  
      @staticmethod
      def closed_noreturn_loop(fn):
-@@ -1918,7 +2181,7 @@ class Translator(object):
+@@ -1918,7 +2194,7 @@ class Translator(object):
              writes = set()
              # Read-only instructions and calls do not explicitly redefine a
              # saved return register. All unmodelled forms invalidate the proof.
@@ -7071,7 +7505,7 @@ index 944f2ca..806d49b 100644
                          "PAUSE", "CLC", "STC", "CMC", "CLD", "STD", "SAHF", "CLI", "STI"}
              dest_write = {"MOV", "MOVZX", "MOVSX", "LEA", "POP", "ADD", "ADC", "SUB",
                            "SBB", "AND", "OR", "XOR", "INC", "DEC", "NEG", "NOT", "SHL",
-@@ -1944,6 +2207,9 @@ class Translator(object):
+@@ -1944,6 +2220,9 @@ class Translator(object):
                  writes.add(R_EDX)
              elif m in ("CBW", "CWDE", "LAHF", "XLAT"):
                  writes.add(R_EAX)
@@ -7081,7 +7515,7 @@ index 944f2ca..806d49b 100644
              else:
                  return unknown
              if m == "IMUL" and len(ops) == 1:
-@@ -1956,12 +2222,16 @@ class Translator(object):
+@@ -1956,12 +2235,16 @@ class Translator(object):
                  result.add(ops[0].reg)
              adjustment = None
              if m in ("PUSH", "POP"):
@@ -7099,7 +7533,7 @@ index 944f2ca..806d49b 100644
              elif (m in ("ADD", "SUB") and ops[0].kind == "reg"
                    and ops[0].reg == R_ESP and ops[0].size == 32 and ops[1].kind == "imm"):
                  immediate = ops[1].imm & 0xffffffff
-@@ -2011,6 +2281,8 @@ class Translator(object):
+@@ -2011,6 +2294,8 @@ class Translator(object):
          if t is not None and t not in fn.pushed_continuations:
              return [fn.index[t]] if t in fn.index else []
          nxt = i + 1 if (i + 1 < len(fn.insns) and fn.contiguous[i]) else None
@@ -7108,7 +7542,7 @@ index 944f2ca..806d49b 100644
          if m == "INT3":
              # MSVC pads between functions with INT3, and a listing cut at a
              # call that never returns runs that padding into the next
-@@ -2020,7 +2292,21 @@ class Translator(object):
+@@ -2020,7 +2305,21 @@ class Translator(object):
              return []
          if m == "RET":
              return [fn.index[t] for t in sorted(fn.pushed_continuations)]
@@ -7130,7 +7564,7 @@ index 944f2ca..806d49b 100644
              out = [nxt] if nxt is not None else []
              t = self.branch_target(ins)
              if t is not None and t in fn.index:
-@@ -2072,10 +2358,6 @@ class Translator(object):
+@@ -2072,10 +2371,6 @@ class Translator(object):
          """Indices control flow reaches from `roots` and the pushed
          continuations; every index if the body has a computed jump that is
          not POP reg; JMP reg. A call that never returns ends a path."""
@@ -7141,7 +7575,7 @@ index 944f2ca..806d49b 100644
          roots = set(roots) | set(fn.pushed_continuations)
          work = [fn.index[a] for a in roots if a in fn.index]
          live = set()
-@@ -2086,18 +2368,123 @@ class Translator(object):
+@@ -2086,18 +2381,123 @@ class Translator(object):
              live.add(i)
              if self.never_returns(fn.insns[i]):
                  continue
@@ -7267,7 +7701,7 @@ index 944f2ca..806d49b 100644
      @staticmethod
      def branch_target(ins):
          if ins.ops and ins.ops[0].startswith("0x"):
-@@ -2547,9 +2934,11 @@ class Translator(object):
+@@ -2547,9 +2947,11 @@ class Translator(object):
  
      @staticmethod
      def writes_reg32(ins, reg):
@@ -7280,7 +7714,7 @@ index 944f2ca..806d49b 100644
              return reg == 1                # ECX
          if ins.mnem in ("CMP", "TEST", "PUSH", "JMP") or ins.mnem in JCC:
              return False
-@@ -2571,8 +2960,10 @@ class Translator(object):
+@@ -2571,9 +2973,12 @@ class Translator(object):
          is strict and a target that is still not an instruction boundary is an
          error."""
          fn.index = {ins.addr: k for k, ins in enumerate(fn.insns)}
@@ -7290,9 +7724,11 @@ index 944f2ca..806d49b 100644
 -        fn.seh_sites = seh_frame_sites(fn, self.image)
 +        fn.seh_sites = seh_frame_sites(fn, self.image, self.func_addrs)
          fn.seh_restores = seh_restore_sites(fn)
++        fn.seh_unproven = seh_unproven_establishment(fn, fn.seh_sites)
          self.strict = strict
          for i, ins in enumerate(fn.insns):
-@@ -2595,6 +2986,17 @@ class Translator(object):
+             if ins.mnem == "JMP" and ins.ops and not ins.ops[0].startswith("0x"):
+@@ -2595,6 +3000,17 @@ class Translator(object):
          preceded by a dispatch switch, and every entry is a three-line wrapper,
          so no code is duplicated."""
          entries = sorted(set(entries))
@@ -7310,7 +7746,7 @@ index 944f2ca..806d49b 100644
          # An alternate entry must be an instruction in THIS body.  A block can
          # be re-recovered between the discovery rounds and the final pass -
          # recursive descent makes them grow - so an entry registered against
-@@ -2612,9 +3014,30 @@ class Translator(object):
+@@ -2612,9 +3028,30 @@ class Translator(object):
              live_out = [ALL_FLAGS] * len(fn.insns)
          else:
              live_out = self.liveness(fn)
@@ -7342,7 +7778,7 @@ index 944f2ca..806d49b 100644
  
          labels = set(fn.pushed_continuations)
          # RTL fill/move routines compute addresses within unrolled code rather
-@@ -2637,12 +3060,13 @@ class Translator(object):
+@@ -2637,12 +3074,13 @@ class Translator(object):
                      labels.add(t)
              # A listing gap or an end-of-block fall-through emits a transfer
              # too, and its target needs a label just as much as a branch's.
@@ -7358,7 +7794,7 @@ index 944f2ca..806d49b 100644
              t = fn.fallthrough[last] or fn.end
              if t in fn.index:
                  labels.add(t)
-@@ -2683,6 +3107,17 @@ class Translator(object):
+@@ -2683,6 +3121,17 @@ class Translator(object):
          prologue = len(out)          # everything emitted so far is dispatch
          for i, ins in enumerate(fn.insns):
              if i in dead:
@@ -7376,7 +7812,7 @@ index 944f2ca..806d49b 100644
                  continue
              if ins.addr in labels:
                  out.append("L_%08x: ;" % ins.addr)
-@@ -2693,7 +3128,8 @@ class Translator(object):
+@@ -2693,7 +3142,8 @@ class Translator(object):
              # functions: the byte after it belongs to whatever comes next, so
              # this body ends here rather than falling through into it.
              if (not fn.contiguous[i] and ins.mnem not in TERMINATORS
@@ -7386,7 +7822,7 @@ index 944f2ca..806d49b 100644
                  t = fn.fallthrough[i]
                  self.stats["_listing_gap"] += 1
                  self.notes.append(
-@@ -2705,7 +3141,7 @@ class Translator(object):
+@@ -2705,7 +3155,7 @@ class Translator(object):
          last_i = max(i for i in range(len(fn.insns)) if i not in dead)
          last = fn.insns[last_i]
          if (last.mnem not in TERMINATORS and last.mnem != "INT3"
@@ -7395,7 +7831,7 @@ index 944f2ca..806d49b 100644
              t = fn.fallthrough[last_i] or fn.end
              self.stats["_fallthrough_exit"] += 1
              out.append("    " + " ".join(self.goto_target(fn, t, last)))
-@@ -2829,13 +3265,50 @@ class Translator(object):
+@@ -2829,13 +3279,50 @@ class Translator(object):
              # before parsing refuses the whole function over a path CPUID
              # keeps the guest from taking.
              return ["recomp_unmodelled(c, %s); return;" % hexlit(ins.addr)]
@@ -7447,7 +7883,31 @@ index 944f2ca..806d49b 100644
          # ---------------------------------------------------------- data --
          if m == "MOV":
              size = operand_size(ops)
-@@ -2924,7 +3397,7 @@ class Translator(object):
+@@ -2846,10 +3333,20 @@ class Translator(object):
+                 # These come from data Ghidra decoded as code.
+                 return ["recomp_int(c, 6u);"] if dst.imm == SEGMENT_SELECTOR["CS"] else [";"]
+             L.append(write_op(dst, size, read_op(src, size)))
+-            if (fn.seh_sites and (seh_chain_operand(dst) or i in fn.seh_sites)
+-                    and src.kind == "reg" and src.size == 32):
++            # The epilogue retires the frame where the chain head is restored.
++            # seh_restore_sites proves that pattern per instruction, so consult
++            # it: a tail block that only restores - the prologue lives in
++            # another recovered block - has no establishing site of its own, and
++            # gating on fn.seh_sites left its frame in the list for the rest of
++            # the process. Every dispatch then walked it twice, which turns a
++            # missed retire into a per-frame cost that grows with the list.
++            establishing = i in fn.seh_sites
++            restoring = (i in getattr(fn, "seh_restores", ())
++                         and not getattr(fn, "seh_unproven", False))
++            if (establishing or restoring or (fn.seh_sites and seh_chain_operand(dst))) \
++                    and src.kind == "reg" and src.size == 32:
+                 L.append("c->eip = %s;" % hexlit(ins.addr))
+-                if i in fn.seh_sites:
++                if establishing:
+                     L.append("{ jmp_buf *b_ = recomp_seh_frame_enter(c); "
+                              "if (setjmp(*b_)) { recomp_seh_land(c); return; } }")
+                 else:
+@@ -2924,7 +3421,7 @@ class Translator(object):
              return L
  
          if m == "PUSH":
@@ -7456,7 +7916,7 @@ index 944f2ca..806d49b 100644
              if size == 16:
                  L.append("uint32_t v_ = %s;" % read_op(ops[0], 16))
                  L.append("c->r[4] -= 2; wr16(c->r[4], (uint16_t)v_);")
-@@ -2942,6 +3415,20 @@ class Translator(object):
+@@ -2942,6 +3439,20 @@ class Translator(object):
              return L
  
          if m == "POP":
@@ -7477,7 +7937,7 @@ index 944f2ca..806d49b 100644
              size = operand_size(ops, hint=32)
              if size == 16:
                  L.append("uint32_t v_ = rd16(c->r[4]); c->r[4] += 2;")
-@@ -2955,12 +3442,36 @@ class Translator(object):
+@@ -2955,12 +3466,36 @@ class Translator(object):
                  L.append("c->eip = %s; recomp_seh_frame_leave(c);" % hexlit(ins.addr))
              return L
  
@@ -7515,7 +7975,7 @@ index 944f2ca..806d49b 100644
          if m == "POPFD":
              return ["x86_set_eflags(c, rd32(c->r[4])); c->r[4] += 4;"]
          if m == "PUSHF":
-@@ -2991,6 +3502,50 @@ class Translator(object):
+@@ -2991,6 +3526,50 @@ class Translator(object):
                      "((uint32_t)(int32_t)(int8_t)c->r[0] & 0xffffu);"]
          if m == "CWDE":
              return ["c->r[0] = (uint32_t)(int32_t)(int16_t)c->r[0];"]
@@ -7566,7 +8026,7 @@ index 944f2ca..806d49b 100644
          if m in ("LDMXCSR", "STMXCSR"):
              # The SSE control word. This kit models one rounding mode and
              # masks every exception, which is what a guest sets it to; a store
-@@ -3163,6 +3718,19 @@ class Translator(object):
+@@ -3163,6 +3742,19 @@ class Translator(object):
          # ---------------------------------------------------- control flow --
          if m in JCC:
              cond = JCC[m][0]
@@ -7586,7 +8046,7 @@ index 944f2ca..806d49b 100644
              t = self.branch_target(ins)
              if t is None:
                  raise TranslateError("indirect conditional jump")
-@@ -3178,7 +3746,7 @@ class Translator(object):
+@@ -3178,7 +3770,7 @@ class Translator(object):
              if ins.ops and ins.ops[0].startswith("0x"):
                  t = int(ins.ops[0], 16)
                  L.append("c->r[4] -= 4; wr32(c->r[4], %s);" % hexlit(nxt))
@@ -7595,7 +8055,7 @@ index 944f2ca..806d49b 100644
                      # The host jmp_buf has to belong to a frame that is still
                      # live when _longjmp fires, so setjmp is taken here rather
                      # than inside the runtime (runtime/intrinsics.h).
-@@ -3194,6 +3762,22 @@ class Translator(object):
+@@ -3194,6 +3786,22 @@ class Translator(object):
                  else:
                      self.reject_offimage_call(t)
                      self.stats["_call_unknown"] += 1
@@ -7618,7 +8078,7 @@ index 944f2ca..806d49b 100644
                      L.append("recomp_call(c, %s);" % hexlit(t))
                  if RESUMABLE_STACKS:
                      L.append("if (c->eip != %s) return;" % hexlit(nxt))
-@@ -3201,19 +3785,24 @@ class Translator(object):
+@@ -3201,19 +3809,24 @@ class Translator(object):
                      L.append("c->eip = %s;" % hexlit(ins.addr))
                      L.append("{ jmp_buf *b_ = recomp_seh_frame_adopt(c); "
                               "if (b_) { if (setjmp(*b_)) { recomp_seh_land(c); return; } } }")
@@ -7655,7 +8115,7 @@ index 944f2ca..806d49b 100644
              return L
  
          if m == "RET":
-@@ -3231,6 +3820,24 @@ class Translator(object):
+@@ -3231,6 +3844,24 @@ class Translator(object):
                  return L
              return ["c->eip = rd32(c->r[4]); c->r[4] += %du; " % (4 + n) +
                      orphan + "recomp_return(c); return;"]
@@ -7680,7 +8140,7 @@ index 944f2ca..806d49b 100644
  
          # ------------------------------------------------------------ SSE --
          # Data movement only, in dword lanes. A Delphi runtime's FillChar and
-@@ -3250,7 +3857,8 @@ class Translator(object):
+@@ -3250,7 +3881,8 @@ class Translator(object):
                          "ANDPS": "&", "POR": "|", "ORPD": "|", "ORPS": "|"}
          SSE_LANE_FORMS = ("PANDN", "ANDNPD", "ANDNPS", "PCMPEQD", "PUNPCKLDQ", "PUNPCKHDQ",
                            "PUNPCKLQDQ", "UNPCKLPD", "UNPCKHPD", "MOVDDUP", "MOVLPD", "MOVLPS",
@@ -7690,7 +8150,7 @@ index 944f2ca..806d49b 100644
          if m in SSE_LANE_OPS or m in SSE_LANE_FORMS:
              dst, src = ops[0], ops[1]
  
-@@ -3280,7 +3888,7 @@ class Translator(object):
+@@ -3280,7 +3912,7 @@ class Translator(object):
              elif m == "PCMPEQD":
                  L.extend(put(dst, i, "%s == %s ? 0xffffffffu : 0u" % (d(i), sv(i)))
                           for i in range(4))
@@ -7699,7 +8159,7 @@ index 944f2ca..806d49b 100644
                  L.extend(put(dst, i, sv(i)) for i in range(4))
              elif m == "PUNPCKLDQ":            # d0 s0 d1 s1
                  L.extend([put(dst, 0, d(0)), put(dst, 1, sv(0)),
-@@ -3316,6 +3924,43 @@ class Translator(object):
+@@ -3316,6 +3948,43 @@ class Translator(object):
                            put(dst, 2, sv(hi)), put(dst, 3, sv(hi + 1))])
              return L
  
@@ -7743,7 +8203,7 @@ index 944f2ca..806d49b 100644
          # Scalar double and single forms. The host's double and float are the
          # same IEEE formats in the same rounding mode, and scalar SSE leaves
          # the lanes above its result alone, which is why nothing here clears
-@@ -3439,9 +4084,11 @@ class Translator(object):
+@@ -3439,9 +4108,11 @@ class Translator(object):
          if m == "HLT":
              return ["recomp_hlt(c);"]
          if m == "INT":
@@ -7756,7 +8216,7 @@ index 944f2ca..806d49b 100644
          if m == "IN":
              size = operand_size(ops[:1], hint=32)
              port = read_op(ops[1], 32) if len(ops) > 1 else "0u"
-@@ -3454,9 +4101,10 @@ class Translator(object):
+@@ -3454,9 +4125,10 @@ class Translator(object):
              return L
          if m in ("NOP", "WAIT", "PAUSE"):
              return [";"]
@@ -7769,7 +8229,7 @@ index 944f2ca..806d49b 100644
              return ["c->fpu_tag = 0xffffu;"]
          if m == "STMXCSR":
              # No translated SSE arithmetic changes MXCSR, so expose its reset value.
-@@ -3497,7 +4145,7 @@ class Translator(object):
+@@ -3497,7 +4169,7 @@ class Translator(object):
              return  # a translator built without bytes, as the unit tests are
          if self.image.base <= t < self.image.end:
              return
@@ -7778,7 +8238,7 @@ index 944f2ca..806d49b 100644
              return
          raise TranslateError("call to %08x, which is outside the image" % t)
  
-@@ -3506,7 +4154,25 @@ class Translator(object):
+@@ -3506,7 +4178,25 @@ class Translator(object):
              return ["goto L_%08x;" % t]
          if t in self.func_addrs:
              self.stats["_tailcall"] += 1
@@ -7804,7 +8264,7 @@ index 944f2ca..806d49b 100644
          self.stats["_tailcall_unknown"] += 1
          self.notes.append("%08x: jump to %08x outside any known function" % (ins.addr, t))
          return ["c->eip = %s; recomp_jump(c, %s); return;" % (hexlit(ins.addr), hexlit(t))]
-@@ -3901,6 +4567,15 @@ class Translator(object):
+@@ -3901,6 +4591,15 @@ class Translator(object):
              return ["x87_set_cw(c, rd16(%s));" % addr_expr(ops[0])]
          if m == "FFREE":
              return [";"]
@@ -7820,7 +8280,7 @@ index 944f2ca..806d49b 100644
          if m in ("FSAVE", "FNSAVE"):
              return ["x87_fnsave(c, %s);" % addr_expr(ops[0])]
          if m == "FRSTOR":
-@@ -3962,19 +4637,22 @@ def retarget_withdrawn(body, pruned):
+@@ -3962,19 +4661,22 @@ def retarget_withdrawn(body, pruned):
      if not pruned:
          return body
      out = []
@@ -7855,7 +8315,7 @@ index 944f2ca..806d49b 100644
      return out
  
  
-@@ -3995,6 +4673,32 @@ def load_functions(only=None):
+@@ -3995,6 +4697,32 @@ def load_functions(only=None):
      return funcs
  
  
@@ -7888,7 +8348,7 @@ index 944f2ca..806d49b 100644
  def main():
      ap = argparse.ArgumentParser()
      ap.add_argument("--out", required=True, help="where the generated sources go (build/recomp/gen)")
-@@ -4045,6 +4749,49 @@ def main():
+@@ -4045,6 +4773,49 @@ def main():
          AUX_MODULE = {"name": args.as_module, "base": cfg["game"]["image_base"],
                        "size": 0}  # the image's extent, filled in once it is read
      image = Image(BINARY)
@@ -7938,7 +8398,7 @@ index 944f2ca..806d49b 100644
      discovered = []
      if args.discovered:
          global EXTRA_ENTRY_POINTS
-@@ -4072,11 +4819,17 @@ def main():
+@@ -4072,11 +4843,17 @@ def main():
  
      t0 = time.time()
      entries = load_functions(set(args.only) if args.only else None)
@@ -7956,7 +8416,7 @@ index 944f2ca..806d49b 100644
              listed_starts.append(a)
              p = os.path.join(LISTINGS, "%08x.asm" % a)
              if os.path.exists(p) and os.path.getsize(p) > 0:
-@@ -4102,6 +4855,7 @@ def main():
+@@ -4102,6 +4879,7 @@ def main():
      for addr, name, nbytes, path in entries:
          try:
              insns = parse_listing(path)
@@ -7964,7 +8424,7 @@ index 944f2ca..806d49b 100644
          except TranslateError as e:
              failures.append((addr, "parse: %s" % e))
              continue
-@@ -4195,6 +4949,13 @@ def main():
+@@ -4195,6 +4973,13 @@ def main():
  
      os.makedirs(args.out, exist_ok=True)
      chunks = []
@@ -7978,7 +8438,7 @@ index 944f2ca..806d49b 100644
  
      def accepts(fn, reached=False):
          """Can the emitter translate every instruction of this block?
-@@ -4472,7 +5233,11 @@ def main():
+@@ -4472,7 +5257,11 @@ def main():
                                            or prior.addr in protected_entries)
          note_structural(provenance, owner if promote_owner else {}, t, why)
          if t in all_addrs and not separate:
@@ -7991,7 +8451,7 @@ index 944f2ca..806d49b 100644
          if home is not None and t in home.addrs:
              return False
          if t in owner and not separate:
-@@ -4488,7 +5253,7 @@ def main():
+@@ -4488,7 +5277,7 @@ def main():
              return True
          bounds = None
          boundaries = set()
@@ -8000,7 +8460,7 @@ index 944f2ca..806d49b 100644
          if protected and why == "config":
              # A configured entry states that this address IS a function, but
              # recovery still needs a ceiling. Unbounded, it runs past the body
-@@ -4543,7 +5308,7 @@ def main():
+@@ -4543,7 +5332,7 @@ def main():
                      owned.update(ins.addr for ins in block)
                      fragments.update((ins.addr, ins) for ins in block)
              if owned:
@@ -8009,7 +8469,7 @@ index 944f2ca..806d49b 100644
              lo_index, hi_index = bisect_right(candidate_starts, t), bisect_right(candidate_starts, bounds[1])
              boundaries = {a for a in candidate_starts[lo_index:hi_index]
                            if a not in owned and a not in finally_owners}
-@@ -4849,10 +5614,35 @@ def main():
+@@ -4849,10 +5638,35 @@ def main():
                    "(already owned, or its recovery did not validate)" % addr,
                    file=sys.stderr)
  
@@ -8045,7 +8505,7 @@ index 944f2ca..806d49b 100644
          tr.func_addrs = all_addrs
          tr.all_insn_addrs = set(owner)
          tr.jumptables.clear()
-@@ -4894,6 +5684,7 @@ def main():
+@@ -4894,6 +5708,7 @@ def main():
          for fn in list(parsed):
              if fn in retired_finally_bodies:
                  continue
@@ -8053,7 +8513,7 @@ index 944f2ca..806d49b 100644
              for i, ins in enumerate(fn.insns):
                  # PUSH imm32 / RET names a continuation just as a direct JMP
                  # does; do not depend on heuristic pointer discovery for it.
-@@ -4903,14 +5694,20 @@ def main():
+@@ -4903,14 +5718,20 @@ def main():
                  # by the data-pointer scan calls functions Ghidra never listed
                  # either: 0049e800 calls 004c3110 and 004c31e0.
                  if ins.mnem in ("JMP", "CALL") or ins.mnem in JCC:
@@ -8077,7 +8537,7 @@ index 944f2ca..806d49b 100644
              if fn.insns[-1].mnem not in TERMINATORS and not tr.never_returns(fn.insns[-1]):
                  changed |= resolve(fn.fallthrough[-1] or fn.end, listed, fn)
          for t in sorted(tr.unlisted_targets):
-@@ -5276,14 +6073,82 @@ def main():
+@@ -5276,14 +6097,82 @@ def main():
      # after mismatched returns have unwound the native call stack.
      if RESUMABLE_STACKS:
          starts = {f.addr for f in parsed}
@@ -8165,7 +8625,7 @@ index 944f2ca..806d49b 100644
      for t, fn in extra.items():
          entries_by_fn[fn.addr].add(t)
  
-@@ -5306,13 +6171,16 @@ def main():
+@@ -5306,13 +6195,16 @@ def main():
      # came from Ghidra's listing are never dropped - a dangling target there is
      # a translator gap, and the invariant below turns it into a build failure.
      fn_ref = re.compile(r"FN\(([0-9a-f]{8})\)")
@@ -8185,7 +8645,7 @@ index 944f2ca..806d49b 100644
          out = []
          for line in body:
              for kind in ("recomp_call", "recomp_jump"):
-@@ -5331,6 +6199,10 @@ def main():
+@@ -5331,6 +6223,10 @@ def main():
                  target = int(hit, 16)
                  if target not in known:
                      out.append((target, line.strip()))
@@ -8196,7 +8656,7 @@ index 944f2ca..806d49b 100644
          return out
  
      # Entries the emitter had to drop are not entry points either.
-@@ -5343,6 +6215,10 @@ def main():
+@@ -5343,6 +6239,10 @@ def main():
      withdrawn = []
      recovered_addrs = prunable_blocks({f.addr for f in recovered}, provenance)
      pruned = []
@@ -8207,7 +8667,7 @@ index 944f2ca..806d49b 100644
      if forget:
          for a in sorted(forget):
              if a in bodies:
-@@ -5542,6 +6418,20 @@ def main():
+@@ -5542,6 +6442,20 @@ def main():
          tr.stats["_withdrawn_retargeted"] = len(gone)
  
      ok = [fn for fn in parsed if fn.addr in bodies]
@@ -8228,7 +8688,7 @@ index 944f2ca..806d49b 100644
      if args.as_module and (args.only or discovered):
          # Discovery ran over the whole image, as it must to recover a function
          # whole, but a module carries only the functions it was asked for:
-@@ -5589,6 +6479,25 @@ def main():
+@@ -5589,6 +6503,25 @@ def main():
                % (at, fn_addr, len(missing), total,
                   " ".join("%08x" % m for m in missing[:6])), file=sys.stderr)
      if (table_gaps or undecoded) and not args.allow_table_gaps:
@@ -8254,7 +8714,7 @@ index 944f2ca..806d49b 100644
          raise TranslateError(
              "%d jump tables have entries that dispatch nowhere (%d slots in "
              "total) and %d table sites decoded nothing; pass "
-@@ -5663,6 +6572,48 @@ def main():
+@@ -5663,6 +6596,48 @@ def main():
                   % (target, line[:110])))
          dangling = []
      if dangling:
@@ -8303,7 +8763,7 @@ index 944f2ca..806d49b 100644
          # A target that Ghidra listed but that failed to translate is the
          # usual cause, so name the failures first: they are what to fix.
          for a, why in failures[:40]:
-@@ -5699,9 +6650,10 @@ def main():
+@@ -5699,9 +6674,10 @@ def main():
          fh.write("extern const uint32_t %sfunc_addrs[];\nextern uint8_t %shooked[];\n"
                   "extern RecompHookFn %shook_ptrs[];\n" % (P, P, P))
          fh.write("#ifdef RECOMP_NO_HOOKS\n"
@@ -8315,7 +8775,7 @@ index 944f2ca..806d49b 100644
                   "    uint32_t i_ = FIDX(a);\\\n"
                   "    uint32_t ebp_ = recomp_frame_watch ? c->r[5] : 0u;\\\n"
                   "    if (recomp_profile_enabled) { recomp_call(c, %sfunc_addrs[i_]); break; }\\\n"
-@@ -5782,7 +6734,8 @@ def main():
+@@ -5782,7 +6758,8 @@ def main():
      # neither another pop nor dispatching the continuation is correct here.
      call_returns = sorted({
          fn.fallthrough[i] or (fn.insns[i + 1].addr if i + 1 < len(fn.insns) else fn.end)
@@ -9807,6 +10267,199 @@ index 0000000..c54635c
 +    printf("d3d9 fixed function: %u checks, %u failures\n", checks, failures);
 +    return failures ? 1 : 0;
 +}
+diff --git a/runtime/perf_stats.h b/runtime/perf_stats.h
+new file mode 100644
+index 0000000..62dbcc2
+--- /dev/null
++++ b/runtime/perf_stats.h
+@@ -0,0 +1,187 @@
++// perf_stats.h - opt-in counters that attribute wall time to the runtime.
++//
++// A browser profile of the guest thread shows its cost split between
++// translated game code and the cooperative scheduler. These counters separate
++// the two without a sampling profiler: how many times the scheduler hands the
++// baton over, how many SEH frames each resumption scan walks, and how many
++// translated dispatches happen. Off unless RECOMP_PERF_STATS=1, and the
++// increments are plain integer adds so the measurement does not become the
++// cost being measured.
++#pragma once
++#include <cstdint>
++#include <cstdio>
++#include <cstring>
++
++#include "../platform/os.h"
++
++namespace perf_stats {
++
++inline bool on() {
++    static const bool value = [] {
++        const char *v = recomp_env("PERF_STATS");
++        return v && v[0] == '1' && v[1] == '\0';
++    }();
++    return value;
++}
++
++inline uint64_t handoffs = 0;          // baton moves, any reason
++inline uint64_t seh_resume_calls = 0;  // recomp_seh_resume_frame entries
++inline uint64_t seh_resume_frames = 0; // frames examined by those calls
++inline uint64_t seh_chain_visits = 0;  // guest SEH links validated
++inline uint64_t seh_boundary_calls = 0;
++inline uint64_t seh_boundary_frames = 0;
++inline uint64_t seh_live_frames = 0; // high-water mark of state.frames
++inline uint64_t callback_depth_calls = 0;
++inline uint64_t prune_passes = 0;  // prune_unlinked_frames runs
++inline uint64_t pruned_frames = 0; // frames retired by those runs
++
++// Why the baton moves, so a handoff rate can be attributed to the path that
++// causes it instead of only being counted.
++constexpr int HANDOFF_REASONS = 12;
++struct HandoffReason {
++    const char *why;
++    uint64_t count;
++};
++inline HandoffReason handoff_reasons[HANDOFF_REASONS] = {};
++
++inline void note_handoff(const char *why) {
++    if (!on())
++        return;
++    ++handoffs;
++    for (int i = 0; i < HANDOFF_REASONS; ++i) {
++        if (handoff_reasons[i].why && std::strcmp(handoff_reasons[i].why, why) == 0) {
++            ++handoff_reasons[i].count;
++            return;
++        }
++        if (!handoff_reasons[i].why) {
++            handoff_reasons[i].why = why;
++            handoff_reasons[i].count = 1;
++            return;
++        }
++    }
++}
++
++// Wall time the scheduler spent waiting on its condition variable. A frame time
++// made of slices shows up here as a large fraction of the elapsed window.
++inline double wait_seconds = 0;
++inline uint64_t wait_calls = 0;
++
++// How much traffic crosses the wasm/JS boundary and the guest dispatcher. A
++// frame whose cost is glue rather than game code shows up as a large count
++// here, which says whether the boundary is the thing to attack.
++inline uint64_t clock_reads = 0;
++inline uint64_t import_calls = 0;
++inline uint64_t dispatch_calls = 0;
++inline uint64_t printf_calls = 0;
++
++inline void note_wait(double seconds) {
++    if (!on())
++        return;
++    ++wait_calls;
++    wait_seconds += seconds;
++}
++
++// Where the SEH frames come from: one slot per establishing EIP, so a frame
++// list that only grows can be attributed to the guest function that installs
++// them instead of guessed at.
++constexpr int FRAME_SITES = 48;
++struct FrameSite {
++    uint32_t eip;
++    uint64_t count;
++};
++inline FrameSite frame_sites[FRAME_SITES] = {};
++inline uint64_t frame_enters = 0;
++inline uint64_t frames_now = 0;
++
++inline void note_frame_enter(uint32_t eip) {
++    if (!on())
++        return;
++    ++frame_enters;
++    for (int i = 0; i < FRAME_SITES; ++i) {
++        if (frame_sites[i].eip == eip) {
++            ++frame_sites[i].count;
++            return;
++        }
++        if (frame_sites[i].eip == 0) {
++            frame_sites[i].eip = eip ? eip : 1;
++            frame_sites[i].count = 1;
++            return;
++        }
++    }
++}
++
++struct Sample {
++    uint64_t handoffs, seh_resume_calls, seh_resume_frames, seh_chain_visits;
++    uint64_t seh_boundary_calls, seh_boundary_frames, callback_depth_calls, seh_live_frames;
++    uint64_t prune_passes, pruned_frames;
++    uint64_t clock_reads, import_calls, printf_calls;
++    double wait_seconds;
++};
++
++inline Sample &last() {
++    static Sample s{};
++    return s;
++}
++
++inline double &last_ns() {
++    static double ns = 0;
++    return ns;
++}
++
++// Prints a delta line at most every two seconds. Called from the scheduler
++// checkpoint, which already runs at most once per millisecond.
++inline void report() {
++    if (!on())
++        return;
++    const double now = (double)os_monotonic_ns();
++    double &previous_ns = last_ns();
++    if (previous_ns != 0 && now - previous_ns < 2e9)
++        return;
++    Sample &p = last();
++    if (previous_ns != 0) {
++        const double seconds = (now - previous_ns) / 1e9;
++        const Sample cur{
++            handoffs,           seh_resume_calls,    seh_resume_frames,    seh_chain_visits,
++            seh_boundary_calls, seh_boundary_frames, callback_depth_calls, seh_live_frames,
++            prune_passes,       pruned_frames,       clock_reads,          import_calls,
++            printf_calls,       wait_seconds};
++        auto rate = [seconds](uint64_t a, uint64_t b) {
++            return seconds > 0 ? double(a - b) / seconds : 0.0;
++        };
++        fprintf(stderr,
++                "perf: %.1fs handoffs=%.0f/s seh_resume=%.0f/s seh_frames=%.0f/s "
++                "chain_visits=%.0f/s seh_boundary=%.0f/s boundary_frames=%.0f/s "
++                "cb_depth=%.0f/s live_frames_max=%llu wait=%.0f%% prune=%llu/%llu "
++                "clock=%.0f/s imports=%.0f/s printf=%.0f/s\n",
++                seconds, rate(cur.handoffs, p.handoffs),
++                rate(cur.seh_resume_calls, p.seh_resume_calls),
++                rate(cur.seh_resume_frames, p.seh_resume_frames),
++                rate(cur.seh_chain_visits, p.seh_chain_visits),
++                rate(cur.seh_boundary_calls, p.seh_boundary_calls),
++                rate(cur.seh_boundary_frames, p.seh_boundary_frames),
++                rate(cur.callback_depth_calls, p.callback_depth_calls),
++                (unsigned long long)cur.seh_live_frames,
++                100.0 * (cur.wait_seconds - p.wait_seconds) / (seconds > 0 ? seconds : 1),
++                (unsigned long long)(cur.pruned_frames - p.pruned_frames),
++                (unsigned long long)(cur.prune_passes - p.prune_passes),
++                rate(cur.clock_reads, p.clock_reads), rate(cur.import_calls, p.import_calls),
++                rate(cur.printf_calls, p.printf_calls));
++        // Name the guest functions that keep installing SEH frames, so growth
++        // of the frame list can be traced to a site rather than to a guess.
++        static int reports = 0;
++        if (++reports % 5 == 0) {
++            for (int i = 0; i < FRAME_SITES && frame_sites[i].eip; ++i)
++                fprintf(stderr, "perf-frame: %08x enters=%llu\n", frame_sites[i].eip,
++                        (unsigned long long)frame_sites[i].count);
++            for (int i = 0; i < HANDOFF_REASONS && handoff_reasons[i].why; ++i)
++                fprintf(stderr, "perf-handoff: %s count=%llu\n", handoff_reasons[i].why,
++                        (unsigned long long)handoff_reasons[i].count);
++        }
++        fprintf(stderr, "perf-frames: live=%llu enters_total=%llu\n",
++                (unsigned long long)frames_now, (unsigned long long)frame_enters);
++        p = cur;
++    }
++    previous_ns = now;
++}
++
++} // namespace perf_stats
 diff --git a/runtime/tests/game_boot_probe.cpp b/runtime/tests/game_boot_probe.cpp
 new file mode 100644
 index 0000000..6e2b4ea
