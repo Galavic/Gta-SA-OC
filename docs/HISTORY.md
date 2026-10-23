@@ -52,7 +52,7 @@ comprobar las necesidades reales de GTA y adaptar la interfaz de 32 bits.
 
 ```powershell
 .venv/Scripts/python.exe -m pytest -q tests vendor/recomp-kit/tools/recomp/tests/test_translate_driver.py vendor/recomp-kit/tools/recomp/tests/test_translate_seh.py
-.venv/Scripts/python.exe build.py --target web --regenerate --jobs 4
+.venv/Scripts/python.exe tools/build.py --target web --regenerate --jobs 4
 ```
 
 Objetivo: ejecutar el código original de PC recompilado, con su lógica,
@@ -106,7 +106,7 @@ juego ni equivalencia de la traducción x86→C.
 
 ```powershell
 .venv/Scripts/python.exe -m pytest -q tests vendor/recomp-kit/tools/recomp/tests/test_translate_driver.py
-.venv/Scripts/python.exe verify_recovery.py
+.venv/Scripts/python.exe tools/verify_recovery.py
 ```
 
 Desde `.` (el muestreo opcional requiere pcrecomp):
@@ -114,7 +114,7 @@ Desde `.` (el muestreo opcional requiere pcrecomp):
 ```powershell
 python -m venv .venv
 .venv/Scripts/python.exe -m pip install -r requirements.txt
-.venv/Scripts/python.exe audit.py '<local-game-install>\gta_sa.exe'
+.venv/Scripts/python.exe tools/audit.py '<local-game-install>\gta_sa.exe'
 ```
 
 Resultados privados en `analysis/pe.json`, `analysis/sections.txt`,
@@ -125,16 +125,16 @@ Para el análisis y la compilación con el runtime web:
 
 ```powershell
 .venv/Scripts/python.exe -m pip install -r requirements.txt
-python bootstrap_analysis.py
-python analyze.py
-.venv/Scripts/python.exe audit_embedded.py
-.venv/Scripts/python.exe imports_audit.py
-python build.py --target web --regenerate
+python tools/bootstrap_analysis.py
+python tools/analyze.py
+.venv/Scripts/python.exe tools/audit_embedded.py
+.venv/Scripts/python.exe tools/imports_audit.py
+python tools/build.py --target web --regenerate
 ```
 
-`bootstrap_analysis.py` descarga herramientas oficiales fijadas por checksum.
-`analyze.py` guarda el proyecto Ghidra y exporta ensamblador e índice de funciones;
-no usa pseudocódigo del decompilador como fuente. `build.py` requiere el SDK
+`tools/bootstrap_analysis.py` descarga herramientas oficiales fijadas por checksum.
+`tools/analyze.py` guarda el proyecto Ghidra y exporta ensamblador e índice de funciones;
+no usa pseudocódigo del decompilador como fuente. `tools/build.py` requiere el SDK
 activado en `<user-home>\GTASAWebToolchains\emsdk`, o `--emsdk RUTA`.
 Versión instalada: Emscripten 6.0.12; revisión emsdk:
 `35ff8a6d150541276abbc6bae512ca90bcfbe220`.
@@ -188,17 +188,17 @@ Entorno Python recreado localmente y 194 pruebas aprobadas. La comparación
 con el recuperador original conserva las 2.107 instrucciones de la muestra
 de 64 funciones en tres recorridos; esto no prueba ejecución del juego.
 
-`audit_embedded.py` valida cinco programas PE almacenados y las dos tablas
+`tools/audit_embedded.py` valida cinco programas PE almacenados y las dos tablas
 antes confundidas con código del contenedor, sin modificar el EXE. Estos
 programas necesitan carga y reubicación propias si se invocan. Los resultados
 se guardan en `analysis/embedded-audit.json`.
 
 ## Entradas corregidas y dependencias originales
 
-`curate_thunks.py --output analysis/curated-core-next` crea el análisis activo
+`tools/curate_thunks.py --output analysis/curated-core-next` crea el análisis activo
 sin modificar el export crudo de Ghidra: separa 1.683 trampolines decodificados
 en la dirección exacta que almacena el EXE, incluidos saltos dentro de funciones.
-`verify_curated_thunks.py --input analysis/curated-core-next` compara sus instrucciones con
+`tools/verify_curated_thunks.py --input analysis/curated-core-next` compara sus instrucciones con
 los bytes originales y verifica los saltos, registros, banderas y pila en
 Unicorn. Esto valida entradas de análisis, no la ejecución del C traducido.
 También verifica que los 52 fragmentos separados solo cubran wrappers de su
@@ -217,21 +217,21 @@ y las DLL, con junctions a los assets. El EXE preparado conserva el mismo
 SHA-256. Las identidades fuente están fijadas en `audio_modules.toml`.
 
 ```powershell
-.venv/Scripts/python.exe prepare_audio_modules.py
+.venv/Scripts/python.exe tools/prepare_audio_modules.py
 ./prepare_install.ps1
-python analyze.py
-.venv/Scripts/python.exe audit_core_data.py
-.venv/Scripts/python.exe curate_thunks.py --output analysis/curated-core-enter
-.venv/Scripts/python.exe verify_curated_thunks.py --input analysis/curated-core-enter
-.venv/Scripts/python.exe analyze_audio.py
-.venv/Scripts/python.exe translate_audio.py
-.venv/Scripts/python.exe compile_audio_wasm.py
-.venv/Scripts/python.exe audit_module_imports.py
-.venv/Scripts/python.exe audit_overlapping_branches.py
-.venv/Scripts/python.exe verify_branch_wasm.py
-.venv/Scripts/python.exe verify_enter_wasm.py
-.venv/Scripts/python.exe probe_failed_functions.py
-python build.py --target web --regenerate --jobs 2
+python tools/analyze.py
+.venv/Scripts/python.exe tools/audit_core_data.py
+.venv/Scripts/python.exe tools/curate_thunks.py --output analysis/curated-core-enter
+.venv/Scripts/python.exe tools/verify_curated_thunks.py --input analysis/curated-core-enter
+.venv/Scripts/python.exe tools/analyze_audio.py
+.venv/Scripts/python.exe tools/translate_audio.py
+.venv/Scripts/python.exe tools/compile_audio_wasm.py
+.venv/Scripts/python.exe tools/audit_module_imports.py
+.venv/Scripts/python.exe tools/audit_overlapping_branches.py
+.venv/Scripts/python.exe tools/verify_branch_wasm.py
+.venv/Scripts/python.exe tools/verify_enter_wasm.py
+.venv/Scripts/python.exe tools/probe_failed_functions.py
+python tools/build.py --target web --regenerate --jobs 2
 ```
 
 EAX, Ogg, Vorbis y VorbisFile pasaron la traducción estricta independiente.
@@ -258,7 +258,7 @@ traducción estricta con los 1.683 wrappers verificados y 844 contratos de
 llamada; su resultado se registra en `build/web-status.json`. El estado
 `running` solo describe el proceso, no una compilación ni un juego jugable.
 
-`audit_overlapping_branches.py` encontró 316 secuencias XOR/JZ adyacentes
+`tools/audit_overlapping_branches.py` encontró 316 secuencias XOR/JZ adyacentes
 en 135 funciones cuyo destino tomado cae dentro de otra instrucción listada.
 Comprueba el patrón en los bytes originales y decodifica el destino exacto;
 no cambia listados ni prueba la alcanzabilidad de la función entera. El
@@ -287,7 +287,7 @@ porque el runtime no implementa su sombra de interrupciones y depuración.
 Se conserva la lectura de la pila y su incremento de 2 o 4 bytes; no se ignora
 la instrucción ni se habilita `--allow-unmodelled`.
 
-`verify_branch_wasm.py` compila con Emscripten mediante el driver del kit y
+`tools/verify_branch_wasm.py` compila con Emscripten mediante el driver del kit y
 ejecuta el C traducido en Node. Compara 405 ejecuciones de 10 formas de ramas,
 4 formas de recarga SS y una función original de GTA con las mismas
 instrucciones x86 en Unicorn. Para
@@ -319,7 +319,7 @@ intento completo usa ese directorio; no representa aún un motor compilado.
 
 ENTER de 32 bits ahora conserva la construcción de la pila, las copias de
 marcos anidados y el nivel de anidamiento módulo 32, sin alterar banderas.
-`verify_enter_wasm.py` compara 960 ejecuciones x86/Wasm de 64 formas, incluyendo
+`tools/verify_enter_wasm.py` compara 960 ejecuciones x86/Wasm de 64 formas, incluyendo
 alias de pila, cruces de 64 KiB, tamaños de reserva y prefijo de dirección.
 Coinciden registros, banderas, PC y los 128 bytes que puede escribir ENTER.
 El operando de 16 bits se rechaza: el oráculo x86 discrepa en su semántica de
@@ -333,7 +333,7 @@ reparaciones de entradas resolvieron cuatro sitios de dispatch. El registro
 y el informe se conservan en `build/strict-core-followup-before-enter.log`
 y `build/strict-core-followup-before-enter-blockers.json`.
 
-`audit_core_data.py` verifica que `0x00859b88..0x00859b94` son tres constantes
+`tools/audit_core_data.py` verifica que `0x00859b88..0x00859b94` son tres constantes
 float originales en .rdata no ejecutable y de solo lectura: 0,0078125, 0,5 y 4.
 Comprueba la identidad del EXE, los 12 bytes y sus lecturas x87 originales,
 y rechaza transferencias directas hacia el rango encontradas en los listados.
@@ -347,8 +347,8 @@ está en `build/web-status.json`; todavía no hay motor enlazado ni jugable.
 ## Introducción original local
 
 ```powershell
-.venv/Scripts/python.exe prepare_intro.py
-.venv/Scripts/python.exe serve_intro.py --port 8765
+.venv/Scripts/python.exe tools/prepare_intro.py
+.venv/Scripts/python.exe tools/serve_intro.py --port 8765
 ```
 
 Abrir `http://127.0.0.1:8765/`. Reproduce Logo.mpg y GTAtitles.mpg de la

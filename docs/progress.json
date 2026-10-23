@@ -1166,15 +1166,41 @@
     "evidence_the_frame_is_time_bounded": {
       "clock_scale_experiment": {
         "what": "RECOMP_QPC_SCALE multiplies the counter QueryPerformanceCounter hands the guest. A frame bounded by work does not move; a frame bounded by elapsed time shortens in proportion.",
-        "same_build_scale_1": {"fps": 24.35, "draws": 822, "guest_insns_per_frame_millions": 9.02, "insn_ns": 4.55},
-        "same_build_scale_2": {"fps": 37.80, "draws": 719, "guest_insns_per_frame_millions": 7.99, "insn_ns": 3.31},
+        "same_build_scale_1": {
+          "fps": 24.35,
+          "draws": 822,
+          "guest_insns_per_frame_millions": 9.02,
+          "insn_ns": 4.55
+        },
+        "same_build_scale_2": {
+          "fps": 37.8,
+          "draws": 719,
+          "guest_insns_per_frame_millions": 7.99,
+          "insn_ns": 3.31
+        },
         "result": "FPS rises 55% while instructions per frame FALL. The work did not shrink; the wait disappeared. Clock reads drop from 202-257k/s to 88-93k/s."
       },
       "throughput_does_not_move_fps": [
-        {"build": "no wasm-opt", "insn_per_s_millions": 220, "fps": 24.35},
-        {"build": "wasm-opt -O2", "insn_per_s_millions": 282, "fps": 24.20},
-        {"build": "no wasm-opt, other scene", "insn_per_s_millions": 302, "fps": 24.00},
-        {"build": "no wasm-opt, other scene", "insn_per_s_millions": 312, "fps": 24.00}
+        {
+          "build": "no wasm-opt",
+          "insn_per_s_millions": 220,
+          "fps": 24.35
+        },
+        {
+          "build": "wasm-opt -O2",
+          "insn_per_s_millions": 282,
+          "fps": 24.2
+        },
+        {
+          "build": "no wasm-opt, other scene",
+          "insn_per_s_millions": 302,
+          "fps": 24.0
+        },
+        {
+          "build": "no wasm-opt, other scene",
+          "insn_per_s_millions": 312,
+          "fps": 24.0
+        }
       ],
       "throughput_result": "A 42% spread in emulator throughput across four builds produces 24.00-24.35 FPS. A faster emulator that yields no additional frame is waiting, not computing.",
       "throughput_caveat": "The insn/s column is NOT stable on this machine: the same artifact has measured between 2.73 and 7.33 ns per guest instruction across runs, and one run of the pair did not reach gameplay at all. Those figures are indicative only and must not be used to compare builds. The argument rests on fps, which is stable at 24.0-24.4 across every measurement, and above all on the clock-scale experiment, which compares one build against itself and moves fps by 55%."
@@ -1189,12 +1215,23 @@
       "arithmetic": "27 ms of work + 14 ms of wait = 41 ms = 24.4 FPS. Removing the wait leaves 27 ms, i.e. 1/0.027 ~ 37 FPS, which is what RECOMP_QPC_SCALE=2 measured independently (37.80)."
     },
     "ceiling_once_the_wait_is_removed": {
-      "wasm_opt_plus_scale_8": {"fps": 39.50, "draws": 748},
-      "scale_64": {"fps": 24.15, "draws": "466-627", "note": "Too aggressive: scaling the clock 64x also breaks the guest's own streaming and timing, the draw count collapses, and the frame rate falls back. Scale 8 is the useful maximum, so ~39.5 FPS is the emulator's ceiling on this scene."},
+      "wasm_opt_plus_scale_8": {
+        "fps": 39.5,
+        "draws": 748
+      },
+      "scale_64": {
+        "fps": 24.15,
+        "draws": "466-627",
+        "note": "Too aggressive: scaling the clock 64x also breaks the guest's own streaming and timing, the draw count collapses, and the frame rate falls back. Scale 8 is the useful maximum, so ~39.5 FPS is the emulator's ceiling on this scene."
+      },
       "conclusion": "60 FPS is NOT reached. With the wait gone the limit becomes the emulator at ~39.5 FPS on this scene, and a scene needing 41 ms of work would still sit at 24 FPS.",
       "budget_for_60_fps": {
-        "now": {"frame_ms": 25.3},
-        "needed": {"frame_ms": 16.7},
+        "now": {
+          "frame_ms": 25.3
+        },
+        "needed": {
+          "frame_ms": 16.7
+        },
         "reading": "60 FPS requires about 1.5x less work per frame than the emulator does today. This is derived from fps, the only stable measurement here; the per-instruction cost figures are not stable enough to budget from. The flag-liveness analysis has demonstrated nothing in two attempts and wasm-opt only reduces size, so this is not a small remaining margin."
       }
     },
@@ -1404,5 +1441,18 @@
       "No claim of 60 FPS, of playable status, or of a completion percentage.",
       "Missions, vehicles, audio actually heard, save/load and stability beyond about 35 minutes remain unverified."
     ]
+  },
+  "repository_layout_cleanup": {
+    "date": "2026-10-23",
+    "python_tools_moved": 70,
+    "powershell_tools_moved": 1,
+    "historical_reports_archived": 2,
+    "previous_readme_preserved": true,
+    "remote_base_commit": "ff15470",
+    "runtime_changed": false,
+    "gameplay_claims_added": false,
+    "verification": "92 publication-worktree tests and 100 local-workspace tests passed; all Python tools parse",
+    "publication_tests_passed": 92,
+    "local_tests_passed": 100
   }
 }

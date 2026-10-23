@@ -1,105 +1,62 @@
-# GTA SA OC — port experimental a WebAssembly
+# GTA SA OC
 
-**[Galavic](https://github.com/Galavic) — principal contribuidor y responsable de GTA SA OC.**
+Port experimental de **GTA San Andreas para navegador**, basado en el motor
+original de PC y WebAssembly/WebGPU. Proyecto no oficial de la comunidad.
 
-Investigación para ejecutar el código original de GTA San Andreas de PC en
-el navegador, conservando su lógica, misiones, animaciones, física y audio.
+El usuario ha confirmado el menu y gameplay en compilaciones locales. Las
+misiones completas, la equivalencia 1:1 y los 60 FPS estables siguen sin verificar.
+Los resultados de cada compilacion y sus hashes estan en [Estado actual](docs/STATUS.md).
 
-**Estado: el motor original todavía no arranca ni es jugable en web.**
-No hay una conversión completa ni una versión 1:1 verificada.
-
-## Recreación Three.js
-
-Se continuó el prototipo local con **El regreso**: montar una BMX, seguir
-marcadores hacia Grove Street y llegar a casa. Incluye guardado y reinicio.
-Es un objetivo independiente, no la primera misión original completa.
-La carga de recursos y el recorrido pasan pruebas en CPU; la partida
-interactiva en navegador todavía está pendiente de comprobar.
-Consulta [preparación y controles](web/recreation/README.md).
-
-Con los recursos locales ya preparados:
-
-```powershell
-npm --prefix web/recreation start
-```
-
-## Avance comprobado
-
-Última pasada del ejecutable actual: `2026-10-14T03:31:06.407545+00:00`.
-
-| Comprobación | Resultado |
-| --- | --- |
-| Análisis inicial de Ghidra | 20.823 funciones, 1.230.152 instrucciones exportadas |
-| Traducción estricta completa | Pendiente: 10 funciones fallidas |
-| Referencias de llamada/salto sin destino | 147 referencias pendientes |
-| Cuatro tablas de salto interpretadas en la imagen equivocada | Auditadas y corregidas como buffers de PE almacenados |
-| Pruebas del driver tras mejorar sus diagnósticos | 163 pasan |
-| Pruebas de preservación de datos de PE almacenados | 4 pasan |
-| Última ejecución de tests del proyecto, driver y SEH | 309 pasan |
-| Menú, intro y gameplay del motor original en web | Verificado: menú, intro y CJ caminando por Los Santos (`docs/STATUS.md`); misiones sin verificar |
-| Física original de vehículos en web | Sin verificar |
-
-No publicamos un porcentaje de conversión completa: el número de funciones
-exportadas, descubiertas o compiladas no mide cuánto del juego funciona.
-Tampoco es comparable con el porcentaje de ingeniería inversa manual de
-otros proyectos. Los resultados históricos de otro ejecutable y de la demo
-que carga recursos se documentan por separado.
-
-## Qué contiene este repositorio
-
-- Herramientas de análisis, auditoría de bytes y preparación de entradas.
-- Herramientas de traducción, compilación y diagnóstico de arranque.
-- Pruebas de semántica x86/Wasm y de contratos de control de flujo.
-- Una revisión fijada de `recomp-kit` y el parche acumulado del runtime.
-- Documentación del avance, limitaciones e investigaciones anteriores.
-
-Los ejecutables, DLL del juego, recursos, disassemblies, traducciones
-generadas, volcados de memoria y binarios Wasm permanecen locales y excluidos
-de Git. Cada persona necesita sus propios archivos compatibles del juego.
-
-## Preparación del código
+## Empezar
 
 ```powershell
 git clone --recurse-submodules https://github.com/Galavic/Gta-SA-OC.git
 cd Gta-SA-OC
-git -C vendor/recomp-kit apply --check ../../patches/current-vendor.patch
-git -C vendor/recomp-kit apply ../../patches/current-vendor.patch
 python -m venv .venv
 .venv/Scripts/python.exe -m pip install -r requirements.txt
-.venv/Scripts/python.exe -m pytest -q tests vendor/recomp-kit/tools/recomp/tests/test_translate_driver.py vendor/recomp-kit/tools/recomp/tests/test_translate_seh.py
 ```
 
-El parche se aplica una sola vez sobre la revisión fijada; no se aplica
-encima de los parches históricos parciales. Véase [patches/README.md](patches/README.md).
+El runtime lleva una revision fijada y un parche completo. Antes de compilar,
+consulta [como aplicar el parche](patches/README.md). Cada persona necesita su
+propia copia compatible del juego; este repositorio no incluye el juego ni sus
+recursos. La preparacion requiere Emscripten, CMake, Ninja, Ghidra y un JDK.
+El proceso completo aun depende de analisis locales; clonar no basta para jugar.
 
-La compilación del juego requiere además Emscripten, CMake, Ninja, Ghidra,
-un JDK compatible y los análisis privados regenerados a partir de la imagen
-correcta. Los scripts rechazan hashes distintos. No hay todavía un comando
-que produzca un GTA jugable verificado desde una instalación cualquiera.
+Con la variante y la compilacion local ya preparadas:
 
-La variante actual se prepara con `prepare_singleplayer.py`; `GTASA_GAME_DIR`
-permite indicar la instalación local. `resume_singleplayer.py` reutiliza el
-análisis existente. `finish_singleplayer_pipeline.py` solo continúa a la
-compilación si pasa la traducción estricta y coinciden los módulos de audio.
+```powershell
+.venv/Scripts/python.exe tools/serve_variant.py --port 8771
+```
 
-## Documentación
+Abre **http://127.0.0.1:8771/** e importa los archivos de tu copia local.
+Consulta las [herramientas de preparacion y comprobacion](tools/README.md).
 
-- [Estado actual y próximos bloqueos](docs/STATUS.md)
-- [Datos de avance](docs/progress.json)
-- [Registro histórico, con resultados de otras imágenes](docs/HISTORY.md)
-- [Diagnósticos anteriores del navegador](BROWSER_STATUS.md)
-- [Dependencias y atribución](THIRD_PARTY.md)
+## Estructura
 
-## Proyectos relacionados
+| Carpeta | Contenido |
+| --- | --- |
+| `tools/` | Preparacion, compilacion, servidor, auditorias y launcher |
+| `tests/` | Regresiones del proyecto |
+| `docs/` | Estado actual, evidencias e historial |
+| `docs/archive/` | Informes y guias anteriores, separados del estado actual |
+| `patches/` | Parche completo del runtime y licencia preservada |
+| `vendor/recomp-kit/` | Dependencia fijada; cambios locales en el parche |
+| `config/` | Metadatos de entrada escritos a mano, cuando estan disponibles |
+| `web/` | Prototipos anteriores y herramientas compartidas de recursos |
 
-[gta-reversed](https://github.com/gta-reversed/gta-reversed) reconstruye
-funciones originales en C++ y es una referencia útil. Actualmente genera
-una DLL que depende del ejecutable original; no equivale a una versión
-independiente completa lista para Wasm.
+`build/`, `variants/`, `analysis/`, `original/` y `prepared/` son datos locales
+ignorados por Git. No se publican ejecutables, recursos originales, Wasm generado,
+volcados privados ni rutas personales.
 
-[SanAndreasUnity](https://github.com/in0finite/SanAndreasUnity) es una
-reimplementación incompleta en Unity. Se estudió como alternativa, pero no
-demuestra equivalencia 1:1 con la historia y la física originales.
+## Documentacion
 
-Este proyecto no está afiliado con Rockstar Games ni anuncia una conversión
-completa o la primera conversión completa del juego.
+- [Estado y limitaciones](docs/STATUS.md)
+- [Datos de progreso](docs/progress.json)
+- [Herramientas y comandos](tools/README.md)
+- [Historial de investigacion](docs/HISTORY.md)
+- [Archivo de informes anteriores](docs/archive/README.md)
+- [Dependencias y atribucion](THIRD_PARTY.md)
+
+[Contribuidores](https://github.com/Galavic/Gta-SA-OC/graphs/contributors):
+[Galavic](https://github.com/Galavic) y la comunidad del proyecto.
+No afiliado a Rockstar Games.

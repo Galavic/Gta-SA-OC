@@ -1,5 +1,18 @@
 # Estado actual
 
+## Organizacion del repositorio (2026-10-23)
+
+Se movieron 70 scripts Python y el preparador PowerShell de la raiz a tools/.
+Se actualizaron sus rutas de proyecto, llamadas entre scripts, imports de pruebas
+y comandos documentados. BROWSER_STATUS.md y PORT_STATUS.md estan en docs/archive/;
+el README anterior tambien se conserva alli. La raiz presenta el acceso al proyecto,
+la configuracion y las dependencias. No se eliminan auditorias ni datos de evidencia.
+
+La limpieza se publica sobre el commit remoto ff15470 y conserva su parche completo
+y el gitlink del runtime. No cambia el ejecutable ni establece nuevo gameplay. Pasan 92 pruebas en el
+arbol de publicacion y 100 en la copia local; todos los scripts Python parsean.
+Los ajustes locales pendientes del launcher y runtime se mantienen separados.
+
 ## Rendimiento: el fotograma lo limita una espera de 14 ms del propio juego (2026-10-23)
 
 Esta sección **corrige la siguiente**, que concluía que "no hay limitador que retirar" y que
@@ -132,7 +145,7 @@ generación distinta del traductor, no al mismo binario. Lo que sí es cierto y 
 `wasm-opt -O2` reduce el módulo de **254,2 MB a 229,7 MB (-9,6 %)** sin recompilar, y el
 módulo resultante compila en V8 y juega. Se mantiene por tamaño, no por velocidad.
 
-Dos correcciones de `prepare_browser_wasm.py` que hicieron falta para poder usarlo:
+Dos correcciones de `tools/prepare_browser_wasm.py` que hicieron falta para poder usarlo:
 
 - La comprobación exigía que el recuento de funciones no cambiara. Eso solo se cumplía
   porque `-O2` nunca llegaba a ejecutarse; al ejecutarse, `wasm-opt` aplica *inlining* y el
