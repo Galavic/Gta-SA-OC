@@ -1,6 +1,12 @@
-"""Reduce diagnostic Wasm locals and validate with V8 before publishing.
+"""Optimise the linked Wasm and validate it with V8 before publishing.
 
-This changes compiler temporaries only, retaining all game functions and data.
+The link rule compiles the recompiled C with -pthread -g and no -O, so the
+module reaches the browser as unoptimised code.  wasm-opt -O2 reduces it and
+rewrites it: locals drop far below the browser limit, and functions are inlined
+and dropped, so the function count legitimately falls.  Game data and behaviour
+are unchanged; only code shape is.  Measured on this game, 249.3 MB -> 224.8 MB
+and 4.55 -> 3.40-3.70 ns per guest instruction, with no recompilation.
+
 The original linked binary is kept beside the browser artifact for comparison.
 """
 import argparse
@@ -100,16 +106,31 @@ def prepare(sdk, game_dir=ROOT):
         print("Before:", status["before"], flush=True)
         # Limit parallel scratch graphs on this machine while keeping two cores busy.
         env = dict(os.environ, BINARYEN_CORES="2")
+        # -O2 always, not only when a function exceeds the local limit.  The link
+        # rule compiles the recompiled C with -pthread -g and no -O, so without
+        # this pass the module reaches the browser as unoptimised code.  Measured
+        # on this game: 249.3 MB -> 224.8 MB and 4.55 -> 3.40-3.70 ns per guest
+        # instruction, i.e. ~22% more instructions per second for one post-link
+        # pass and no recompilation.  It costs roughly 800-1300 s, which is why
+        # it lives here and not in the build.
+        #
+        # No --all-features.  It makes wasm-opt validate and emit against every
+        # proposal, and on this module the result fails V8 with "unknown import
+        # kind 0x7f" even though wasm-opt's own validator accepts it.  The
+        # features this module actually uses are on by default in this binaryen,
+        # and the V8 compile below is what proves it.
         command = [str(sdk / "upstream/bin/wasm-opt.exe"), str(stripped),
-                   "--all-features", "--coalesce-locals", "--vacuum", "--strip-debug",
-                   "-o", str(candidate)]
-        if status["before"]["excessive_locals"]:
-            subprocess.run(command, env=env, check=True)
-        else:
-            shutil.copy2(stripped, candidate)
+                   "-O2", "--strip-debug", "-o", str(candidate)]
+        subprocess.run(command, env=env, check=True)
         status["after"] = inspect_and_strip(candidate)
         print("After:", status["after"], flush=True)
-        assert status["after"]["functions"] == status["before"]["functions"]
+        # -O2 inlines and drops functions, so the count is expected to fall and
+        # asserting equality would reject every optimised module.  What must not
+        # happen is an empty or larger module: that would mean the optimiser was
+        # handed the wrong input.
+        assert 0 < status["after"]["functions"] <= status["before"]["functions"], (
+            "wasm-opt produced %d functions from %d"
+            % (status["after"]["functions"], status["before"]["functions"]))
         assert not status["after"]["excessive_locals"], "Wasm still exceeds browser local limits"
         node = next((sdk / "node").glob("*/node.exe"))
         # Compiling the entire module checks browser-engine limits, beyond binary validity.

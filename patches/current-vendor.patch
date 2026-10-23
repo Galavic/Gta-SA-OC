@@ -2601,10 +2601,28 @@ index cae581c..5264e4e 100644
          Tex *bound[16];
          for (uint32_t s = 0; s < 16; ++s) {
 diff --git a/host/gpu/webgpu/d3d9_webgpu.cpp b/host/gpu/webgpu/d3d9_webgpu.cpp
-index 03c2df2..411b934 100644
+index 03c2df2..1a3b03f 100644
 --- a/host/gpu/webgpu/d3d9_webgpu.cpp
 +++ b/host/gpu/webgpu/d3d9_webgpu.cpp
-@@ -576,8 +576,8 @@ class WebGpuRenderer final : public D9Backend {
+@@ -524,8 +524,17 @@ class WebGpuRenderer final : public D9Backend {
+     }
+ 
+     // ---- drawing --------------------------------------------------------
++    // RECOMP_D3D9_NOOP_DRAWS: a measurement switch, not a mode. Every draw
++    // returns before the shader, bind-group and upload work, so the difference
++    // in frame rate against an ordinary run is the cost of this draw path and
++    // nothing else. The guest still issues the draws and still runs its
++    // simulation, so the remainder is what is left to attack.
+     void draw(const HostD9Draw &d) override {
+         ++stat_calls_;
++        if (noop_draws_) {
++            ++draws_;
++            return;
++        }
+         if (!ensure_pass(d.target)) {
+             skip("no render pass");
+             return;
+@@ -576,8 +585,8 @@ class WebGpuRenderer final : public D9Backend {
              }
              slot_key = slot_key << 2 | (uint64_t)slots[s];
          }
@@ -2615,7 +2633,7 @@ index 03c2df2..411b934 100644
          if (!vmod || !fmod) {
              skip("untranslated shader");
              return;
-@@ -637,6 +637,10 @@ class WebGpuRenderer final : public D9Backend {
+@@ -637,6 +646,10 @@ class WebGpuRenderer final : public D9Backend {
          ps.bias = (int32_t)std::lround(bias * 16777215.0f);
          ps.slope = slope;
          ps.colors = d9msl::pixel_color_outputs(pp);
@@ -2626,7 +2644,7 @@ index 03c2df2..411b934 100644
          WGPURenderPipeline pso = pipeline(ps, vkey);
          if (!pso) {
              skip("no pipeline");
-@@ -1016,6 +1020,7 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1016,6 +1029,7 @@ class WebGpuRenderer final : public D9Backend {
      // Space in this frame's ring buffers; the data is written at once.
      WGPUBuffer ring_write(const void *bytes, uint64_t size, uint64_t *offset,
                            WGPUBufferUsage usage = WGPUBufferUsage_Uniform) {
@@ -2634,7 +2652,7 @@ index 03c2df2..411b934 100644
          Ring &r = usage == WGPUBufferUsage_Uniform ? uniform_ring_ : vertex_ring_;
          const uint64_t align = usage == WGPUBufferUsage_Uniform ? uniform_align_ : 4;
          const uint64_t aligned = round_up(size, 4);
-@@ -1179,6 +1184,7 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1179,6 +1193,7 @@ class WebGpuRenderer final : public D9Backend {
      void submit() {
          if (!encoder_)
              return;
@@ -2642,7 +2660,7 @@ index 03c2df2..411b934 100644
          end_pass();
          WGPUQuerySet qs = query_set_;
          WGPUBuffer resolve = nullptr, readback = nullptr;
-@@ -1429,14 +1435,15 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1429,14 +1444,15 @@ class WebGpuRenderer final : public D9Backend {
  
      // ---- shaders and pipelines ---------------------------------------------------
      WGPUShaderModule module(uint64_t code_key, const d9sh::Program &p, const d9msl::PixelVariant &v,
@@ -2662,7 +2680,7 @@ index 03c2df2..411b934 100644
          WGPUShaderModule m = nullptr;
          if (ok) {
              WGPUShaderSourceWGSL s = WGPU_SHADER_SOURCE_WGSL_INIT;
-@@ -1606,12 +1613,14 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1606,12 +1622,14 @@ class WebGpuRenderer final : public D9Backend {
          int32_t bias;
          float slope;
          uint32_t colors;
@@ -2678,7 +2696,7 @@ index 03c2df2..411b934 100644
          key = mix(key, (uint64_t)(uintptr_t)p.layout->pipeline);
          for (int i = 0; i < 4; ++i)
              key = mix(key, (uint64_t)pass_formats_[i] + 1000 * (uint64_t)i);
-@@ -1729,8 +1738,10 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1729,8 +1747,10 @@ class WebGpuRenderer final : public D9Backend {
          pd.vertex.bufferCount = p.vl->buffers.size();
          pd.vertex.buffers = p.vl->buffers.data();
          pd.primitive.topology = p.topology;
@@ -2690,7 +2708,7 @@ index 03c2df2..411b934 100644
          pd.primitive.frontFace = WGPUFrontFace_CW;
          pd.primitive.cullMode = p.cull;
          pd.depthStencil = pass_depth_view_ ? &ds : nullptr;
-@@ -1738,6 +1749,7 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1738,6 +1758,7 @@ class WebGpuRenderer final : public D9Backend {
          pd.fragment = &fs;
          WGPURenderPipeline pso = wgpuDeviceCreateRenderPipeline(device_, &pd);
          pipelines_[key] = pso;
@@ -2698,7 +2716,7 @@ index 03c2df2..411b934 100644
          last_pipeline_key_ = key;
          last_pipeline_ = pso;
          return pso;
-@@ -1781,6 +1793,7 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1781,6 +1802,7 @@ class WebGpuRenderer final : public D9Backend {
          d.entryCount = e.size();
          d.entries = e.data();
          WGPUBindGroup g = wgpuDeviceCreateBindGroup(device_, &d);
@@ -2706,7 +2724,7 @@ index 03c2df2..411b934 100644
          groups_[key] = g;
          return g;
      }
-@@ -1953,6 +1966,7 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1953,6 +1975,7 @@ class WebGpuRenderer final : public D9Backend {
          pd.fragment = &fs;
          WGPURenderPipeline pso = wgpuDeviceCreateRenderPipeline(device_, &pd);
          pipelines_[key] = pso;
@@ -2714,7 +2732,7 @@ index 03c2df2..411b934 100644
          return pso;
      }
      WGPURenderPipeline clear_pipeline(bool color, bool depth, bool stencil) {
-@@ -2131,12 +2145,23 @@ class WebGpuRenderer final : public D9Backend {
+@@ -2131,12 +2154,23 @@ class WebGpuRenderer final : public D9Backend {
                  "d3d9 webgpu: frame %llu: %.1f fps, %.0f draws/frame, %zu textures, %zu pipelines",
                  (unsigned long long)presents_, fps, double(draws_ - report_draws_) / double(frames),
                  textures_.size(), pipelines_.size());
@@ -2738,7 +2756,7 @@ index 03c2df2..411b934 100644
      }
  
      struct EncoderState {
-@@ -2206,6 +2231,12 @@ class WebGpuRenderer final : public D9Backend {
+@@ -2206,6 +2240,13 @@ class WebGpuRenderer final : public D9Backend {
      uint64_t draws_ = 0, presents_ = 0, stat_calls_ = 0;
      double report_time_ = 0;
      uint64_t report_frames_ = 0, report_draws_ = 0;
@@ -2748,6 +2766,7 @@ index 03c2df2..411b934 100644
 +    // order of magnitude more than the draw itself.
 +    uint64_t writes_ = 0, new_groups_ = 0, new_pipelines_ = 0, submits_ = 0;
 +    uint64_t report_writes_ = 0, report_groups_ = 0, report_pipelines_ = 0, report_submits_ = 0;
++    const bool noop_draws_ = recomp_env("D3D9_NOOP_DRAWS") != nullptr;
      std::map<std::string, uint64_t> skips_;
  };
  
@@ -2963,18 +2982,97 @@ index 85b7a4b..ec2341a 100644
    timers, calls the host's pump, and yields the scheduler baton, round and
    round until a message matching the filter arrives. The host's pump services
 diff --git a/runtime/cpu.cpp b/runtime/cpu.cpp
-index 06d5e2b..c57d587 100644
+index 06d5e2b..adac143 100644
 --- a/runtime/cpu.cpp
 +++ b/runtime/cpu.cpp
-@@ -20,6 +20,7 @@
+@@ -2,6 +2,7 @@
+ // runtime/": import dispatch, unknown call targets, divide errors
+ // and the handful of privileged or environment-sensing instructions.
+ #include "imports.h"
++#include "perf_stats.h"
+ #include "profile.h"
+ #include "mods_seam.h"
+ #include "intrinsics.h"
+@@ -20,6 +21,8 @@
  #include <stdlib.h>
  #include <string.h>
  #include <map>
++#include <mutex>
 +#include <algorithm>
  #include <vector>
  
  // ---------------------------------------------------------------------------
-@@ -95,9 +96,24 @@ const int recomp_resumable_stacks = RECOMP_RESUMABLE_STACKS;
+@@ -89,15 +92,99 @@ extern "C" {
+ 
+ const int recomp_resumable_stacks = RECOMP_RESUMABLE_STACKS;
+ 
++// Executed guest instructions, incremented once per basic block by the
++// generated code (see translate.py).  Declared in x86.h for the generated code
++// and read through perf_stats::guest_insn_count().
++uint64_t recomp_insn_count = 0;
++
++// RECOMP_TRAMPOLINE_TRACE: what the resumable-stack trampoline re-dispatches.
++//
++// With resumable stacks a guest RET that does not land on the continuation its
++// wasm caller expects unwinds to this loop, and the loop re-enters the guest at
++// the return target. The perf counters put that loop at ~830k iterations per
++// second, which is either a lot of tail calls or one function the loop keeps
++// re-entering; the histogram names which without reading guest code. Off
++// unless RECOMP_TRAMPOLINE_TRACE is set.
++namespace {
++constexpr uint64_t TRAMPOLINE_REPORT_EVERY = 4000000u;
++bool trampoline_trace_on() {
++    static const bool on = recomp_env("TRAMPOLINE_TRACE") != nullptr;
++    return on;
++}
++// A fixed table filled with boot-time noise before the hot target appeared, so
++// this one is unbounded: a diagnostic that drops the entry it is looking for is
++// worse than no diagnostic.
++struct TrampolineSites {
++    std::map<uint32_t, uint64_t> entry;
++    std::map<uint32_t, uint64_t> loop;
++    uint64_t pending = 0;
++};
++TrampolineSites &trampoline_sites() {
++    static TrampolineSites s;
++    return s;
++}
++void trampoline_note(uint32_t target, bool first) {
++    static std::mutex m;
++    std::lock_guard<std::mutex> lock(m);
++    TrampolineSites &s = trampoline_sites();
++    ++(first ? s.entry[target] : s.loop[target]);
++    if (++s.pending < TRAMPOLINE_REPORT_EVERY)
++        return;
++    s.pending = 0;
++    uint64_t entry_total = 0, loop_total = 0;
++    for (auto &kv : s.entry)
++        entry_total += kv.second;
++    for (auto &kv : s.loop)
++        loop_total += kv.second;
++    LOGW("trampoline: %llu entries over %u targets, %llu loop iterations over %u targets",
++         (unsigned long long)entry_total, (unsigned)s.entry.size(),
++         (unsigned long long)loop_total, (unsigned)s.loop.size());
++    // Ten rows: the report must fit in the page's 200-line log ring, or the
++    // totals it exists to report get evicted by its own output.
++    for (int pass = 0; pass < 2; ++pass) {
++        std::map<uint32_t, uint64_t> &m = pass ? s.loop : s.entry;
++        for (int i = 0; i < 10 && !m.empty(); ++i) {
++            auto best = m.begin();
++            for (auto it = m.begin(); it != m.end(); ++it)
++                if (it->second > best->second)
++                    best = it;
++            LOGW("trampoline:   %s target=%08x hits=%llu", pass ? "loop " : "entry",
++                 best->first, (unsigned long long)best->second);
++            best->second = 0;
++        }
++    }
++}
++} // namespace
++
+ // A switched guest stack owns its saved registers and return address. A
+ // generated CALL propagates a mismatched EIP here instead of continuing in
+ // the wrong native caller. All CALL continuations are dispatch entries in
  // this opt-in translation mode; ordinary games retain their existing path.
  void recomp_run(X86 *c, uint32_t target) {
      c->eip = target;
@@ -2982,8 +3080,13 @@ index 06d5e2b..c57d587 100644
 +        recomp_call(c, c->eip);
 +        return;
 +    }
++    bool first_dispatch = true;
      do {
 +        jmp_buf *checkpoint;
++        if (trampoline_trace_on()) {
++            trampoline_note(c->eip, first_dispatch);
++            first_dispatch = false;
++        }
 +        while ((checkpoint = recomp_seh_resume_frame(c)) != nullptr) {
 +            if (setjmp(*checkpoint)) {
 +                recomp_seh_land(c);
@@ -3000,7 +3103,7 @@ index 06d5e2b..c57d587 100644
  }
  
  void recomp_module_register(const RecompModule *m) {
-@@ -185,6 +201,8 @@ static void return_as_if_ret(X86 *c) {
+@@ -185,6 +272,8 @@ static void return_as_if_ret(X86 *c) {
      c->r[R_EAX] = 0;
  }
  
@@ -3009,7 +3112,7 @@ index 06d5e2b..c57d587 100644
  // An indirect call whose target landed in the trampoline range.
  void recomp_shim_call(X86 *c, uint32_t target) {
      if (imports_dispatch(c, target))
-@@ -209,8 +227,18 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
+@@ -209,8 +298,18 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
      // call through a null pointer faults at the call, and there are no
      // instructions at it to interpret. Reading them would be the very
      // dereference this page exists to refuse.
@@ -3029,7 +3132,7 @@ index 06d5e2b..c57d587 100644
      if (target == GUEST_RETURN_SENTINEL) {
          recomp_callback_return(c);
          // With no matching live callback this is an ordinary undeliverable
-@@ -251,16 +279,33 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
+@@ -251,16 +350,33 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
      // object in a register and reached this target through the object's vtable,
      // so a null target beside a plausible object means the vtable slot is
      // empty, while a wild object means the pointer never was one.
@@ -3067,7 +3170,7 @@ index 06d5e2b..c57d587 100644
      return_as_if_ret(c);
  }
  
-@@ -326,13 +371,11 @@ void recomp_null_access(uint32_t addr, int write) {
+@@ -326,13 +442,11 @@ void recomp_null_access(uint32_t addr, int write) {
      abort();
  }
  
@@ -3085,7 +3188,7 @@ index 06d5e2b..c57d587 100644
      abort();
  }
  
-@@ -411,6 +454,25 @@ void recomp_int(X86 *c, uint32_t vec) {
+@@ -411,6 +525,25 @@ void recomp_int(X86 *c, uint32_t vec) {
      LOGW("INT %02x at EIP %08x: no interrupt handling, continuing", vec, c->eip);
  }
  
@@ -3111,8 +3214,16 @@ index 06d5e2b..c57d587 100644
  // ---------------------------------------------------------------------------
  // _setjmp / _longjmp intrinsics. See intrinsics.h for the two substitution
  // forms and why the two-call one is correct.
+@@ -480,3 +613,7 @@ void recomp_longjmp(X86 *c) {
+ }
+ 
+ } // extern "C"
++
++namespace perf_stats {
++uint64_t guest_insn_count(void) { return recomp_insn_count; }
++} // namespace perf_stats
 diff --git a/runtime/imports.cpp b/runtime/imports.cpp
-index ec1d2b1..0fef5b0 100644
+index ec1d2b1..eca3ffb 100644
 --- a/runtime/imports.cpp
 +++ b/runtime/imports.cpp
 @@ -1,8 +1,10 @@
@@ -3126,11 +3237,12 @@ index ec1d2b1..0fef5b0 100644
  #include "profile.h"
  #include "mods_seam.h"
  
-@@ -11,11 +13,14 @@ void sched_checkpoint();
+@@ -11,11 +13,15 @@ void sched_checkpoint();
  #include "memory.h"
  
  #include <map>
 +#include <deque>
++#include <mutex>
  #include <set>
  #include <cctype>
 +#include <cstring>
@@ -3141,7 +3253,7 @@ index ec1d2b1..0fef5b0 100644
  
  namespace {
  
-@@ -23,11 +28,17 @@ struct Tramp {
+@@ -23,11 +29,17 @@ struct Tramp {
      std::string dll;
      std::string name;
      std::string desc; // "DLL!name", stable storage for imports_describe
@@ -3159,7 +3271,7 @@ index ec1d2b1..0fef5b0 100644
  };
  
  // Imports whose callers have just set up state the call reads back, with no
-@@ -49,6 +60,13 @@ std::map<std::string, uint32_t> &index() {
+@@ -49,6 +61,13 @@ std::map<std::string, uint32_t> &index() {
      static auto *m = new std::map<std::string, uint32_t>();
      return *m;
  }
@@ -3173,7 +3285,7 @@ index ec1d2b1..0fef5b0 100644
  std::map<std::string, ImportShim> &registry() {
      static auto *m = new std::map<std::string, ImportShim>();
      return *m;
-@@ -129,6 +147,11 @@ bool imports_has_dll(const char *dll_lower) {
+@@ -129,6 +148,11 @@ bool imports_has_dll(const char *dll_lower) {
      return registered_dlls().count(lower_dll(dll_lower)) != 0;
  }
  
@@ -3185,7 +3297,7 @@ index ec1d2b1..0fef5b0 100644
  uint32_t imports_alloc_trampoline(const char *dll, const char *name, void (*fn)(X86 *),
                                    uint8_t argc_stdcall) {
      std::string k = key_of(dll, name);
-@@ -165,6 +188,12 @@ uint32_t imports_alloc_trampoline(const char *dll, const char *name, void (*fn)(
+@@ -165,6 +189,12 @@ uint32_t imports_alloc_trampoline(const char *dll, const char *name, void (*fn)(
          LOGW("imports: trampoline space exhausted (%u entries) for %s", idx, t.desc.c_str());
          return 0;
      }
@@ -3198,7 +3310,7 @@ index ec1d2b1..0fef5b0 100644
      tramps().push_back(t);
      index()[k] = idx;
      return TRAMP_BASE + TRAMP_STRIDE * idx;
-@@ -253,7 +282,7 @@ const char *imports_describe(uint32_t target) {
+@@ -253,7 +283,7 @@ const char *imports_describe(uint32_t target) {
      uint32_t idx = (target - TRAMP_BASE) / TRAMP_STRIDE;
      if (idx >= tramps().size())
          return nullptr;
@@ -3207,7 +3319,7 @@ index ec1d2b1..0fef5b0 100644
  }
  
  uint8_t imports_argc(uint32_t trampoline) {
-@@ -388,6 +417,129 @@ ImportCallObserver imports_set_call_observer_get(void) {
+@@ -388,6 +418,129 @@ ImportCallObserver imports_set_call_observer_get(void) {
      return g_call_observer;
  }
  
@@ -3337,7 +3449,7 @@ index ec1d2b1..0fef5b0 100644
  // Dispatch a guest import trampoline at a scheduler checkpoint.
  // Copy dispatch metadata before calling a shim, then restore EIP/ESP according to its calling convention.
  namespace {
-@@ -411,13 +563,37 @@ bool imports_dispatch(X86 *c, uint32_t target) {
+@@ -411,13 +564,37 @@ bool imports_dispatch(X86 *c, uint32_t target) {
      // runs before the shim so the guest state is a consistent call boundary -
      // except at an atomic import, and inside a sched_atomic_enter stretch.
      uint32_t idx = (target - TRAMP_BASE) / TRAMP_STRIDE;
@@ -3377,7 +3489,7 @@ index ec1d2b1..0fef5b0 100644
          c->eip = rd32(c->r[R_ESP]);
          c->r[R_ESP] += 4;
          set_eax(c, 0);
-@@ -428,16 +604,32 @@ bool imports_dispatch(X86 *c, uint32_t target) {
+@@ -428,16 +605,32 @@ bool imports_dispatch(X86 *c, uint32_t target) {
      // reference to the element across the call.
      void (*fn)(X86 *) = tramps()[idx].fn;
      uint8_t argc = tramps()[idx].argc;
@@ -3417,7 +3529,7 @@ index ec1d2b1..0fef5b0 100644
  
      // The arguments as they are NOW, before the shim runs: a stdcall shim pops
      // them, so after the call they are gone and this is the only point they
-@@ -469,25 +661,33 @@ bool imports_dispatch(X86 *c, uint32_t target) {
+@@ -469,25 +662,33 @@ bool imports_dispatch(X86 *c, uint32_t target) {
      // Read after the shim ran, so the pointer is into the table as it is now.
      if (g_return_observer)
          g_return_observer(desc, c->r[R_EAX]);
@@ -3459,7 +3571,7 @@ index ec1d2b1..0fef5b0 100644
      return true;
  }
  
-@@ -511,6 +711,8 @@ thread_local Callbacks callbacks;
+@@ -511,6 +712,8 @@ thread_local Callbacks callbacks;
  } // namespace
  
  uint32_t recomp_callback_depth(void) {
@@ -3468,7 +3580,61 @@ index ec1d2b1..0fef5b0 100644
      return (uint32_t)callbacks.stack.size();
  }
  
-@@ -598,4 +800,5 @@ void imports_init() {
+@@ -544,7 +747,53 @@ void recomp_callback_return(X86 *c) {
+     longjmp(call->env, 1);
+ }
+ 
++// RECOMP_GUEST_CALL_TRACE: which guest entry points the shims call back into,
++// and how often. The perf counters put recomp_run at roughly 750k entries per
++// second, and every entry costs a heap allocation, a setjmp and two SEH
++// passes; the call sites are a fixed list, so the histogram names the caller
++// without reading guest code. Off unless RECOMP_GUEST_CALL_TRACE is set.
++namespace {
++constexpr int GUEST_CALL_SITES = 16;
++constexpr uint64_t GUEST_CALL_REPORT_EVERY = 2000000u;
++bool guest_call_trace_on() {
++    static const bool on = recomp_env("GUEST_CALL_TRACE") != nullptr;
++    return on;
++}
++void guest_call_note(uint32_t fn, uint32_t nargs) {
++    static std::mutex m;
++    static uint32_t site_fn[GUEST_CALL_SITES];
++    static uint32_t site_args[GUEST_CALL_SITES];
++    static uint64_t site_hits[GUEST_CALL_SITES];
++    static int used = 0;
++    static uint64_t pending = 0;
++    std::lock_guard<std::mutex> lock(m);
++    int slot = -1;
++    for (int i = 0; i < used; ++i)
++        if (site_fn[i] == fn) {
++            slot = i;
++            break;
++        }
++    if (slot < 0 && used < GUEST_CALL_SITES) {
++        slot = used++;
++        site_fn[slot] = fn;
++        site_args[slot] = (uint32_t)nargs;
++        LOGW("guest_call: new fn=%08x nargs=%u", fn, (unsigned)nargs);
++    }
++    if (slot >= 0)
++        ++site_hits[slot];
++    if (++pending < GUEST_CALL_REPORT_EVERY)
++        return;
++    pending = 0;
++    LOGW("guest_call: %d site(s), cumulative", used);
++    for (int i = 0; i < used; ++i)
++        LOGW("guest_call:   fn=%08x nargs=%u hits=%llu", site_fn[i], (unsigned)site_args[i],
++             (unsigned long long)site_hits[i]);
++}
++} // namespace
++
+ uint32_t guest_call(X86 *c, uint32_t fn, const uint32_t *args, int nargs) {
++    if (guest_call_trace_on())
++        guest_call_note(fn, (uint32_t)nargs);
+     Callback *call = new Callback{};
+     call->cpu = c;
+     call->saved_esp = c->r[R_ESP];
+@@ -598,4 +847,5 @@ void imports_init() {
      gdi::register_text();
      extern void msimg32_register();
      msimg32_register();
@@ -4336,7 +4502,7 @@ index 0cefcbe..8e0159e 100644
  const char *interp_last_error(void);
  
 diff --git a/runtime/kernel32.cpp b/runtime/kernel32.cpp
-index 529d27d..3ea03c0 100644
+index 529d27d..54b1451 100644
 --- a/runtime/kernel32.cpp
 +++ b/runtime/kernel32.cpp
 @@ -1,4 +1,5 @@
@@ -4652,7 +4818,132 @@ index 529d27d..3ea03c0 100644
  }
  void k_GetTickCount(X86 *c) {
      const uint32_t draw_deadline = native_frame_clock(c);
-@@ -1728,6 +1913,26 @@ void k_InitializeCriticalSection(X86 *c) {
+@@ -1685,11 +1870,123 @@ void k_QueryPerformanceFrequency(X86 *c) {
+     set_eax(c, 1);
+ }
+ 
++// RECOMP_QPC_CALLERS: which guest sites read the performance counter, and how
++// often. The frame costs about 41 ms and the runtime counts ~24k counter reads
++// per frame, which is the shape of a spin, but a spin site cannot be named by
++// reading generated code: a wrong address does not fail, it silently changes
++// game pacing. This keys each read on the guest return address the CALL pushed
++// so the hot sites name themselves.
++//
++// Off unless RECOMP_QPC_CALLERS is set; the off path is one static bool.
++namespace {
++constexpr int QPC_CALLER_SITES = 12;
++constexpr uint32_t QPC_CALLER_REPORT_EVERY = 4000000u;
++bool qpc_callers_on() {
++    static const bool on = recomp_env("QPC_CALLERS") != nullptr;
++    return on;
++}
++void qpc_note_caller(uint32_t ret) {
++    static std::mutex m;
++    static uint32_t site_ret[QPC_CALLER_SITES];
++    static uint32_t site_hits[QPC_CALLER_SITES];
++    static int used = 0;
++    static uint32_t pending = 0;
++    std::lock_guard<std::mutex> lock(m);
++    int slot = -1;
++    for (int i = 0; i < used; ++i)
++        if (site_ret[i] == ret) {
++            slot = i;
++            break;
++        }
++    if (slot < 0 && used < QPC_CALLER_SITES) {
++        slot = used++;
++        site_ret[slot] = ret;
++        LOGW("qpc callers: new site ret=%08x", ret);
++    }
++    if (slot >= 0)
++        ++site_hits[slot];
++    if (++pending < QPC_CALLER_REPORT_EVERY)
++        return;
++    pending = 0;
++    LOGW("qpc callers: %d site(s), cumulative", used);
++    for (int i = 0; i < used; ++i)
++        LOGW("qpc callers:   ret=%08x hits=%u", site_ret[i], site_hits[i]);
++}
++} // namespace
++
++// RECOMP_QPC_SCALE: diagnostic multiplier on the performance counter the guest
++// reads.  A frame that is limited by elapsed time shortens by exactly this
++// factor, because the guest reaches its deadline in less real time; a frame
++// that is limited by how fast the guest runs does not move at all, because the
++// same work still has to be executed.  That difference is the only reliable
++// way to tell a frame limiter apart from a slow emulator.  Off unless set.
++double qpc_scale() {
++    static const double scale = [] {
++        const char *v = recomp_env("QPC_SCALE");
++        return v ? atof(v) : 1.0;
++    }();
++    return scale;
++}
++
++// RECOMP_LIMITER_PROBE: measure the guest's pacing wait directly instead of
++// inferring it.  The limiter polls the counter thousands of times in a row, so
++// a burst of closely spaced reads is the wait itself; the gap that ends a burst
++// is the guest getting on with the frame.  Reporting the burst length and the
++// reads it took says how much of every frame is spent waiting, which is the one
++// number that decides whether removing the wait is worth anything.
++void limiter_probe(uint64_t ticks) {
++    static const bool on = recomp_env("LIMITER_PROBE") != nullptr;
++    if (!on)
++        return;
++    using Clock = std::chrono::steady_clock;
++    static int64_t burst_start = 0;
++    static int64_t burst_end = 0;
++    static uint64_t burst_reads = 0;
++    static int64_t reported_at = 0;
++    static uint64_t bursts = 0, wait_ns = 0;
++    const int64_t now = Clock::now().time_since_epoch().count();
++    if (burst_end && now - burst_end > 1000000) {
++        const int64_t span = burst_end - burst_start;
++        if (burst_reads >= 100 && span > 1000000) {
++            ++bursts;
++            wait_ns += span;
++        }
++        burst_reads = 0;
++        burst_start = 0;
++    }
++    if (!burst_start)
++        burst_start = now;
++    burst_end = now;
++    ++burst_reads;
++    if (now - reported_at < 1000000000)
++        return;
++    const double secs = reported_at ? (double)(now - reported_at) / 1e9 : 1.0;
++    LOGW("limiter: bursts=%.0f/s wait=%.0f%% last_burst_reads=%llu "
++         "freq=%u base=%u epoch=%u now_ms=%u",
++         (double)bursts / secs, 100.0 * (double)wait_ns / (secs * 1e9),
++         (unsigned long long)burst_reads, rd32(0xb7cb2cu), rd32(0xb7cb38u),
++         rd32(0xb72ca8u), (uint32_t)(ticks / 1000ull));
++    bursts = 0;
++    wait_ns = 0;
++    reported_at = now;
++}
++
+ void k_QueryPerformanceCounter(X86 *c) {
++    if (qpc_callers_on()) {
++        // The site that matters is not the helper but its caller: the frame
++        // limiter spins by calling FUN_00561a80 over and over, so naming the
++        // helper names the same address every time.  That helper reads the
++        // counter from a known frame (SUB ESP,8; LEA; PUSH; CALL), which puts
++        // its own caller's return address at [esp+16].  Only trust the offset
++        // when the immediate return address is the one that helper pushes.
++        const uint32_t ret = rd32(c->r[R_ESP]);
++        qpc_note_caller(ret == 0x561a8eu ? rd32(c->r[R_ESP] + 16) : ret);
++    }
+     host_note_cadence("QueryPerformanceCounter");
+     uint32_t p = arg(c, 0);
+     if (p) {
+-        uint64_t ticks = (uint64_t)host_millis() * 1000ull;
++        uint64_t ticks = (uint64_t)((double)host_millis() * 1000.0 * qpc_scale());
++        limiter_probe(ticks);
+         wr32(p, (uint32_t)ticks);
+         wr32(p + 4, (uint32_t)(ticks >> 32));
+     }
+@@ -1728,6 +2025,26 @@ void k_InitializeCriticalSection(X86 *c) {
      }
      set_eax(c, 0);
  }
@@ -4679,7 +4970,7 @@ index 529d27d..3ea03c0 100644
  void k_EnterCriticalSection(X86 *c) {
      imports_call_leaves_surfaces();
      sched_enter_critsec(arg(c, 0));
-@@ -1775,6 +1980,11 @@ void k_ReleaseSemaphore(X86 *c) {
+@@ -1775,6 +2092,11 @@ void k_ReleaseSemaphore(X86 *c) {
      }
      o->count += n;
      set_eax(c, 1);
@@ -4691,7 +4982,7 @@ index 529d27d..3ea03c0 100644
  }
  
  void k_CreateEventA(X86 *c) {
-@@ -1822,6 +2032,12 @@ void k_WaitForSingleObject(X86 *c) {
+@@ -1822,6 +2144,12 @@ void k_WaitForSingleObject(X86 *c) {
      set_eax(c, sched_wait_objects(&h, 1, false, arg(c, 1)));
  }
  
@@ -4704,7 +4995,7 @@ index 529d27d..3ea03c0 100644
  void k_WaitForMultipleObjects(X86 *c) {
      wait_multiple_objects(c);
  }
-@@ -1848,9 +2064,10 @@ void k_WaitForMultipleObjects(X86 *c) {
+@@ -1848,9 +2176,10 @@ void k_WaitForMultipleObjects(X86 *c) {
  // The baton moves only where Windows would have descheduled the running
  // thread anyway: a wait that cannot be satisfied yet, Sleep, and the status
  // poll a spin loop makes (GetExitCodeThread).  A guest that makes no such
@@ -4718,7 +5009,7 @@ index 529d27d..3ea03c0 100644
  //
  //   RECOMP_CREATETHREAD=skip   record a thread without running it
  //   RECOMP_CREATETHREAD=sync   run the body to completion in CreateThread
-@@ -2196,7 +2413,10 @@ void thread_finish_exit_process();
+@@ -2196,7 +2525,10 @@ void thread_finish_exit_process();
  // across a host slice, so the host may call back into the runtime - signalling
  // a guest event, most obviously - without deadlocking against the scheduler.
  void sched_wait_locked(size_t me, double until, double max_slice) {
@@ -4730,7 +5021,7 @@ index 529d27d..3ea03c0 100644
      if (until && until <= now)
          return;
  
-@@ -2213,10 +2433,13 @@ void sched_wait_locked(size_t me, double until, double max_slice) {
+@@ -2213,10 +2545,13 @@ void sched_wait_locked(size_t me, double until, double max_slice) {
          // above all - until it holds the baton itself.
          g_in_idle_slice = true;
          // AppKit's event wait cannot hear g_sched_cv. Sleeping there for each
@@ -4745,7 +5036,7 @@ index 529d27d..3ea03c0 100644
          g_in_idle_slice = false;
          g_sched_m.lock();
          if (!awaiting_baton || g_baton == me)
-@@ -2225,14 +2448,17 @@ void sched_wait_locked(size_t me, double until, double max_slice) {
+@@ -2225,14 +2560,17 @@ void sched_wait_locked(size_t me, double until, double max_slice) {
  
      // The host has been serviced, or none is installed. Sleep interruptibly,
      // capped so host events and deadlines are still re-examined.
@@ -4764,7 +5055,7 @@ index 529d27d..3ea03c0 100644
  }
  
  // ---------------------------------------------------------------------------
-@@ -2258,6 +2484,7 @@ Handoff g_handoffs[16];
+@@ -2258,6 +2596,7 @@ Handoff g_handoffs[16];
  uint32_t g_handoff_count = 0;
  
  void record_handoff_locked(size_t from, size_t to, const char *why) {
@@ -4772,7 +5063,7 @@ index 529d27d..3ea03c0 100644
      g_handoffs[g_handoff_count % 16] = Handoff{from, to, why};
      ++g_handoff_count;
  }
-@@ -2698,8 +2925,15 @@ bool guest_yield() {
+@@ -2698,8 +3037,15 @@ bool guest_yield() {
  // call: the frame limiter spins on GetTickCount and would otherwise starve the
  // DirectInput service threads indefinitely, expired 200 ms waits and all.  Any
  // call into the runtime is a checkpoint, and a thread yields at most once per
@@ -4790,7 +5081,7 @@ index 529d27d..3ea03c0 100644
  
  } // namespace
  
-@@ -2789,6 +3023,25 @@ void sched_checkpoint() {
+@@ -2789,6 +3135,25 @@ void sched_checkpoint() {
      guest_yield();
  }
  
@@ -4816,7 +5107,7 @@ index 529d27d..3ea03c0 100644
  namespace {
  
  // A shim that changed an object's state calls this so a thread blocked on it
-@@ -3373,7 +3626,16 @@ void k_SetThreadPriority(X86 *c) {
+@@ -3373,7 +3738,16 @@ void k_SetThreadPriority(X86 *c) {
  }
  
  void k_ExitProcess(X86 *c) {
@@ -4834,7 +5125,7 @@ index 529d27d..3ea03c0 100644
      if (request_process_exit(arg(c, 0)))
          return; // never returns
      publish_process_exit(arg(c, 0));
-@@ -3594,6 +3856,14 @@ void k_lstrlenA(X86 *c) {
+@@ -3594,6 +3968,14 @@ void k_lstrlenA(X86 *c) {
      set_eax(c, (uint32_t)gm_str(arg(c, 0)).size());
  }
  
@@ -4849,7 +5140,7 @@ index 529d27d..3ea03c0 100644
  void k_lstrcpyA(X86 *c) {
      uint32_t d = arg(c, 0);
      std::string s = gm_str(arg(c, 1));
-@@ -3943,6 +4213,86 @@ void k_GetLocaleInfoW(X86 *c) {
+@@ -3943,6 +4325,86 @@ void k_GetLocaleInfoW(X86 *c) {
  
  } // namespace
  
@@ -4936,7 +5227,7 @@ index 529d27d..3ea03c0 100644
  // ---------------------------------------------------------------------------
  // The run thread's own ending.
  //
-@@ -4218,6 +4568,7 @@ void create_file_named(X86 *c, const std::string &name) {
+@@ -4218,6 +4680,7 @@ void create_file_named(X86 *c, const std::string &name) {
      uint32_t h = handle_new(H_FILE);
      handles()[h].fd = fd;
      handles()[h].path = host;
@@ -4944,7 +5235,7 @@ index 529d27d..3ea03c0 100644
      if (deferred) {
          handles()[h].write_pending = true;
          handles()[h].write_flags = wanted;
-@@ -4849,7 +5200,7 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4849,7 +5312,7 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "GetTimeFormatA", 6, nullptr},
      {"KERNEL32.dll", "GetDiskFreeSpaceExA", 4, nullptr},
      {"KERNEL32.dll", "GetLongPathNameA", 3, nullptr},
@@ -4953,7 +5244,7 @@ index 529d27d..3ea03c0 100644
      {"KERNEL32.dll", "HeapValidate", 3, nullptr},
      {"KERNEL32.dll", "QueueUserAPC", 3, nullptr},
      {"KERNEL32.dll", "SetConsoleCtrlHandler", 2, nullptr},
-@@ -4864,6 +5215,9 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4864,6 +5327,9 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "InterlockedDecrement", 1, k_InterlockedDecrement},
      {"KERNEL32.dll", "InterlockedExchange", 2, k_InterlockedExchange},
      {"KERNEL32.dll", "InitializeCriticalSection", 1, k_InitializeCriticalSection},
@@ -4963,7 +5254,7 @@ index 529d27d..3ea03c0 100644
      {"KERNEL32.dll", "EnterCriticalSection", 1, k_EnterCriticalSection},
      {"KERNEL32.dll", "LeaveCriticalSection", 1, k_LeaveCriticalSection},
      {"KERNEL32.dll", "DeleteCriticalSection", 1, k_DeleteCriticalSection},
-@@ -4874,6 +5228,7 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4874,6 +5340,7 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "ResetEvent", 1, k_ResetEvent},
      {"KERNEL32.dll", "CreateMutexA", 3, k_CreateMutexA},
      {"KERNEL32.dll", "WaitForSingleObject", 2, k_WaitForSingleObject},
@@ -4971,7 +5262,7 @@ index 529d27d..3ea03c0 100644
      {"KERNEL32.dll", "WaitForMultipleObjects", 4, k_WaitForMultipleObjects},
      // threads and process exit
      {"KERNEL32.dll", "CreateThread", 6, k_CreateThread},
-@@ -4898,6 +5253,7 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4898,6 +5365,7 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "RtlUnwind", 4, k_RtlUnwind},
      // strings, code pages, locale
      {"KERNEL32.dll", "lstrlenA", 1, k_lstrlenA},
@@ -5323,7 +5614,7 @@ index 3c955d7..3c0dbb1 100644
      {"WS2_32.dll", "WSACleanup", 0, nullptr},
      {"WS2_32.dll", "WSAGetLastError", 0, nullptr},
 diff --git a/runtime/profile.cpp b/runtime/profile.cpp
-index 9c58dda..299f4c4 100644
+index 9c58dda..edd0967 100644
 --- a/runtime/profile.cpp
 +++ b/runtime/profile.cpp
 @@ -22,6 +22,8 @@ namespace {
@@ -5335,7 +5626,7 @@ index 9c58dda..299f4c4 100644
  };
  // Intentionally process-lifetime: a sampler snapshot can outlive thread exit.
  thread_local ThreadState *local = nullptr;
-@@ -72,18 +74,61 @@ void start() {
+@@ -72,18 +74,69 @@ void start() {
          state().sampler = std::thread([] {
              auto &s = state();
              auto next = std::chrono::steady_clock::now();
@@ -5388,7 +5679,15 @@ index 9c58dda..299f4c4 100644
 +                            "profile live: %lu ms window, %llu samples, %llu idle; "
 +                            "shims/host waits are attributed to their caller\n",
 +                            interval, (unsigned long long)total, (unsigned long long)idle);
-+                    for (size_t i = 0; i < rows.size() && i < 3; ++i) {
++                    // The live window's default depth of three names the leaf but
++                    // hides the shape; a round that needs to place a cost inside a
++                    // spread of many functions asks for more rows.
++                    static const size_t configured_rows = [] {
++                        const char *v = recomp_env("PROFILE_ROWS");
++                        unsigned long n = v ? strtoul(v, nullptr, 10) : 0;
++                        return (size_t)(n < 1 || n > 200 ? 3 : n);
++                    }();
++                    for (size_t i = 0; i < rows.size() && i < configured_rows; ++i) {
 +                        const char *name = recomp_profile_name(rows[i].index);
 +                        fprintf(stderr, "profile live: %s index=%u samples=%llu\n",
 +                                name ? name : "unresolved", rows[i].index,
@@ -5402,7 +5701,7 @@ index 9c58dda..299f4c4 100644
                  if (now > next + std::chrono::milliseconds(1))
                      next = now;
              }
-@@ -107,10 +152,26 @@ extern "C" void recomp_profile_push(uint32_t index) {
+@@ -107,10 +160,26 @@ extern "C" void recomp_profile_push(uint32_t index) {
          return;
      if (!local) {
          local = new ThreadState;
@@ -6475,10 +6774,43 @@ index 2ef5486..f9af73e 100644
      // host layer can reach them.
      {"USER32.dll", "SendMessageA", 4, u_SendMessageA},
 diff --git a/runtime/x86.h b/runtime/x86.h
-index 4dc8955..93773a7 100644
+index 4dc8955..14abc81 100644
 --- a/runtime/x86.h
 +++ b/runtime/x86.h
-@@ -344,6 +344,16 @@ static inline float xmm_f32(const X86 *c, int reg) {
+@@ -23,6 +23,24 @@
+ #define M_LN2 0.693147180559945309417
+ #endif
+ 
++/* The guest call model is fixed when game.toml is configured, and the
++ * generated code asks about it on every RET.  As a runtime load that answer
++ * keeps the whole non-resumable return path - four calls that never run - in
++ * every translated function's instruction stream, which is most of what a RET
++ * costs.  Where the generated config is visible the answer is a constant and
++ * the dead path disappears; the variable remains for translation units that
++ * never see that config. */
++#if defined(__has_include)
++#if __has_include("game_config.h")
++#include "game_config.h"
++#endif
++#endif
++#if defined(RECOMP_RESUMABLE_STACKS)
++#define RECOMP_RETURNS_ARE_RESUMABLE (RECOMP_RESUMABLE_STACKS != 0)
++#else
++#define RECOMP_RETURNS_ARE_RESUMABLE recomp_resumable_stacks
++#endif
++
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+@@ -160,7 +178,6 @@ static inline void recomp_dirty(uint32_t a, uint32_t n) {
+         }
+     }
+ }
+-
+ static inline void recomp_watch(uint32_t a, uint32_t n, uint64_t v) {
+     if (g_watch_len != 0 && a < g_watch_base + g_watch_len && g_watch_base < a + n)
+         recomp_watch_hit(a, n, v);
+@@ -344,6 +361,16 @@ static inline float xmm_f32(const X86 *c, int reg) {
  static inline void xmm_set_f32(X86 *c, int reg, float v) {
      memcpy(&c->xmm[reg][0], &v, 4);
  }
@@ -6495,7 +6827,20 @@ index 4dc8955..93773a7 100644
  
  /* SQRTSD and SQRTSS of a negative operand return the "indefinite" quiet NaN,
   * which has its sign bit set; the host's sqrt returns a positive NaN and sets
-@@ -418,6 +428,14 @@ void recomp_profile_pop(void);
+@@ -402,6 +429,12 @@ void recomp_call(X86 *c, uint32_t target);
+ void recomp_run(X86 *c, uint32_t target);
+ extern const int recomp_resumable_stacks;
+ 
++/* Executed guest instructions, counted once per basic block by the generated
++ * code.  A rate against a known frame count is the only honest denominator for
++ * "how much work is a frame": the static census says what the translation
++ * looks like, never how much of it runs.  One add per basic block. */
++extern uint64_t recomp_insn_count;
++
+ /* RECOMP_WATCH_FRAME=1 reports a guest call that returns with EBP changed.
+  * A routine that loses the frame pointer corrupts nothing and crashes nowhere:
+  * its caller simply reads its locals from somewhere else afterwards, and the
+@@ -418,6 +451,14 @@ void recomp_profile_pop(void);
   * target), then the import shim range.  Anything else aborts. */
  void recomp_jump(X86 *c, uint32_t target);
  
@@ -6510,7 +6855,7 @@ index 4dc8955..93773a7 100644
  /* Indirect JMP whose target is neither a block entry nor a shim.  Aborts with
   * the target and the jumping instruction's address. */
  void recomp_unknown_jump(X86 *c, uint32_t target);
-@@ -432,6 +450,7 @@ void recomp_unknown_call(X86 *c, uint32_t target);
+@@ -432,6 +473,7 @@ void recomp_unknown_call(X86 *c, uint32_t target);
  /* A popped callback sentinel can bypass translated callers. The innermost
   * guest_call owns the live host return checkpoint and its guest stack range. */
  void recomp_callback_return(X86 *c);
@@ -6518,6 +6863,15 @@ index 4dc8955..93773a7 100644
  uint32_t recomp_callback_depth(void);
  void recomp_callback_truncate(uint32_t depth);
  void recomp_callback_reset(X86 *c);
+@@ -530,7 +572,7 @@ static inline void recomp_return(X86 *c) {
+         recomp_callback_return(c);
+         return;
+     }
+-    if (recomp_resumable_stacks)
++    if (RECOMP_RETURNS_ARE_RESUMABLE)
+         return;
+     if (recomp_is_call_return(c->eip) || recomp_module_is_call_return(c->eip))
+         return;
 diff --git a/tools/build.py b/tools/build.py
 index 6c3d908..b972cbc 100644
 --- a/tools/build.py
@@ -7191,7 +7545,7 @@ index e31c835..7c0fbff 100644
                                                   ("ESP", True, False)])
  def test_frame_establishment_through_edx_needs_a_zero_base(reg, zeroed, checkpoint):
 diff --git a/tools/recomp/translate.py b/tools/recomp/translate.py
-index 944f2ca..97abd6f 100644
+index 944f2ca..88e88f1 100644
 --- a/tools/recomp/translate.py
 +++ b/tools/recomp/translate.py
 @@ -18,13 +18,15 @@ are enabled by the native host, never by the baseline/differential build.
@@ -7789,7 +8143,27 @@ index 944f2ca..97abd6f 100644
                  out.add(target)
      return out
  
-@@ -1734,6 +1993,9 @@ class Translator(object):
+@@ -1702,6 +1961,19 @@ class Translator(object):
+     def __init__(self, image, func_addrs, opts):
+         self.image = image
+         self.func_addrs = func_addrs      # set of all known function entry points
++        # Flags each entry point reads before writing any, filled in by
++        # compute_flag_entry() before emission.  Empty means "assume nothing",
++        # which is the straight-line liveness's conservative behaviour.
++        self.flag_entry = {}
++        self.flag_entry_ready = False
++        # Flags that may be live when a function returns, decided by its call
++        # sites rather than by its body.  Filled in with flag_entry.
++        self.flag_ret = {}
++        # Set by verify_flag_defs: a flag read that the analysis did not
++        # guarantee was written.  Non-zero means the generated code is wrong,
++        # so a run that sees it refuses the image rather than shipping it.
++        self.flag_verify_bad = 0
++        self.flag_verify_reported = []
+         self.opts = opts
+         self.stats = defaultdict(int)
+         # Instructions replaced by a trap because this translator cannot model
+@@ -1734,6 +2006,9 @@ class Translator(object):
          #: A CALL to one ends its block: the emitter leaves a trap in place of
          #: the fall-through instead of a jump onto the padding that follows.
          self.noreturn_callees = set()
@@ -7799,7 +8173,7 @@ index 944f2ca..97abd6f 100644
          self.seh_helpers = set()
          #: Does a pointer to this address name data rather than code? The
          #: driver installs its judgement before the first translation pass
-@@ -1796,7 +2058,21 @@ class Translator(object):
+@@ -1796,7 +2071,21 @@ class Translator(object):
          if ins.mnem != "CALL":
              return False
          t = self.branch_target(ins)
@@ -7822,7 +8196,7 @@ index 944f2ca..97abd6f 100644
  
      @staticmethod
      def closed_noreturn_loop(fn):
-@@ -1918,7 +2194,7 @@ class Translator(object):
+@@ -1918,7 +2207,7 @@ class Translator(object):
              writes = set()
              # Read-only instructions and calls do not explicitly redefine a
              # saved return register. All unmodelled forms invalidate the proof.
@@ -7831,7 +8205,7 @@ index 944f2ca..97abd6f 100644
                          "PAUSE", "CLC", "STC", "CMC", "CLD", "STD", "SAHF", "CLI", "STI"}
              dest_write = {"MOV", "MOVZX", "MOVSX", "LEA", "POP", "ADD", "ADC", "SUB",
                            "SBB", "AND", "OR", "XOR", "INC", "DEC", "NEG", "NOT", "SHL",
-@@ -1944,6 +2220,9 @@ class Translator(object):
+@@ -1944,6 +2233,9 @@ class Translator(object):
                  writes.add(R_EDX)
              elif m in ("CBW", "CWDE", "LAHF", "XLAT"):
                  writes.add(R_EAX)
@@ -7841,7 +8215,7 @@ index 944f2ca..97abd6f 100644
              else:
                  return unknown
              if m == "IMUL" and len(ops) == 1:
-@@ -1956,12 +2235,16 @@ class Translator(object):
+@@ -1956,12 +2248,16 @@ class Translator(object):
                  result.add(ops[0].reg)
              adjustment = None
              if m in ("PUSH", "POP"):
@@ -7859,16 +8233,24 @@ index 944f2ca..97abd6f 100644
              elif (m in ("ADD", "SUB") and ops[0].kind == "reg"
                    and ops[0].reg == R_ESP and ops[0].size == 32 and ops[1].kind == "imm"):
                  immediate = ops[1].imm & 0xffffffff
-@@ -2011,6 +2294,8 @@ class Translator(object):
+@@ -2011,6 +2307,16 @@ class Translator(object):
          if t is not None and t not in fn.pushed_continuations:
              return [fn.index[t]] if t in fn.index else []
          nxt = i + 1 if (i + 1 < len(fn.insns) and fn.contiguous[i]) else None
++        if nxt is None and i + 1 < len(fn.insns):
++            # A listing gap is not a transfer out of the body: the emitter
++            # writes a goto to fn.fallthrough[i], which is an instruction in
++            # this body.  Reading the gap as "no successor" dropped that edge
++            # and with it every flag the target reads.
++            t = fn.fallthrough[i]
++            if t is not None and t in fn.index:
++                nxt = fn.index[t]
 +        if m == "UD2":
 +            return [] # continuation is supplied by the exception's CONTEXT
          if m == "INT3":
              # MSVC pads between functions with INT3, and a listing cut at a
              # call that never returns runs that padding into the next
-@@ -2020,7 +2305,21 @@ class Translator(object):
+@@ -2020,7 +2326,21 @@ class Translator(object):
              return []
          if m == "RET":
              return [fn.index[t] for t in sorted(fn.pushed_continuations)]
@@ -7890,7 +8272,7 @@ index 944f2ca..97abd6f 100644
              out = [nxt] if nxt is not None else []
              t = self.branch_target(ins)
              if t is not None and t in fn.index:
-@@ -2072,10 +2371,6 @@ class Translator(object):
+@@ -2072,10 +2392,6 @@ class Translator(object):
          """Indices control flow reaches from `roots` and the pushed
          continuations; every index if the body has a computed jump that is
          not POP reg; JMP reg. A call that never returns ends a path."""
@@ -7901,7 +8283,7 @@ index 944f2ca..97abd6f 100644
          roots = set(roots) | set(fn.pushed_continuations)
          work = [fn.index[a] for a in roots if a in fn.index]
          live = set()
-@@ -2086,18 +2381,123 @@ class Translator(object):
+@@ -2086,18 +2402,123 @@ class Translator(object):
              live.add(i)
              if self.never_returns(fn.insns[i]):
                  continue
@@ -8027,7 +8409,317 @@ index 944f2ca..97abd6f 100644
      @staticmethod
      def branch_target(ins):
          if ins.ops and ins.ops[0].startswith("0x"):
-@@ -2547,9 +2947,11 @@ class Translator(object):
+@@ -2158,6 +2579,309 @@ class Translator(object):
+                     changed = True
+         return live_in, live_out
+ 
++    # -- whole-program flag liveness ---------------------------------------
++
++    def call_flag_uses(self, ins):
++        """Flags a call's callee reads before writing any.
++
++        A CALL preserves the guest's flags, so the only flag knowledge that
++        crosses into a callee is the set its own code reads before writing it.
++        A translated entry that reads none needs nothing materialised.  Every
++        other target keeps the conservative answer: an import is a shim here
++        but several of them call back into guest code (EnumWindows and its
++        kind), and a computed jump can enter any table entry, so neither can be
++        assumed not to look at the flags it was handed.
++        """
++        if ins.ops and ins.ops[0].startswith("0x"):
++            t = int(ins.ops[0], 16)
++            if t in self.func_addrs:
++                # Absent from the table means the function failed to translate
++                # and is served some other way - the interpreter reads flags,
++                # so an entry that was never analysed has to stay conservative.
++                return self.flag_entry.get(t, ALL_FLAGS)
++        return ALL_FLAGS
++
++    def verify_flag_defs(self, fn, live_out, entry_guarantee):
++        """Check that every flag read is guaranteed written before it.
++
++        Liveness is the dual of this and shares its successor edges, so it
++        cannot catch a missing edge.  This walks forwards instead, keeping the
++        flags *must*-defined at each point: the intersection over all
++        predecessors, plus what the instruction itself writes.  Entry points
++        start from what the caller is contracted to materialise.
++
++        Returns the list of (address, flags read but not guaranteed) for
++        instructions whose read is not covered.
++        """
++        n = len(fn.insns)
++        succ = [self.successors(fn, i) for i in range(n)]
++        preds = [[] for _ in range(n)]
++        for i in range(n):
++            for s in succ[i]:
++                if 0 <= s < n:
++                    preds[s].append(i)
++        must_in = [ALL_FLAGS] * n
++        roots = [0] + [fn.index[a] for a in fn.addrs
++                       if a in fn.index and a != fn.addr]
++        for i in roots:
++            must_in[i] = entry_guarantee
++        must_out = [ALL_FLAGS] * n
++        changed = True
++        rounds = 0
++        while changed and rounds < 64:
++            changed = False
++            rounds += 1
++            for i in range(n):
++                if i in roots:
++                    mi = entry_guarantee
++                    for p in preds[i]:
++                        mi = mi & must_out[p]
++                    if mi != must_in[i]:
++                        must_in[i] = mi
++                        changed = True
++                else:
++                    if not preds[i]:
++                        continue
++                    mi = ALL_FLAGS
++                    for p in preds[i]:
++                        mi = mi & must_out[p]
++                    if mi != must_in[i]:
++                        must_in[i] = mi
++                        changed = True
++                mo = must_in[i] | flag_effect(fn.insns[i])[0]
++                if mo != must_out[i]:
++                    must_out[i] = mo
++                    changed = True
++        bad = []
++        for i, ins in enumerate(fn.insns):
++            if not preds[i] and i not in roots:
++                continue
++            _d, u = flag_effect(ins)
++            if ins.mnem in ("RET", "IRETD", "RETF", "JMPF"):
++                # A return carries whatever the caller still needs, so the body
++                # has to guarantee those flags are defined by then.
++                u = u | self.flag_ret.get(fn.addr, ALL_FLAGS)
++            elif not self.successors(fn, i):
++                u = u | self.exit_flag_uses(fn, i)
++            missing = u - must_in[i]
++            if missing:
++                bad.append((ins.addr, missing))
++        return bad
++
++    def exit_flag_uses(self, fn, i):
++        """Flags a transfer out of the body needs at the far end.
++
++        A tail call is an ordinary call that never comes back, so its callee
++        reads the same entry flags a CALL would: flag_entry already answers it.
++        A jump whose target this body does not own is the same question asked
++        of a different address.
++        """
++        ins = fn.insns[i]
++        if not ins.ops or not ins.ops[0].startswith("0x"):
++            return ALL_FLAGS
++        t = int(ins.ops[0], 16)
++        if ins.mnem == "JMP" and t in fn.index:
++            return NO_FLAGS
++        return self.flag_entry.get(t, ALL_FLAGS)
++
++    def cfg_exact(self, fn):
++        """Whether `successors` describes every edge this body can take.
++
++        It does not for two shapes, and both would make the whole-graph
++        analysis drop a flag that is really read:
++
++        A computed jump resolves to the known table targets, or to `fn.addrs`
++        when no table was recovered - but `reached` documents the general case:
++        a computed jump may land on any instruction, and fill routines compute
++        addresses into unrolled code.  A `PUSH <target>` whose target is not a
++        continuation is emitted as a jump, and when that target is not in the
++        body there is no edge at all to record.
++
++        Bodies without either shape are exactly described, which is nearly all
++        of them.
++        """
++        for i, ins in enumerate(fn.insns):
++            t = self.push_ret_target(fn, i)
++            if t is not None and t not in fn.pushed_continuations:
++                return False
++            if ins.mnem == "JMP" and self.branch_target(ins) is None:
++                fixed = getattr(fn, "proven_fixed_jumps", {})
++                if i in fixed:
++                    continue
++                if (not self.jumptables.get((fn.addr, ins.addr))
++                        and not self.popped_jump(fn, i)):
++                    return False
++        return True
++
++    def liveness_program(self, fn):
++        """Flag liveness over the whole control-flow graph of one function.
++
++        The straight-line pass in `liveness` treats every branch as a wall:
++        flags are all live on the way out of a Jcc, so a comparison that feeds
++        one computes all six - which is most comparisons.  Walking the real
++        successors instead lets a `CMP` followed by `JZ` compute only zf.
++
++        A call kills flags here (its callee writes its own), and its live-in
++        adds what the callee reads on entry plus what the caller still needs
++        afterwards.  That keeps exactly the guarantee the wall provided - flags
++        a call site needs afterwards are materialised before the call - without
++        dragging the other five flags along.
++
++        A body whose edges are not exactly known falls back to the wall, which
++        is conservative for any shape.
++        """
++        if not self.cfg_exact(fn):
++            return [ALL_FLAGS] * len(fn.insns), self.liveness(fn)
++        n = len(fn.insns)
++        succ = [self.successors(fn, i) for i in range(n)]
++        # Two shapes do not continue at the next listed instruction, and the
++        # straight-line pass treated both as walls for that reason: a listing
++        # gap, where the emitter inserts a goto, and a trapping instruction,
++        # whose continuation comes from a CONTEXT this pass cannot see.  Read
++        # as "no successors" they would make the flags dead on the way out.
++        #
++        # A tail call to an address outside this body leaves for code this pass
++        # knows nothing about, so the flags must survive the edge rather than be
++        # dropped: those are walls too.
++        #
++        # A return is different, and getting it wrong is what makes the whole
++        # analysis worthless.  What is live at a return is decided by whoever
++        # called the function, not by the function itself, so reading "no
++        # successor" as "nothing is live" would drop flags the caller needs -
++        # while reading it as a wall would push ALL_FLAGS back through the body
++        # and leave nothing to optimise.  `flag_ret` answers it from the call
++        # sites instead, computed by compute_flag_entry before emission.
++        returns = {i for i in range(n)
++                   if fn.insns[i].mnem in ("RET", "IRETD", "RETF", "JMPF")}
++        # A trap hands control to a handler that starts a fresh body, so no
++        # flag crosses it.  The straight-line pass treated these as walls, which
++        # cost every function that MSVC padded with INT3 its whole body.
++        traps = {i for i in range(n) if fn.insns[i].mnem in ("UD2", "INT3")}
++        # Anything else with no successor leaves the body: a tail call into code
++        # this pass does not own.  Its flags are that callee's entry contract,
++        # which flag_entry already answers.
++        exits = {i for i in range(n)
++                 if not succ[i] and i not in returns and i not in traps}
++        ret_need = self.flag_ret.get(fn.addr, ALL_FLAGS)
++        live_in = [NO_FLAGS] * n
++        live_out = [NO_FLAGS] * n
++        changed = True
++        while changed:
++            changed = False
++            for i in range(n - 1, -1, -1):
++                if i in exits:
++                    lo = self.exit_flag_uses(fn, i)
++                elif i in traps:
++                    lo = NO_FLAGS
++                else:
++                    lo = ret_need if i in returns else NO_FLAGS
++                    for s in succ[i]:
++                        lo = lo | live_in[s]
++                ins = fn.insns[i]
++                if ins.mnem == "CALL":
++                    li = lo | self.call_flag_uses(ins)
++                else:
++                    d, u = flag_effect(ins)
++                    li = (lo - d) | u
++                if li != live_in[i] or lo != live_out[i]:
++                    live_in[i], live_out[i] = li, lo
++                    changed = True
++        return live_in, live_out
++
++    def compute_flag_entry(self, funcs):
++        """Flags read at each entry point and live at each return, image-wide.
++
++        Two tables, because a function has two contracts and both have to be
++        known before anything is emitted:
++
++        `flag_entry` - flags the function reads before writing any.  A call site
++        can skip materialising them when the answer is "none".
++
++        `flag_ret` - flags a caller may still need after the call returns.  This
++        is what a return edge carries, and it cannot be read off the body: it is
++        the union over every call site of what that site needs afterwards.
++
++        They are mutually recursive - a call site's live-out depends on the
++        callee's entry needs and on the caller's own returns - so both are grown
++        in one monotone fixpoint, starting from "nothing" and only ever adding.
++        Settling upward is what makes the answer sound: nothing is ever removed
++        after a caller has been told it can skip a flag.
++
++        A function whose callers are not all visible - never called directly,
++        or reachable through a jump table - has exits nobody can bound, so its
++        return contract stays conservative.
++        """
++        entry = {fn.addr: NO_FLAGS for fn in funcs}
++        ret = {fn.addr: NO_FLAGS for fn in funcs}
++        # Visible to call_flag_uses during the fixpoint, so the first round
++        # starts from "no entry needs anything" and grows.  Leaving the tables
++        # empty here would make every call look unknown and settle at the
++        # conservative answer for most of the image.
++        self.flag_entry = entry
++        self.flag_ret = ret
++        direct = set()
++        for fn in funcs:
++            for ins in fn.insns:
++                if (ins.mnem == "CALL" and ins.ops
++                        and ins.ops[0].startswith("0x")):
++                    direct.add(int(ins.ops[0], 16))
++        computed = set()
++        for tgts in getattr(self, "jumptables", {}).values():
++            computed.update(tgts)
++        for fn in funcs:
++            if fn.addr not in direct or fn.addr in computed:
++                ret[fn.addr] = ALL_FLAGS
++        changed = False
++        for _round in range(64):
++            changed = False
++            for fn in funcs:
++                try:
++                    fn.index = {ins.addr: k for k, ins in enumerate(fn.insns)}
++                    if not hasattr(fn, "pushed_continuations"):
++                        fn.pushed_continuations = self.live_continuations(fn)
++                    live_in, live_out = self.liveness_program(fn)
++                except Exception:           # noqa: BLE001 - never lose soundness
++                    if entry[fn.addr] != ALL_FLAGS:
++                        entry[fn.addr] = ALL_FLAGS
++                        changed = True
++                    continue
++                if not live_in:
++                    continue
++                if entry[fn.addr] != ALL_FLAGS:
++                    need = live_in[0]
++                    # Any address this function can be entered at is entered
++                    # with the caller's flags - an alternate entry named by
++                    # another function, or a jump-table target a computed jump
++                    # reaches - so its own live-in is a requirement of the
++                    # function as a whole.
++                    for a in fn.addrs:
++                        j = fn.index.get(a)
++                        if j is not None and a != fn.addr:
++                            need = need | live_in[j]
++                    if need - entry[fn.addr]:
++                        entry[fn.addr] = entry[fn.addr] | need
++                        changed = True
++                for i, ins in enumerate(fn.insns):
++                    if (ins.mnem != "CALL" or not ins.ops
++                            or not ins.ops[0].startswith("0x")):
++                        continue
++                    t = int(ins.ops[0], 16)
++                    if t not in ret or ret[t] == ALL_FLAGS:
++                        continue
++                    if live_out[i] - ret[t]:
++                        ret[t] = ret[t] | live_out[i]
++                        changed = True
++            if not changed:
++                break
++        if changed:
++            # Did not settle: a caller could then have been told its callee
++            # needs nothing while the callee was still growing.  Soundness is
++            # not negotiable for a per-cent of speed, so give up the analysis.
++            for fn in funcs:
++                entry[fn.addr] = ALL_FLAGS
++                ret[fn.addr] = ALL_FLAGS
++        return entry
++
+     # -- jump tables -------------------------------------------------------
+ 
+     def is_table_site(self, ins):
+@@ -2547,9 +3271,11 @@ class Translator(object):
  
      @staticmethod
      def writes_reg32(ins, reg):
@@ -8040,7 +8732,7 @@ index 944f2ca..97abd6f 100644
              return reg == 1                # ECX
          if ins.mnem in ("CMP", "TEST", "PUSH", "JMP") or ins.mnem in JCC:
              return False
-@@ -2571,9 +2973,12 @@ class Translator(object):
+@@ -2571,9 +3297,12 @@ class Translator(object):
          is strict and a target that is still not an instruction boundary is an
          error."""
          fn.index = {ins.addr: k for k, ins in enumerate(fn.insns)}
@@ -8054,7 +8746,7 @@ index 944f2ca..97abd6f 100644
          self.strict = strict
          for i, ins in enumerate(fn.insns):
              if ins.mnem == "JMP" and ins.ops and not ins.ops[0].startswith("0x"):
-@@ -2595,6 +3000,17 @@ class Translator(object):
+@@ -2595,6 +3324,17 @@ class Translator(object):
          preceded by a dispatch switch, and every entry is a three-line wrapper,
          so no code is duplicated."""
          entries = sorted(set(entries))
@@ -8072,10 +8764,25 @@ index 944f2ca..97abd6f 100644
          # An alternate entry must be an instruction in THIS body.  A block can
          # be re-recovered between the discovery rounds and the final pass -
          # recursive descent makes them grow - so an entry registered against
-@@ -2612,9 +3028,30 @@ class Translator(object):
+@@ -2610,11 +3350,45 @@ class Translator(object):
+         fn.seh_escapes = self.seh_escaping_returns(fn)
+         if self.opts.eager_flags:
              live_out = [ALL_FLAGS] * len(fn.insns)
++        elif self.flag_entry_ready:
++            live_out = self.liveness_program(fn)[1]
          else:
              live_out = self.liveness(fn)
++        if self.flag_entry_ready:
++            # Independent check of the same question liveness answers, walked
++            # forwards so a missing edge shows up instead of hiding.
++            bad = self.verify_flag_defs(
++                fn, live_out, self.flag_entry.get(fn.addr, ALL_FLAGS))
++            if bad:
++                self.flag_verify_bad += len(bad)
++                if len(self.flag_verify_reported) < 20:
++                    a, missing = bad[0]
++                    self.flag_verify_reported.append(
++                        "%08x reads %s" % (a, "".join(sorted(missing))))
 +        # Compare against the ordinary conservative CFG, dropping only paths
 +        # made impossible by an original-byte, single-entry XOR/JE proof.
 +        roots = {fn.addr} | set(entries) | (set(fn.index) & self.func_addrs)
@@ -8104,7 +8811,7 @@ index 944f2ca..97abd6f 100644
  
          labels = set(fn.pushed_continuations)
          # RTL fill/move routines compute addresses within unrolled code rather
-@@ -2637,12 +3074,13 @@ class Translator(object):
+@@ -2637,12 +3411,13 @@ class Translator(object):
                      labels.add(t)
              # A listing gap or an end-of-block fall-through emits a transfer
              # too, and its target needs a label just as much as a branch's.
@@ -8120,8 +8827,27 @@ index 944f2ca..97abd6f 100644
              t = fn.fallthrough[last] or fn.end
              if t in fn.index:
                  labels.add(t)
-@@ -2683,6 +3121,17 @@ class Translator(object):
+@@ -2681,11 +3456,41 @@ class Translator(object):
+             if head:
+                 out.append("    goto L_%08x;" % fn.addr)
          prologue = len(out)          # everything emitted so far is dispatch
++        # Executed-instruction accounting.  One add per basic block, weighted by
++        # the block's length, so a run can report how many guest instructions a
++        # frame really costs.  The static census says what the translation looks
++        # like; only this says how much of it runs.
++        starts = [False] * len(fn.insns)
++        for i in range(len(fn.insns)):
++            if i in dead:
++                continue
++            if (i == 0 or fn.insns[i].addr in labels or (i - 1) in dead
++                    or fn.insns[i - 1].mnem in TERMINATORS
++                    or not fn.contiguous[i - 1]):
++                starts[i] = True
++        blen = [0] * len(fn.insns)
++        for i in range(len(fn.insns) - 1, -1, -1):
++            if i in dead:
++                continue
++            blen[i] = 1 + (blen[i + 1] if i + 1 < len(fn.insns) and not starts[i + 1] else 0)
          for i, ins in enumerate(fn.insns):
              if i in dead:
 +                # A jump from emitted-but-unreachable code to an address the
@@ -8138,7 +8864,12 @@ index 944f2ca..97abd6f 100644
                  continue
              if ins.addr in labels:
                  out.append("L_%08x: ;" % ins.addr)
-@@ -2693,7 +3142,8 @@ class Translator(object):
++                if blen[i]:
++                    out.append("    recomp_insn_count += %du;" % blen[i])
+             body = self.emit(fn, i, live_out[i])
+             for line in body:
+                 out.append("    " + line)
+@@ -2693,7 +3498,8 @@ class Translator(object):
              # functions: the byte after it belongs to whatever comes next, so
              # this body ends here rather than falling through into it.
              if (not fn.contiguous[i] and ins.mnem not in TERMINATORS
@@ -8148,7 +8879,7 @@ index 944f2ca..97abd6f 100644
                  t = fn.fallthrough[i]
                  self.stats["_listing_gap"] += 1
                  self.notes.append(
-@@ -2705,7 +3155,7 @@ class Translator(object):
+@@ -2705,7 +3511,7 @@ class Translator(object):
          last_i = max(i for i in range(len(fn.insns)) if i not in dead)
          last = fn.insns[last_i]
          if (last.mnem not in TERMINATORS and last.mnem != "INT3"
@@ -8157,7 +8888,7 @@ index 944f2ca..97abd6f 100644
              t = fn.fallthrough[last_i] or fn.end
              self.stats["_fallthrough_exit"] += 1
              out.append("    " + " ".join(self.goto_target(fn, t, last)))
-@@ -2829,13 +3279,50 @@ class Translator(object):
+@@ -2829,13 +3635,50 @@ class Translator(object):
              # before parsing refuses the whole function over a path CPUID
              # keeps the guest from taking.
              return ["recomp_unmodelled(c, %s); return;" % hexlit(ins.addr)]
@@ -8209,7 +8940,7 @@ index 944f2ca..97abd6f 100644
          # ---------------------------------------------------------- data --
          if m == "MOV":
              size = operand_size(ops)
-@@ -2846,10 +3333,20 @@ class Translator(object):
+@@ -2846,10 +3689,20 @@ class Translator(object):
                  # These come from data Ghidra decoded as code.
                  return ["recomp_int(c, 6u);"] if dst.imm == SEGMENT_SELECTOR["CS"] else [";"]
              L.append(write_op(dst, size, read_op(src, size)))
@@ -8233,7 +8964,7 @@ index 944f2ca..97abd6f 100644
                      L.append("{ jmp_buf *b_ = recomp_seh_frame_enter(c); "
                               "if (setjmp(*b_)) { recomp_seh_land(c); return; } }")
                  else:
-@@ -2924,7 +3421,7 @@ class Translator(object):
+@@ -2924,7 +3777,7 @@ class Translator(object):
              return L
  
          if m == "PUSH":
@@ -8242,7 +8973,7 @@ index 944f2ca..97abd6f 100644
              if size == 16:
                  L.append("uint32_t v_ = %s;" % read_op(ops[0], 16))
                  L.append("c->r[4] -= 2; wr16(c->r[4], (uint16_t)v_);")
-@@ -2942,6 +3439,20 @@ class Translator(object):
+@@ -2942,6 +3795,20 @@ class Translator(object):
              return L
  
          if m == "POP":
@@ -8263,7 +8994,7 @@ index 944f2ca..97abd6f 100644
              size = operand_size(ops, hint=32)
              if size == 16:
                  L.append("uint32_t v_ = rd16(c->r[4]); c->r[4] += 2;")
-@@ -2955,12 +3466,36 @@ class Translator(object):
+@@ -2955,12 +3822,36 @@ class Translator(object):
                  L.append("c->eip = %s; recomp_seh_frame_leave(c);" % hexlit(ins.addr))
              return L
  
@@ -8301,7 +9032,7 @@ index 944f2ca..97abd6f 100644
          if m == "POPFD":
              return ["x86_set_eflags(c, rd32(c->r[4])); c->r[4] += 4;"]
          if m == "PUSHF":
-@@ -2991,6 +3526,50 @@ class Translator(object):
+@@ -2991,6 +3882,50 @@ class Translator(object):
                      "((uint32_t)(int32_t)(int8_t)c->r[0] & 0xffffu);"]
          if m == "CWDE":
              return ["c->r[0] = (uint32_t)(int32_t)(int16_t)c->r[0];"]
@@ -8352,7 +9083,7 @@ index 944f2ca..97abd6f 100644
          if m in ("LDMXCSR", "STMXCSR"):
              # The SSE control word. This kit models one rounding mode and
              # masks every exception, which is what a guest sets it to; a store
-@@ -3163,6 +3742,19 @@ class Translator(object):
+@@ -3163,6 +4098,19 @@ class Translator(object):
          # ---------------------------------------------------- control flow --
          if m in JCC:
              cond = JCC[m][0]
@@ -8372,7 +9103,7 @@ index 944f2ca..97abd6f 100644
              t = self.branch_target(ins)
              if t is None:
                  raise TranslateError("indirect conditional jump")
-@@ -3178,7 +3770,7 @@ class Translator(object):
+@@ -3178,7 +4126,7 @@ class Translator(object):
              if ins.ops and ins.ops[0].startswith("0x"):
                  t = int(ins.ops[0], 16)
                  L.append("c->r[4] -= 4; wr32(c->r[4], %s);" % hexlit(nxt))
@@ -8381,7 +9112,7 @@ index 944f2ca..97abd6f 100644
                      # The host jmp_buf has to belong to a frame that is still
                      # live when _longjmp fires, so setjmp is taken here rather
                      # than inside the runtime (runtime/intrinsics.h).
-@@ -3194,6 +3786,22 @@ class Translator(object):
+@@ -3194,6 +4142,22 @@ class Translator(object):
                  else:
                      self.reject_offimage_call(t)
                      self.stats["_call_unknown"] += 1
@@ -8404,7 +9135,7 @@ index 944f2ca..97abd6f 100644
                      L.append("recomp_call(c, %s);" % hexlit(t))
                  if RESUMABLE_STACKS:
                      L.append("if (c->eip != %s) return;" % hexlit(nxt))
-@@ -3201,19 +3809,24 @@ class Translator(object):
+@@ -3201,19 +4165,24 @@ class Translator(object):
                      L.append("c->eip = %s;" % hexlit(ins.addr))
                      L.append("{ jmp_buf *b_ = recomp_seh_frame_adopt(c); "
                               "if (b_) { if (setjmp(*b_)) { recomp_seh_land(c); return; } } }")
@@ -8441,7 +9172,7 @@ index 944f2ca..97abd6f 100644
              return L
  
          if m == "RET":
-@@ -3231,6 +3844,24 @@ class Translator(object):
+@@ -3231,6 +4200,24 @@ class Translator(object):
                  return L
              return ["c->eip = rd32(c->r[4]); c->r[4] += %du; " % (4 + n) +
                      orphan + "recomp_return(c); return;"]
@@ -8466,7 +9197,7 @@ index 944f2ca..97abd6f 100644
  
          # ------------------------------------------------------------ SSE --
          # Data movement only, in dword lanes. A Delphi runtime's FillChar and
-@@ -3250,7 +3881,8 @@ class Translator(object):
+@@ -3250,7 +4237,8 @@ class Translator(object):
                          "ANDPS": "&", "POR": "|", "ORPD": "|", "ORPS": "|"}
          SSE_LANE_FORMS = ("PANDN", "ANDNPD", "ANDNPS", "PCMPEQD", "PUNPCKLDQ", "PUNPCKHDQ",
                            "PUNPCKLQDQ", "UNPCKLPD", "UNPCKHPD", "MOVDDUP", "MOVLPD", "MOVLPS",
@@ -8476,7 +9207,7 @@ index 944f2ca..97abd6f 100644
          if m in SSE_LANE_OPS or m in SSE_LANE_FORMS:
              dst, src = ops[0], ops[1]
  
-@@ -3280,7 +3912,7 @@ class Translator(object):
+@@ -3280,7 +4268,7 @@ class Translator(object):
              elif m == "PCMPEQD":
                  L.extend(put(dst, i, "%s == %s ? 0xffffffffu : 0u" % (d(i), sv(i)))
                           for i in range(4))
@@ -8485,7 +9216,7 @@ index 944f2ca..97abd6f 100644
                  L.extend(put(dst, i, sv(i)) for i in range(4))
              elif m == "PUNPCKLDQ":            # d0 s0 d1 s1
                  L.extend([put(dst, 0, d(0)), put(dst, 1, sv(0)),
-@@ -3316,6 +3948,43 @@ class Translator(object):
+@@ -3316,6 +4304,43 @@ class Translator(object):
                            put(dst, 2, sv(hi)), put(dst, 3, sv(hi + 1))])
              return L
  
@@ -8529,7 +9260,7 @@ index 944f2ca..97abd6f 100644
          # Scalar double and single forms. The host's double and float are the
          # same IEEE formats in the same rounding mode, and scalar SSE leaves
          # the lanes above its result alone, which is why nothing here clears
-@@ -3439,9 +4108,11 @@ class Translator(object):
+@@ -3439,9 +4464,11 @@ class Translator(object):
          if m == "HLT":
              return ["recomp_hlt(c);"]
          if m == "INT":
@@ -8542,7 +9273,7 @@ index 944f2ca..97abd6f 100644
          if m == "IN":
              size = operand_size(ops[:1], hint=32)
              port = read_op(ops[1], 32) if len(ops) > 1 else "0u"
-@@ -3454,9 +4125,10 @@ class Translator(object):
+@@ -3454,9 +4481,10 @@ class Translator(object):
              return L
          if m in ("NOP", "WAIT", "PAUSE"):
              return [";"]
@@ -8555,7 +9286,7 @@ index 944f2ca..97abd6f 100644
              return ["c->fpu_tag = 0xffffu;"]
          if m == "STMXCSR":
              # No translated SSE arithmetic changes MXCSR, so expose its reset value.
-@@ -3497,7 +4169,7 @@ class Translator(object):
+@@ -3497,7 +4525,7 @@ class Translator(object):
              return  # a translator built without bytes, as the unit tests are
          if self.image.base <= t < self.image.end:
              return
@@ -8564,7 +9295,7 @@ index 944f2ca..97abd6f 100644
              return
          raise TranslateError("call to %08x, which is outside the image" % t)
  
-@@ -3506,7 +4178,25 @@ class Translator(object):
+@@ -3506,7 +4534,25 @@ class Translator(object):
              return ["goto L_%08x;" % t]
          if t in self.func_addrs:
              self.stats["_tailcall"] += 1
@@ -8590,7 +9321,7 @@ index 944f2ca..97abd6f 100644
          self.stats["_tailcall_unknown"] += 1
          self.notes.append("%08x: jump to %08x outside any known function" % (ins.addr, t))
          return ["c->eip = %s; recomp_jump(c, %s); return;" % (hexlit(ins.addr), hexlit(t))]
-@@ -3901,6 +4591,15 @@ class Translator(object):
+@@ -3901,6 +4947,15 @@ class Translator(object):
              return ["x87_set_cw(c, rd16(%s));" % addr_expr(ops[0])]
          if m == "FFREE":
              return [";"]
@@ -8606,7 +9337,7 @@ index 944f2ca..97abd6f 100644
          if m in ("FSAVE", "FNSAVE"):
              return ["x87_fnsave(c, %s);" % addr_expr(ops[0])]
          if m == "FRSTOR":
-@@ -3962,19 +4661,22 @@ def retarget_withdrawn(body, pruned):
+@@ -3962,19 +5017,22 @@ def retarget_withdrawn(body, pruned):
      if not pruned:
          return body
      out = []
@@ -8641,7 +9372,7 @@ index 944f2ca..97abd6f 100644
      return out
  
  
-@@ -3995,6 +4697,32 @@ def load_functions(only=None):
+@@ -3995,6 +5053,32 @@ def load_functions(only=None):
      return funcs
  
  
@@ -8674,7 +9405,7 @@ index 944f2ca..97abd6f 100644
  def main():
      ap = argparse.ArgumentParser()
      ap.add_argument("--out", required=True, help="where the generated sources go (build/recomp/gen)")
-@@ -4045,6 +4773,49 @@ def main():
+@@ -4045,6 +5129,49 @@ def main():
          AUX_MODULE = {"name": args.as_module, "base": cfg["game"]["image_base"],
                        "size": 0}  # the image's extent, filled in once it is read
      image = Image(BINARY)
@@ -8724,7 +9455,7 @@ index 944f2ca..97abd6f 100644
      discovered = []
      if args.discovered:
          global EXTRA_ENTRY_POINTS
-@@ -4072,11 +4843,17 @@ def main():
+@@ -4072,11 +5199,17 @@ def main():
  
      t0 = time.time()
      entries = load_functions(set(args.only) if args.only else None)
@@ -8742,7 +9473,7 @@ index 944f2ca..97abd6f 100644
              listed_starts.append(a)
              p = os.path.join(LISTINGS, "%08x.asm" % a)
              if os.path.exists(p) and os.path.getsize(p) > 0:
-@@ -4102,6 +4879,7 @@ def main():
+@@ -4102,6 +5235,7 @@ def main():
      for addr, name, nbytes, path in entries:
          try:
              insns = parse_listing(path)
@@ -8750,7 +9481,7 @@ index 944f2ca..97abd6f 100644
          except TranslateError as e:
              failures.append((addr, "parse: %s" % e))
              continue
-@@ -4195,6 +4973,13 @@ def main():
+@@ -4195,6 +5329,13 @@ def main():
  
      os.makedirs(args.out, exist_ok=True)
      chunks = []
@@ -8764,7 +9495,7 @@ index 944f2ca..97abd6f 100644
  
      def accepts(fn, reached=False):
          """Can the emitter translate every instruction of this block?
-@@ -4472,7 +5257,11 @@ def main():
+@@ -4472,7 +5613,11 @@ def main():
                                            or prior.addr in protected_entries)
          note_structural(provenance, owner if promote_owner else {}, t, why)
          if t in all_addrs and not separate:
@@ -8777,7 +9508,7 @@ index 944f2ca..97abd6f 100644
          if home is not None and t in home.addrs:
              return False
          if t in owner and not separate:
-@@ -4488,7 +5277,7 @@ def main():
+@@ -4488,7 +5633,7 @@ def main():
              return True
          bounds = None
          boundaries = set()
@@ -8786,7 +9517,7 @@ index 944f2ca..97abd6f 100644
          if protected and why == "config":
              # A configured entry states that this address IS a function, but
              # recovery still needs a ceiling. Unbounded, it runs past the body
-@@ -4543,7 +5332,7 @@ def main():
+@@ -4543,7 +5688,7 @@ def main():
                      owned.update(ins.addr for ins in block)
                      fragments.update((ins.addr, ins) for ins in block)
              if owned:
@@ -8795,7 +9526,7 @@ index 944f2ca..97abd6f 100644
              lo_index, hi_index = bisect_right(candidate_starts, t), bisect_right(candidate_starts, bounds[1])
              boundaries = {a for a in candidate_starts[lo_index:hi_index]
                            if a not in owned and a not in finally_owners}
-@@ -4849,10 +5638,35 @@ def main():
+@@ -4849,10 +5994,35 @@ def main():
                    "(already owned, or its recovery did not validate)" % addr,
                    file=sys.stderr)
  
@@ -8831,7 +9562,7 @@ index 944f2ca..97abd6f 100644
          tr.func_addrs = all_addrs
          tr.all_insn_addrs = set(owner)
          tr.jumptables.clear()
-@@ -4894,6 +5708,7 @@ def main():
+@@ -4894,6 +6064,7 @@ def main():
          for fn in list(parsed):
              if fn in retired_finally_bodies:
                  continue
@@ -8839,7 +9570,7 @@ index 944f2ca..97abd6f 100644
              for i, ins in enumerate(fn.insns):
                  # PUSH imm32 / RET names a continuation just as a direct JMP
                  # does; do not depend on heuristic pointer discovery for it.
-@@ -4903,14 +5718,20 @@ def main():
+@@ -4903,14 +6074,20 @@ def main():
                  # by the data-pointer scan calls functions Ghidra never listed
                  # either: 0049e800 calls 004c3110 and 004c31e0.
                  if ins.mnem in ("JMP", "CALL") or ins.mnem in JCC:
@@ -8863,7 +9594,7 @@ index 944f2ca..97abd6f 100644
              if fn.insns[-1].mnem not in TERMINATORS and not tr.never_returns(fn.insns[-1]):
                  changed |= resolve(fn.fallthrough[-1] or fn.end, listed, fn)
          for t in sorted(tr.unlisted_targets):
-@@ -5276,14 +6097,82 @@ def main():
+@@ -5276,18 +6453,124 @@ def main():
      # after mismatched returns have unwound the native call stack.
      if RESUMABLE_STACKS:
          starts = {f.addr for f in parsed}
@@ -8951,7 +9682,64 @@ index 944f2ca..97abd6f 100644
      for t, fn in extra.items():
          entries_by_fn[fn.addr].add(t)
  
-@@ -5306,13 +6195,16 @@ def main():
+     bodies = {}
++    tr.flag_entry = tr.compute_flag_entry([fn for fn in parsed
++                                          if fn.addr not in [a for a, _ in failures]])
++    # The analysis is only allowed to reach emission when it is proven sound for
++    # this whole image.  It has been wrong twice, both times in a way that
++    # produced plausible code and a game that stalled on its loading screen, so
++    # the check runs before anything is emitted and a single unproven read puts
++    # every function back on the conservative path.
++    unsound = 0
++    if tr.flag_entry:
++        for fn in parsed:
++            if fn.addr in [a for a, _ in failures]:
++                continue
++            try:
++                fn.index = {ins.addr: k for k, ins in enumerate(fn.insns)}
++                if not hasattr(fn, "pushed_continuations"):
++                    fn.pushed_continuations = tr.live_continuations(fn)
++                bad = tr.verify_flag_defs(
++                    fn, tr.liveness_program(fn)[1],
++                    tr.flag_entry.get(fn.addr, ALL_FLAGS))
++            except Exception:           # noqa: BLE001 - never trust a crash
++                bad = [(fn.addr, ALL_FLAGS)]
++            if bad:
++                unsound += len(bad)
++                if len(tr.flag_verify_reported) < 20:
++                    a, missing = bad[0]
++                    tr.flag_verify_reported.append(
++                        "%08x reads %s" % (a, "".join(sorted(missing))))
++        if unsound:
++            print("  flag liveness: NOT USED, %d unproven reads: %s"
++                  % (unsound, ", ".join(tr.flag_verify_reported)),
++                  file=sys.stderr)
++            tr.flag_entry = {}
++            tr.flag_ret = {}
++    tr.flag_entry_ready = bool(tr.flag_entry)
++    if tr.flag_entry:
++        reads = sum(1 for v in tr.flag_entry.values() if v)
++        print("  flag liveness: %d of %d entries read flags before writing them"
++              % (reads, len(parsed)), file=sys.stderr)
+     for fn in parsed:
+         if fn.addr in [a for a, _ in failures]:
+             continue
+@@ -5300,19 +6583,31 @@ def main():
+ 
+     tr.cross_check_switches([fn for fn in parsed if fn.addr in bodies])
+ 
++    if tr.flag_entry_ready:
++        if tr.flag_verify_bad:
++            print("  FLAG VERIFY FAILED: %d reads with no guaranteed writer: %s"
++                  % (tr.flag_verify_bad, ", ".join(tr.flag_verify_reported)),
++                  file=sys.stderr)
++        else:
++            print("  flag verify: every flag read has a guaranteed writer",
++                  file=sys.stderr)
++
+     # A block recovered by the sweep whose own dispatch targets do not exist
+     # was never code: real code calls real code.  Dropping such a block can
+     # orphan whoever called it, so this repeats until it settles.  Blocks that
      # came from Ghidra's listing are never dropped - a dangling target there is
      # a translator gap, and the invariant below turns it into a build failure.
      fn_ref = re.compile(r"FN\(([0-9a-f]{8})\)")
@@ -8971,7 +9759,7 @@ index 944f2ca..97abd6f 100644
          out = []
          for line in body:
              for kind in ("recomp_call", "recomp_jump"):
-@@ -5331,6 +6223,10 @@ def main():
+@@ -5331,6 +6626,10 @@ def main():
                  target = int(hit, 16)
                  if target not in known:
                      out.append((target, line.strip()))
@@ -8982,7 +9770,7 @@ index 944f2ca..97abd6f 100644
          return out
  
      # Entries the emitter had to drop are not entry points either.
-@@ -5343,6 +6239,10 @@ def main():
+@@ -5343,6 +6642,10 @@ def main():
      withdrawn = []
      recovered_addrs = prunable_blocks({f.addr for f in recovered}, provenance)
      pruned = []
@@ -8993,7 +9781,7 @@ index 944f2ca..97abd6f 100644
      if forget:
          for a in sorted(forget):
              if a in bodies:
-@@ -5542,6 +6442,20 @@ def main():
+@@ -5542,6 +6845,20 @@ def main():
          tr.stats["_withdrawn_retargeted"] = len(gone)
  
      ok = [fn for fn in parsed if fn.addr in bodies]
@@ -9014,7 +9802,7 @@ index 944f2ca..97abd6f 100644
      if args.as_module and (args.only or discovered):
          # Discovery ran over the whole image, as it must to recover a function
          # whole, but a module carries only the functions it was asked for:
-@@ -5589,6 +6503,25 @@ def main():
+@@ -5589,6 +6906,25 @@ def main():
                % (at, fn_addr, len(missing), total,
                   " ".join("%08x" % m for m in missing[:6])), file=sys.stderr)
      if (table_gaps or undecoded) and not args.allow_table_gaps:
@@ -9040,7 +9828,7 @@ index 944f2ca..97abd6f 100644
          raise TranslateError(
              "%d jump tables have entries that dispatch nowhere (%d slots in "
              "total) and %d table sites decoded nothing; pass "
-@@ -5663,6 +6596,48 @@ def main():
+@@ -5663,6 +6999,48 @@ def main():
                   % (target, line[:110])))
          dangling = []
      if dangling:
@@ -9089,7 +9877,7 @@ index 944f2ca..97abd6f 100644
          # A target that Ghidra listed but that failed to translate is the
          # usual cause, so name the failures first: they are what to fix.
          for a, why in failures[:40]:
-@@ -5699,9 +6674,10 @@ def main():
+@@ -5699,9 +7077,10 @@ def main():
          fh.write("extern const uint32_t %sfunc_addrs[];\nextern uint8_t %shooked[];\n"
                   "extern RecompHookFn %shook_ptrs[];\n" % (P, P, P))
          fh.write("#ifdef RECOMP_NO_HOOKS\n"
@@ -9101,7 +9889,7 @@ index 944f2ca..97abd6f 100644
                   "    uint32_t i_ = FIDX(a);\\\n"
                   "    uint32_t ebp_ = recomp_frame_watch ? c->r[5] : 0u;\\\n"
                   "    if (recomp_profile_enabled) { recomp_call(c, %sfunc_addrs[i_]); break; }\\\n"
-@@ -5782,7 +6758,8 @@ def main():
+@@ -5782,7 +7161,8 @@ def main():
      # neither another pop nor dispatching the continuation is correct here.
      call_returns = sorted({
          fn.fallthrough[i] or (fn.insns[i + 1].addr if i + 1 < len(fn.insns) else fn.end)
@@ -10595,10 +11383,10 @@ index 0000000..c54635c
 +}
 diff --git a/runtime/perf_stats.h b/runtime/perf_stats.h
 new file mode 100644
-index 0000000..62dbcc2
+index 0000000..2f54320
 --- /dev/null
 +++ b/runtime/perf_stats.h
-@@ -0,0 +1,187 @@
+@@ -0,0 +1,201 @@
 +// perf_stats.h - opt-in counters that attribute wall time to the runtime.
 +//
 +// A browser profile of the guest thread shows its cost split between
@@ -10624,6 +11412,12 @@ index 0000000..62dbcc2
 +    }();
 +    return value;
 +}
++
++// Executed guest instructions.  The counter itself belongs to the generated
++// code, which increments it once per basic block, so it lives beside x86.h's
++// other guest state; this accessor keeps the two headers from having to agree
++// about language linkage.
++uint64_t guest_insn_count(void);
 +
 +inline uint64_t handoffs = 0;          // baton moves, any reason
 +inline uint64_t seh_resume_calls = 0;  // recomp_seh_resume_frame entries
@@ -10716,6 +11510,7 @@ index 0000000..62dbcc2
 +    uint64_t seh_boundary_calls, seh_boundary_frames, callback_depth_calls, seh_live_frames;
 +    uint64_t prune_passes, pruned_frames;
 +    uint64_t clock_reads, import_calls, printf_calls;
++    uint64_t insn_count;
 +    double wait_seconds;
 +};
 +
@@ -10745,7 +11540,7 @@ index 0000000..62dbcc2
 +            handoffs,           seh_resume_calls,    seh_resume_frames,    seh_chain_visits,
 +            seh_boundary_calls, seh_boundary_frames, callback_depth_calls, seh_live_frames,
 +            prune_passes,       pruned_frames,       clock_reads,          import_calls,
-+            printf_calls,       wait_seconds};
++            printf_calls,       guest_insn_count(),  wait_seconds};
 +        auto rate = [seconds](uint64_t a, uint64_t b) {
 +            return seconds > 0 ? double(a - b) / seconds : 0.0;
 +        };
@@ -10753,7 +11548,7 @@ index 0000000..62dbcc2
 +                "perf: %.1fs handoffs=%.0f/s seh_resume=%.0f/s seh_frames=%.0f/s "
 +                "chain_visits=%.0f/s seh_boundary=%.0f/s boundary_frames=%.0f/s "
 +                "cb_depth=%.0f/s live_frames_max=%llu wait=%.0f%% prune=%llu/%llu "
-+                "clock=%.0f/s imports=%.0f/s printf=%.0f/s\n",
++                "clock=%.0f/s imports=%.0f/s printf=%.0f/s insn=%.0f/s insn_ns=%.2f\n",
 +                seconds, rate(cur.handoffs, p.handoffs),
 +                rate(cur.seh_resume_calls, p.seh_resume_calls),
 +                rate(cur.seh_resume_frames, p.seh_resume_frames),
@@ -10766,7 +11561,14 @@ index 0000000..62dbcc2
 +                (unsigned long long)(cur.pruned_frames - p.pruned_frames),
 +                (unsigned long long)(cur.prune_passes - p.prune_passes),
 +                rate(cur.clock_reads, p.clock_reads), rate(cur.import_calls, p.import_calls),
-+                rate(cur.printf_calls, p.printf_calls));
++                rate(cur.printf_calls, p.printf_calls),
++                rate(cur.insn_count, p.insn_count),
++                // Host nanoseconds per executed guest instruction: the number
++                // that says whether the translation or the guest's own work is
++                // what a frame is made of.
++                cur.insn_count > p.insn_count
++                    ? seconds * 1e9 / double(cur.insn_count - p.insn_count)
++                    : 0.0);
 +        // Name the guest functions that keep installing SEH frames, so growth
 +        // of the frame list can be traced to a site rather than to a guess.
 +        static int reports = 0;
