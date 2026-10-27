@@ -26,3 +26,9 @@ and original game materials retain the authorship and notices listed below.
 
 The documentation records source provenance, test scope and limitations.
 No project-wide license is assigned to materials owned by third parties.
+
+## Social profile logos
+
+The launcher uses original X, GitHub, Discord and WhatsApp SVG assets served
+locally. Logo ownership, official download sources and retrieval date are
+documented in [social icon sources](tools/web/launcher/social-icons/SOURCES.md).

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>San Andreas Web</title>
+    <link rel="stylesheet" href="app.css" />
+    <!-- Deska serves the SDK inside every panel. Load it first. -->
+    <script src="/__deska/sdk.js"></script>
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <main class="app" id="app" aria-busy="true">
+      <header class="hero">
+        <img class="mark" src="icon.svg" alt="" width="44" height="44" />
+        <div class="hero-text">
+          <p class="eyebrow" id="eyebrow">GTA SA · Browser port</p>
+          <h1 class="title">San Andreas <span class="title-dim">Web</span></h1>
+          <p class="subtitle" id="subtitle">Unofficial community project</p>
+        </div>
+      </header>
+
+      <section class="launch" aria-labelledby="play-label">
+        <button class="play" id="play" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z" /></svg>
+          <span id="play-label">Play in browser</span>
+        </button>
+        <p class="hint" id="hint">Opens gta.galavic.world · about 5 GB on first load</p>
+      </section>
+
+      <div class="tabs" id="tabs" role="tablist" aria-label="Panel view">
+        <button class="tab" id="tab-status" role="tab" aria-selected="true" aria-controls="view-status" type="button">Status</button>
+        <button class="tab" id="tab-checks" role="tab" aria-selected="false" aria-controls="view-checks" type="button" tabindex="-1">My checks</button>
+      </div>
+
+      <section class="view" id="view-status" role="tabpanel" aria-labelledby="tab-status">
+        <h2 class="view-title" id="status-title">Project status</h2>
+        <p class="snapshot" id="snapshot">Snapshot · Oct 2026</p>
+        <ul class="status-list" id="status-list">
+          <li class="status-row" data-status="menu">
+            <span class="status-label">Original menu</span>
+            <span class="chip" data-tone="ok">Verified</span>
+          </li>
+          <li class="status-row" data-status="gameplay">
+            <span class="status-label">Browser gameplay</span>
+            <span class="chip" data-tone="ok">Verified</span>
+          </li>
+          <li class="status-row" data-status="mission">
+            <span class="status-label">First mission</span>
+            <span class="chip" data-tone="pending">Not yet</span>
+          </li>
+          <li class="status-row" data-status="fps">
+            <span class="status-label">Stable 60 FPS</span>
+            <span class="chip" data-tone="unknown">Unverified</span>
+          </li>
+        </ul>
+        <button class="text-link" id="open-status" type="button">Open current status →</button>
+        <p class="fineprint" id="status-note">Verified means confirmed in local builds. No 1:1 or complete-conversion claim.</p>
+      </section>
+
+      <section class="view" id="view-checks" role="tabpanel" aria-labelledby="tab-checks" hidden>
+        <h2 class="view-title" id="checks-title">My test log</h2>
+        <p class="fineprint" id="checks-note">Saved in Deska on this computer. These are your checks, not an official claim.</p>
+        <ul class="check-list" id="check-list">
+          <li><label class="check"><input type="checkbox" data-check="menu" /><span>Menu and language</span></label></li>
+          <li><label class="check"><input type="checkbox" data-check="free-roam" /><span>Free roam and driving</span></label></li>
+          <li><label class="check"><input type="checkbox" data-check="mission" /><span>First mission</span></label></li>
+          <li><label class="check"><input type="checkbox" data-check="save" /><span>Save and load</span></label></li>
+          <li><label class="check"><input type="checkbox" data-check="audio" /><span>Audio and radio</span></label></li>
+        </ul>
+        <div class="checks-foot">
+          <div class="progress" id="progress" role="progressbar" aria-valuemin="0" aria-valuemax="5" aria-valuenow="0">
+            <i id="progress-fill"></i>
+          </div>
+          <span class="count" id="check-count">0 of 5</span>
+          <button class="clear" id="clear" type="button">Clear</button>
+        </div>
+      </section>
+
+      <p class="status-line" id="status" role="status" aria-live="polite"></p>
+
+      <footer class="foot">
+        <p class="legal" id="legal">Unofficial community port. Not affiliated with Rockstar Games.</p>
+        <button class="text-link" id="open-source" type="button">Source</button>
+      </footer>
+
+      <p class="waiting" id="waiting" hidden>Open this panel inside Deska.</p>
+    </main>
+  </body>
+</html>

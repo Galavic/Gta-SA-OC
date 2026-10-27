@@ -6,7 +6,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const installation=process.env.SA_PATH||path.resolve(root,'../../original');
-const folder=path.join(installation,'audio'),output=path.join(root,'public/original-audio');
+const folder=path.join(installation,'audio'),output=process.argv[2]?path.resolve(process.argv[2]):path.join(root,'public/original-audio');
 fs.mkdirSync(output,{recursive:true});
 const lookup=fs.readFileSync(path.join(folder,'CONFIG/BankLkup.dat'));
 const packs=fs.readFileSync(path.join(folder,'CONFIG/PakFiles.dat'));
@@ -37,17 +37,17 @@ function stereo(left,right) {
   header.writeUInt32LE(left.sampleRate,24);header.writeUInt32LE(left.sampleRate*4,28);header.writeUInt16LE(4,32);header.writeUInt16LE(16,34);
   header.write('data',36);header.writeUInt32LE(data.length,40);return Buffer.concat([header,data]);
 }
-const menu=bank(60),loading=bank(82),sounds={
+const menu=bank(60),sounds={
   highlight:{left:menu[4],right:menu[5],bank:60,ids:[4,5]},
   select:{left:menu[6],right:menu[7],bank:60,ids:[6,7]},
   back:{left:menu[0],right:menu[1],bank:60,ids:[0,1]},
-  loading:{left:loading[0],right:loading[1],bank:82,ids:[0,1]},
 };
+if(!process.argv.includes('--menu-only')){const loading=bank(82);sounds.loading={left:loading[0],right:loading[1],bank:82,ids:[0,1]};}
 const manifest={source:'Original local GTA PCM banks',sounds:{}};
 for(const [name,sound] of Object.entries(sounds)){
   const filename=name+'.wav';fs.writeFileSync(path.join(output,filename),stereo(sound.left,sound.right));
-  manifest.sounds[name]={url:'/original-audio/'+filename,bank:sound.bank,ids:sound.ids,
+  manifest.sounds[name]={url:'/'+path.basename(output)+'/'+filename,bank:sound.bank,ids:sound.ids,
     sampleRate:sound.left.sampleRate,seconds:sound.left.pcm.length/(sound.left.sampleRate*2)};
 }
 fs.writeFileSync(path.join(output,'manifest.json'),JSON.stringify(manifest,null,2));
-console.log('Extracted original stereo menu and loading sounds:',manifest.sounds);
+console.log('Extracted original stereo frontend sounds:',manifest.sounds);

@@ -1,5 +1,1659 @@
 # Estado actual
 
+## Revision del snapshot web para Git (2026-10-27)
+
+Se agrupan los cambios locales del port web: launcher, importacion alojada,
+Cloudflare, herramientas reorganizadas, panel asociado y parche completo del
+runtime. Se conserva la revision fijada `ad47228c5b0ab2d1453251999bbd86795e178fac`
+y su licencia. Las modificaciones locales de la dependencia quedan en el parche.
+
+Validacion de este snapshot: 112 pruebas Python de `tests` y `tools/tests`,
+47 pruebas JavaScript del reproductor, Worker e importadores; todas pasan.
+La revision del indice con `tools/check_publication.py` tambien pasa.
+Estas comprobaciones no verifican gameplay ni resuelven los bloqueos de
+la compilacion descritos en las secciones siguientes. No se hace push.
+Ejecutable de referencia: `a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+
+## Regresion al entrar en partida (2026-10-24; correccion en preparacion)
+
+El usuario prueba el candidato `1321072f9b3acaca8658d25dfd34715f220e80b881598d6e94eae6a370a079cf`
+y se cierra al entrar. Ejecutable fijado:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+El log confirma abort en `01560a22`: el salto `01560bae -> 01560a2a` se
+clasifica incorrectamente como interior de instruccion. El PE y una prueba
+sin GPU reproducen el rechazo; `01560a2a` es MOV EAX,[ESP+0x1c] y es un destino
+valido. Es una regresion del cambio anterior: omitia un bloque tras un salto
+y no lo recuperaba al descubrir despues una arista hacia atras.
+
+El decodificador recorre ahora una lista acotada de instrucciones alcanzables,
+incluidos esos destinos tardios, y ordena/valida sus intervalos antes de
+resolver indices. Conserva los rechazos por solapamiento real, saltos fuera
+del rango y presupuestos de ejecucion. Pasan 733 comprobaciones del interprete,
+107 de audio y tres de reutilizacion. La regresion sintetica ejecuta cero,
+una y tres vueltas, ademas de verificar invalidacion de cache al editar el
+bloque omitido. Pasan ademas 131 casos contra Unicorn, con cinco casos nuevos
+de control de flujo. Las pruebas acotadas de ambos bloques originales, `005a0035`
+y `01560a22`, pasan. No ejecutan gameplay ni prueban estabilidad en navegador.
+
+El perfil nuevo se observa aplicado antes del cierre: escala automatica 1,75,
+un submit por fotograma y renombrado activo. Son pantallas previas a la ciudad;
+no se atribuye mejora FPS ni calidad visual comprobada. Preparacion Binaryen,
+V8 y staging final del motor corregido en curso. Mientras tanto se valida con
+V8 y sirve un intermedio sin -O2: Wasm
+`7c5008a80038f8e741f1001022137819871746673a4e14260709ee005f638d13`,
+260.326.761 bytes. HTTP/source/staging coinciden; es para probar la entrada,
+no comparar FPS. La optimizacion sigue en segundo plano. No se publica.
+Registros e identidad
+de pruebas conservados en `build/entry-crash-20261024/` y `docs/progress.json`.
+Pendiente entrar en partida y repetir ruta del crash, Audio, tono y medidas FPS.
+
+## Cierre, audio y resolucion (2026-10-24; candidato servido en local)
+
+Sesion del usuario: Wasm `2d0bac24bc99f8135218adc5b98016927b8964035c21587c21de61865428b7c8`,
+ejecutable `a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Captura: 17,5 FPS en ciudad (48,2 ms; P95 80,3 ms; GPU 7,8 ms), con pixelacion.
+El registro confirma adaptador NVIDIA Ampere. El usuario informa 0,5 FPS al
+abrir Audio y sonidos de CJ/botones graves. El cierre termina en la llamada
+`005a0035`: el interprete rechaza CMP AX,0x196 (`66 3d 96 01`). Se conserva
+el registro completo antes de reiniciar.
+
+Se amplian comparaciones word, TEST AL inmediato, FCOM/FCOMP de memoria y
+FNSTSW AX usando flags y pila x87 compartidos. Tras un terminador se omiten
+bytes sin entrada observada hasta el siguiente destino de salto conocido.
+No se sustituye una instruccion desconocida por un retorno ficticio. La prueba
+acotada del bloque original `005a0035` ahora pasa; no ejecuta gameplay.
+
+Dos fallos concretos de audio corregidos: repetir pan/frecuencia sin cambio
+marcaba el canal como detenido; reutilizar un canal conservaba la frecuencia
+del propietario anterior. Se mantiene el ajuste entre Stop/Play del mismo
+propietario. Pasan 716 comprobaciones del interprete, 107 del mezclador y tres
+de reutilizacion. Pasan ademas 126 casos pytest contra Unicorn (300 rutinas
+integer aleatorias, 76 formas extendidas y 49 comparaciones estrechas); el log
+conserva diagnosticos Windows de Unicorn con proceso finalizado correctamente.
+El target independiente de audio evita las constantes de
+otro juego requeridas por host_tests. La suite DX completa tiene 141.201
+comprobaciones y 23 fallos: ABI de host de 64 bits sobre wasm32 (17) y cursor
+learned (6); no se declara aprobada ni se ha comparado con un binario anterior.
+
+El HTML deja de forzar escala 1 para recuperar la resolucion automatica y
+activa controles existentes de cache de grupos por fotograma, subidas agrupadas
+y renombrado de buffers. QPC permanece en 1. Pasan siete pruebas de staging.
+La sesion del crash aun tenia escala 1 y renombrado desactivado; no prueba
+un fallo del nuevo perfil. No hay ganancia FPS medida.
+
+Compilacion, pruebas dirigidas, Binaryen -O2 y V8 completo aprobados.
+Candidato local: Wasm `1321072f9b3acaca8658d25dfd34715f220e80b881598d6e94eae6a370a079cf`
+(235.192.022 bytes); JS `7462fd59c3e3a6b381267a6c37f9fee159815acc1fa1f58eacb17b00ade68983`;
+data `63b5a7056570aa52e13bd93c067dbe279874e8cbf97ff5c6c2b0cc72df68605d`.
+Source, staging y HTTP tienen los mismos hashes. Se verifican MIME Wasm,
+COOP/COEP, HTML con el hash nuevo y perfil automatico/QPC=1. La preparacion
+conserva 189.522 funciones y maximo 98 locales. El linked archivado conserva
+su hash tras compresion NTFS. Se preserva el candidato anterior y su registro.
+Recargar con Ctrl+F5 `http://127.0.0.1:8771/gtasa-singleplayer/`.
+Pendiente repetir ruta del crash, abrir/cerrar Audio, escuchar el tono y medir
+calidad/FPS en navegador; no hay estabilidad o ganancia FPS verificada para
+este candidato. Los dialogos ausentes tambien en Windows siguen aplazados.
+No se publica.
+Evidencia local: `build/crash-audio-20261024/`, `build/render-profile-20261024/`;
+identidades de pruebas y bloqueos en `docs/progress.json`.
+
+## Limite de 30 FPS y espera adicional de Idle (2026-10-23)
+
+El usuario informa cinematicas a 60 FPS y juego a 20-30 FPS en PC con el
+candidato local `49374508f33b2b704d5756e6265f5b7f82461ead4149797a0a467327f20b3cf9`.
+Es un reporte del usuario, sin captura de tiempos ni medicion automatizada.
+Se verifica en el ejecutable fijado
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`
+que `00619620` inicializa RsGlobal.frameLimit en 30; `00748d81..00748d96`
+compara 1000/limite con el tiempo transcurrido cuando corresponde limitar.
+Ademas `0053e94a..0053e94d` gira hasta superar 14 ms respecto al marcador de
+Idle. No son los hooks historicos de GetTickCount de otra imagen.
+
+`tools/configure_idle_pacing.py` valida SHA y bytes de ambos sitios antes
+de configurar dos sustituciones del traductor: limite inicial 60 y comparacion
+Idle con cero, que nunca toma el salto unsigned de espera. Conserva el PE,
+QPC normal, CTimer::Update, los controles y el trabajo restante del motor.
+Permite restaurar ambos cambios; rechaza parches ajenos. La regeneracion,
+compilacion y preparacion del candidato local terminan con exit code 0.
+
+La comparacion de fuentes detecta ademas una cabecera x86.h obsoleta junto a
+los C generados: el candidato `49374508...` conservaba la rama de retornos
+resumables como variable en esas unidades. Corrige la afirmacion anterior
+sobre la incorporacion efectiva de esa optimizacion a dicho Wasm: el cambio
+existia en la cabecera canonica y el parche completo, pero faltaba refrescar
+su copia generada. Esta ronda la sincroniza con la canonica y recompila todas
+las unidades afectadas. No se atribuye una ganancia FPS a esa sustitucion.
+
+`tools/audit_idle_pacing.py` ejecuta el prefijo x86 real con Unicorn y relojes
+deterministas: cinco cargas de trabajo, 30 fotogramas por caso, conservando
+la igualdad entre tiempo real e input del temporizador. El bucle original
+introduce esperas adicionales; el candidato solo consume tres lecturas por
+fotograma. Seis pruebas del bloque x87 real confirman que a 20 ms el limite
+30 bloquea Idle y el limite 60 permite entrar. Son pruebas CPU del control de
+flujo, no verifican FPS, fisica ni estabilidad de gameplay en navegador.
+Pasan cinco pruebas de configuracion, identidad, idempotencia y restauracion;
+quince pruebas Python en total entre configuracion, preparacion y staging.
+El binario de pruebas recien compilado pasa 21.600 comprobaciones de arranque,
+reloj, eventos, cache y callbacks en ambos modos. Identidad de ese binario CPU:
+`f14f175e6e3638538d3a8460bd8fd9966b5869915cba90005f895eb2e3677dab`.
+Estas comprobaciones no ejecutan la ciudad ni prueban rendimiento grafico.
+El player ya solicita una GPU de alto rendimiento; se anade un registro unico
+de vendor/arquitectura/dispositivo/descripcion cuando el navegador lo expone.
+La GPU elegida y su impacto en gameplay siguen sin verificar.
+
+V8 acepta el modulo completo: 212.673 funciones antes de -O2 y 189.522 despues;
+maximo de locales de 2.929 a 98. Wasm local de 235.190.585 bytes, SHA
+`2d0bac24bc99f8135218adc5b98016927b8964035c21587c21de61865428b7c8`.
+JS: `fa1ef389ab9453499689dc14cac8272233636ab5b1e707b8a09afd144275820e`;
+paquete data sin cambios:
+`63b5a7056570aa52e13bd93c067dbe279874e8cbf97ff5c6c2b0cc72df68605d`.
+HTTP entrega los mismos bytes que source/staging, con MIME Wasm y COOP/COEP.
+El HTML servido mantiene QPC=1 incluso en el enlace antiguo con QPC_SCALE=2,
+escala grafica base 1 y preferencia GPU de alto rendimiento. El registro de
+GPU pasa tres casos Node y el script inline del player pasa comprobacion de
+sintaxis; la seleccion real del navegador queda pendiente.
+
+Para revisar: recargar `http://127.0.0.1:8771/gtasa-singleplayer/` con Ctrl+F5,
+medir FPS/tiempos al recorrer la ciudad y comprobar velocidad, controles y
+cinematicas. El tope configurado es 60, sin ganancia de FPS verificada en una
+partida ni verificacion de fisica a esa cadencia. La copia anterior y los
+registros conservan sus identidades. Dos linked archivados se comprimen con
+NTFS para recuperar espacio, verificando ambos hashes sin cambios. Todo local.
+Evidencia local: `build/idle-pacing-20261023/idle-prefix-audit.json` y
+`build/idle-pacing-20261023/status.json`. No se publica nada.
+
+Referencias de correspondencia, contrastadas con el ensamblado local:
+[GTA Reversed Idle](https://github.com/gta-reversed/gta-reversed/blob/master/source/app/app_game.cpp)
+y [WinMain](https://github.com/gta-reversed/gta-reversed/blob/master/source/app/platform/win/WinMain.cpp).
+
+## Retirada del enlace de reloj acelerado y resolucion base local (2026-10-23)
+
+El usuario informa aproximadamente 20 FPS y sensacion de velocidad x2. El
+enlace experimental ofrecido activaba QPC_SCALE=2, que acelera el reloj del
+guest; no acredita una optimizacion ni una ganancia de FPS. Se retira del
+launcher jugable: el preRun ignora ese parametro en enlaces antiguos y fija
+QPC_SCALE=1 incluso ante un valor heredado en ENV. Es necesario recargar la
+pagina para reiniciar el runtime que ya estuviera ejecutandose con escala 2.
+
+El bootlog confirma el Wasm local `49374508f33b2b704d5756e6265f5b7f82461ead4149797a0a467327f20b3cf9`
+y objetivos de render a 1,75x la resolucion del juego. El nuevo perfil local
+usa D3D9_SCALE=1 por defecto, evitando ese incremento de aproximadamente
+3,06x en pixeles; la imagen puede verse menos nitida al ampliarla. Se conservan
+overrides de escala grafica y cache, pero no del reloj. Se activa el informe
+ligero D3D9_STATS para registrar FPS/dibujos/grupos cada 300 presentaciones y
+se registran los valores efectivos del perfil al arrancar. No se cambia Wasm.
+
+Pasan diez pruebas Python, incluida ejecucion del preRun real con enlaces
+QPC=2/8, parametros repetidos y ENV heredado, y conservacion de otros overrides.
+HTTP entrega el HTML corregido incluso al solicitar el enlace antiguo con
+QPC_SCALE=2. El navegador de herramientas sigue sin sesiones conectadas:
+pendiente confirmar ritmo normal y medir FPS/P95 tras recargar en PC. Los
+20 FPS reportados siguen siendo un problema sin mejora verificada. Cambios
+solo locales. Evidencia: `build/optimization-20261023/normal-clock-launcher-check.json`.
+Ejecutable: `a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+
+## Panel de Deska del port (2026-10-24)
+
+Se agrega `deska/san-andreas-web`, un panel para Deska que abre el launcher
+publico, muestra un resumen fechado de hitos verificados y guarda una lista
+personal de pruebas. Solo pide `open-url`; no declara hosts ni consulta la red.
+Las pruebas se guardan en deska.storage y no son una verificacion oficial.
+
+El manifiesto pasa el validador de deska-panels-examples. En el host de vista
+previa carga en temas claro/oscuro y locales en/es sin errores del panel ni del
+puente; se comprobaron persistencia, borrado, teclado y `openUrl` simulado, y
+los anchos 240, 300, 340 y 400 px sin desbordamiento horizontal.
+Pendiente cargarlo en Deska real y revisar la ventana en el escritorio del
+usuario. No cambia el ejecutable ni el Wasm publicados:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26` y
+`5889d8ddf6efc047b12791dad6cc1f526447d35f5d67f5865a37e195601fe036`.
+Evidencia: `build/deska-panel-20261023/`.
+
+## Optimizacion local para PC y esperas de streaming (2026-10-23)
+
+El usuario informa tirones al recorrer la ciudad y en cinematicas en PC.
+Confirma que las voces tampoco funcionan en la instalacion Windows original
+y pide posponer ese asunto. La auditoria repetida conserva las identidades
+historicas de PROLOG1/PROLOG3: el mismo Ogg de 9.504 bytes y 1,18578125 s,
+con relleno posterior. No se sustituye ni publica audio en esta ronda.
+
+Se incorpora del commit de lauta `ff1547048f9924df73f9f99c9d0b7a839f361dc3`
+la decision constante del retorno resumable y la preparacion incondicional
+con wasm-opt -O2, validando en V8 y aceptando la eliminacion de funciones.
+La preparacion registra hashes de entrada/salida y permite elegir el linked
+de entrada. Se conserva una copia del runtime anterior. La escala QPC esta
+disponible como diagnostico validado entre 1 y 8, desactivada por defecto;
+no se incorpora la eliminacion experimental de flags ni contadores por bloque.
+
+Cambios nuevos: pool de hasta 32 checkpoints retirados por hilo propietario,
+sin mover checkpoints activos ni cambiar las reglas SEH; eliminacion de
+recorridos PCM y mensajes de primer Play fuera de AUDIO_TRACE; aplicacion de
+senales host pendientes antes de evaluar una espera, incluso timeout cero.
+Este ultimo cambio corrige la observacion tardia de finalizaciones entre los
+checkpoints de imports muestreados. El player local activa la cache acotada de
+rutas de lectura, conservando overrides RECOMP_ explicitos; no cachea contenidos.
+
+Verificacion CPU: 403 comprobaciones de arranque, 68 de cache de rutas, 20 de
+reloj, 8 de despacho SEH vacio, 7 de contadores del interprete y 977 de eventos
+pasan. Ambos modos del pool pasan 10.066 comprobaciones cada uno; el ensayo
+anidado reduce reservas de 69.032 a 33.032, con 36.000 reutilizaciones. Tiempos
+de microbenchmark bajo compilacion concurrente no prueban una ganancia FPS.
+Tras corregir las esperas pasan las notificaciones DirectInput/DirectSound y
+los grupos de streaming, formatos y vida de PCM. La suite DX completa conserva
+23 fallos de ABI/cursor; no se declara verde. Antes del arreglo de esperas el
+binario recien compilado tenia 29 fallos, incluidos seis de notificaciones.
+Las diez pruebas Python de preparacion y staging pasan.
+
+Compilacion completa y preparacion terminadas con exit code 0. V8 acepta el
+modulo completo: 213.007 funciones antes de -O2, 201.224 despues; maximo de
+locales de 2.929 a 98. Wasm local de 240.809.792 bytes, frente a los
+266.206.438 bytes del baseline conservado. Esto acredita reduccion de tamano,
+no una ganancia medida de FPS. Hash del nuevo Wasm local:
+`49374508f33b2b704d5756e6265f5b7f82461ead4149797a0a467327f20b3cf9`.
+JS, Wasm y data entregados por HTTP son identicos a sus fuentes, con COOP/COEP
+y MIME Wasm correctos. El HTML anuncia el mismo hash y conserva overrides.
+Las pruebas especificas se repiten con los binarios finales de singleplayer;
+la suite DX final confirma los 23 fallos historicos de ABI/cursor y los grupos
+de notificaciones/streaming pasan. El parche completo reconstruye identicos
+los siete archivos nativos modificados sobre la base local.
+
+Servidor disponible en http://127.0.0.1:8771/gtasa-singleplayer/ . La prueba
+de reloj de lauta se activa explicitamente con `?RECOMP_QPC_SCALE=2`;
+el arranque normal no escala el reloj. Pendientes comparar FPS/P95 en escenas
+de ciudad y cinematicas y comprobar sincronizacion en navegador. No hay una
+sesion de navegador conectada a las herramientas; el intento de abrir IAB
+tambien devuelve Browser is not available. Ningun cambio de esta ronda se
+ha desplegado. Evidencia privada: `build/optimization-20261023/`, incluidos
+`staged-candidate.json`, `http-delivery.json` y `source-patch-check.json`.
+Ejecutable: `a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+
+## Revision de la prueba de 40 FPS de lauta (2026-10-23)
+
+Revisado el commit remoto `ff1547048f9924df73f9f99c9d0b7a839f361dc3`.
+Su informe mide 24,35 FPS con reloj normal, 37,80 con RECOMP_QPC_SCALE=2 y
+39,5 con wasm-opt y escala 8, en una escena concreta. El propio autor deja
+la escala desactivada por defecto: altera el reloj del juego y puede cambiar
+fisica, animacion y trafico. Son mediciones publicadas por el autor, no una
+reproduccion local ni una garantia de rendimiento en otros dispositivos.
+El informe retira la mejora de velocidad atribuida a wasm-opt; conserva una
+reduccion de tamano de 254,2 a 229,7 MB.
+
+El runtime local no contiene RECOMP_QPC_SCALE y el Wasm publicado sigue siendo
+`5889d8ddf6efc047b12791dad6cc1f526447d35f5d67f5865a37e195601fe036`.
+La actualizacion de descarga no incorpora esta ronda del motor. Esta revision
+no modifica ni publica el runtime. Pendientes integrar los cambios compatibles,
+compilar y comparar artefactos en navegador con escena y temporizacion normales;
+no se ha verificado aqui el resultado de 40 FPS.
+Ejecutable del informe y de la publicacion:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+
+## Preparacion alojada acelerada y reanudable por bloques (2026-10-24)
+
+La captura del usuario muestra la descarga inicial en 1/417 archivos,
+20 MB de 4,7 GB (anim/cuts.img). La ruta anterior descargaba un archivo a la
+vez y calculaba SHA-256 en JavaScript tanto en hostedSource como en importGame.
+Cada avance de red notificaba al hilo principal y la importacion anterior
+persistia el manifiesto solo cada 50 archivos completos.
+
+La nueva ruta alojada, propia del repositorio, usa rangos de 4 MiB y WebCrypto,
+con dos archivos y dos rangos por archivo simultaneos (hasta cuatro descargas).
+Verifica cada rango antes de escribirlo a su offset real en OPFS. Conserva los
+bloques comprobados en un diario, con checkpoint como maximo cada segundo y
+al completar cada archivo. Se reutilizan archivos completos del manifiesto
+anterior. Un fallo/cancelacion espera las solicitudes hermanas antes de cerrar
+sus handles. El sello final solo aparece al terminar y verificar ejecutable y
+DLL reales; una DLL local corrupta se vuelve a descargar. Los perfiles siguen
+fuera de esta ruta. Los avisos de avance se limitan a 150 ms y muestran MB/s.
+
+Se genera un inventario de 1.586 rangos comprobando de nuevo las identidades
+del origen preparado; los objetos R2 y game build `a033b7fd3a69b951` se reutilizan.
+El Worker permite Range validado, devuelve 206/Content-Range/Accept-Ranges y
+rechaza rangos invalidos con 416 antes de acceder a R2. El lector rechaza una
+respuesta 200 antes de almacenar su cuerpo, evitando buffering de archivos
+grandes si un servidor ignora Range. La integracion se hace al montar el
+launcher y deja disponible la importacion anterior para carpetas/ZIP e
+inventarios sin fastRanges; no se modifica la dependencia fijada.
+
+Publicada version `4e246825-35d4-4286-af76-051caf44b917`. Pasan 32 pruebas Node y
+8 Python, incluidos corrupcion, interrupcion/reanudacion parcial, reparacion de
+DLL, cancelacion, limites de rangos y enlace del inventario a bytes originales.
+Verificados por HTTPS cinco recursos cambiados y nueve rangos de archivos
+normales y fragmentados con SHA-256 y Content-Range exactos. Muestra HTTP desde
+este equipo: 33742848 bytes en 1.048 segundos,
+30.69 MiB/s. Es una comprobacion de red con curl,
+no una medicion de navegador movil. Microbenchmark Node de 32 MiB: doble hash
+JS 1163.9 ms frente a hash nativo 37.0 ms;
+el factor 31.4 corresponde solo al hash, no a la carga completa.
+
+La referencia primaria consultada, https://github.com/hellorayhere/gta5-web-port,
+documenta rangos, batches y cache acotada para traer recursos bajo demanda.
+Este cambio acelera la preparacion completa; todavia descarga 4,7 GiB antes
+de arrancar. Carga del motor bajo demanda requeriria cambiar su backend de
+archivos y validar lecturas durante juego real. Pendientes velocidad real en
+celular, preparacion completa en navegador y gameplay del dominio publico.
+
+Evidencia: `build/cloudflare-release-20261024-fast-import/http-range-verification.json`,
+`build/cloudflare-release-20261024-fast-import/preflight-verification.json` y
+`build/import-performance-20261024/hash-benchmark.json`.
+Ejecutable: `a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Wasm conservado: `5889d8ddf6efc047b12791dad6cc1f526447d35f5d67f5865a37e195601fe036`.
+
+## Mejoras del launcher publicadas con autorizacion (2026-10-24)
+
+El usuario indica ahora si subelo, autorizando publicar las mejoras que se
+habian mantenido solo en local. Publicadas en https://gta.galavic.world/:
+favicon, tarjetas de redes de Galavic y lauta con logos originales, cuatro
+portadas aleatorias sin repeticion consecutiva, correccion de capas del fondo,
+logo centrado en celular y musica en bucle con silencio persistente junto a
+Pause backgrounds. La primera imagen tambien se elige aleatoriamente.
+
+Worker version `cc75e7f4-51c3-49a4-b887-cd752e15d55a`.
+Se conserva game build `a033b7fd3a69b951` y la descarga automatica del
+juego preparado, con los mismos archivos R2. El runtime no cambia:
+`5889d8ddf6efc047b12791dad6cc1f526447d35f5d67f5865a37e195601fe036`.
+Ejecutable: `a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+
+Pasan 6 pruebas Python de staging/servidor y 17 Node de audio de menu,
+transporte y Worker. Comprobada la sintaxis de todos los modulos de la release,
+el allowlist y la ausencia de credenciales/rutas personales en recursos de
+texto. Wrangler dry-run y despliegue completados. Verificados por HTTPS los
+33 recursos estaticos con bytes exactos, MIME y COOP/COEP, y HEAD de los dos
+objetos de runtime con tamanos originales. Una peticion Range al MP3 devuelve
+200 con el archivo completo correcto. Pendiente revision interactiva del
+launcher, audio y movil en el dominio publico; no se afirma gameplay nuevo.
+No se realiza push de Git ni se reescribe el trabajo pendiente del repositorio.
+
+Evidencia local:
+`build/cloudflare-release-20261023-launcher-refresh/preflight-verification.json`
+y `build/cloudflare-release-20261023-launcher-refresh/http-verification.json`.
+Las notas anteriores de solo local se conservan como historial de cada cambio.
+
+## Portadas aleatorias, solo local (2026-10-23)
+
+Se elige aleatoriamente la primera portada y se barajan las restantes con
+Fisher-Yates. Al terminar una ronda se vuelve a barajar la lista completa,
+evitando comenzar con la portada visible. Se conservan las cuatro imagenes,
+el intervalo de 8 segundos, el fundido, la pausa y las capas del fondo.
+La primera imagen aleatoria se muestra tras decodificarla, conservando el
+fondo CSS mientras carga; se precarga tambien la siguiente candidata.
+
+node --check pasa para backgrounds.js y el modulo servido por HTTP 200 coincide
+con los bytes locales. Pendiente revision visual del usuario. No se ejecuta
+subida ni despliegue. Evidencia:
+`build/launcher-random-backgrounds-20261023/http-verification.json`.
+Runtime y ejecutable conservados:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+
+## Cuarta portada del launcher, solo local (2026-10-23)
+
+Se agrega el PNG indicado por el usuario como cuarta portada de la rotacion,
+conservando las tres anteriores y el comportamiento actual del launcher.
+Copia sin modificar: `build/launcher-assets/background-4.png`.
+SHA-256: `aaeb5150fa544bc234314afd0789e43dc49f7999cc85ffd06661a8a0913d0c84`.
+Staging restaura la imagen y backgrounds.js la incluye en la secuencia.
+Verificados por HTTP los bytes exactos de imagen y modulo; node --check pasa.
+Pendiente revision visual del usuario. No se realiza subida ni despliegue.
+Evidencia: `build/launcher-fourth-background-20261023/http-verification.json`.
+Runtime y ejecutable conservados:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+
+## Musica del launcher en bucle, solo local (2026-10-23)
+
+El usuario aclara que quiere solo audio del enlace YouTube rbcnKcyI7o4 y un
+boton de silencio junto a Pause backgrounds. Se prepara un MP3 local solo de
+audio (120.581224 segundos, 3.420.269 bytes) y se usa audio.loop, sin iframe ni
+cambio de portadas. El archivo queda ignorado en build/launcher-assets y se
+restaura mediante staging; no se sube ni se incluye en Git. Origen:
+https://www.youtube.com/watch?v=rbcnKcyI7o4
+SHA-256: `0e03bbc0f250396cc70b46b00d2b86dbe635b134032c9f9b7028a27959176560`.
+
+Se agrega music.js, con volumen inicial 30%, silencio recordado en localStorage,
+inicio al primer gesto o mediante Play music si el navegador bloquea autoplay,
+pausa en pestanas ocultas y detencion al salir del launcher. El boton cambia
+entre Mute music y Unmute music; los efectos del menu mantienen su audio propio.
+El empaquetador queda preparado para una futura publicacion autorizada; no se
+ejecuta despliegue ni push.
+
+Verificados por HTTP cinco recursos con bytes exactos y MIME audio/mpeg del
+MP3, ffprobe confirma una unica pista de audio y FFmpeg decodifica el archivo
+completo sin errores. node --check pasa para music.js y start.js. Pendiente
+comprobar reproduccion, bucle y boton de silencio en el navegador del usuario.
+Evidencia: `build/launcher-music-20261023/http-verification.json`.
+Runtime y ejecutable conservados:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+
+## Logo centrado en celular, solo local (2026-10-23)
+
+Se centra horizontalmente el logo de GTA en el breakpoint de hasta 800 px,
+con align-self:center y object-position:center. La regla de escritorio se
+conserva. CSS local servido por HTTP 200 con bytes exactos y reglas moviles
+comprobadas. Pendiente revision visual del usuario tras recargar. No se sube
+ningun cambio. Evidencia:
+`build/launcher-mobile-logo-20261023/http-verification.json`.
+Runtime y ejecutable conservados:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+
+## Tercera portada del launcher, solo local (2026-10-23)
+
+Se agrega el PNG indicado por el usuario como tercera portada de la rotacion,
+conservando las dos anteriores, su intervalo de 8 segundos y el aislamiento
+del fondo debajo de los controles. Copia local sin modificar:
+`build/launcher-assets/background-3.png`, SHA-256 `72ca33fc6ae821ad6ad91e06492e1fa8d7989421307a21a084b66c432ffb10f1`.
+Staging restaura la imagen y backgrounds.js la incluye en la secuencia.
+Verificados por HTTP los bytes exactos de imagen y modulo servido; node --check
+pasa para backgrounds.js. Pendiente revision visual del usuario. No se realiza
+subida ni despliegue. Evidencia:
+`build/launcher-third-background-20261023/http-verification.json`.
+Runtime y ejecutable conservados:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+
+## Correccion de capas durante el fundido, solo local (2026-10-23)
+
+La captura del usuario muestra que el fondo nuevo tapa logo, menu y ayuda
+inferior, mientras siguen visibles los controles con z-index 2. La regresion
+procede del z-index 1 de la portada entrante: scene no tenia un contexto de
+apilamiento propio y hero y menu-help tenian orden automatico.
+
+Se aisla scene en z-index 0 y se fija hero y menu-help en z-index 1. Los indices
+internos del fundido quedan contenidos debajo de los controles. Se conserva
+pointer-events:none en el fondo. No cambia la rotacion ni se realiza despliegue.
+Servidor local reiniciado; verificado CSS servido por HTTP 200 con bytes exactos
+y las reglas corregidas. Pendiente confirmacion visual tras recargar en el
+navegador del usuario.
+Evidencia: `build/launcher-background-stacking-20261023/http-verification.json`.
+Runtime y ejecutable conservados:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+
+## Rotacion de portadas del launcher, solo local (2026-10-23)
+
+Se agrega la segunda portada indicada por el usuario a la imagen de fondo
+existente. La copia local persistente es `build/launcher-assets/background-2.png`;
+se conserva el PNG sin modificar (SHA-256
+`357cf3142da95ae4ae2adb532c5827ff09863da4b6b29fbcbe8feae02b4ef2f6`). backgrounds.js mantiene la lista ampliable
+de portadas y alterna dos capas con un fundido de opacidad de 1 segundo cada
+8 segundos (curva cubic-bezier(.77, 0, .175, 1)). La imagen entrante se precarga
+y decodifica antes de mostrarse; la anterior permanece debajo del fundido.
+
+Se agrega pausa/reanudacion. La rotacion se detiene en pestanas ocultas y queda
+inicialmente pausada si el usuario prefiere movimiento reducido. Un fallo de
+imagen conserva el fondo visible. Staging restaura las portadas adicionales y
+el empaquetador las incluira cuando el usuario solicite publicar. No se sube nada.
+
+Verificados por HTTP seis recursos locales con bytes exactos y MIME PNG/JS;
+node --check pasa para backgrounds.js y start.js. Evidencia:
+`build/launcher-background-rotation-20261023/http-verification.json`.
+Pendiente revision visual del fundido y encuadre en el navegador del usuario.
+No cambia el runtime ni el ejecutable:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+
+## Redes y logos originales de contribuidores, solo local (2026-10-23)
+
+Se configura Galavic con X @ga_lavic y su GitHub, sin filas de Discord.
+El nombre visible machinebreak cambia a lauta; mantiene su identidad GitHub y
+avatar existentes, agrega X @LautaTWT, el servidor Discord y el canal WhatsApp
+indicados por el usuario. No se muestra usuario de Discord sin configurar.
+Las redes ausentes se ocultan por perfil, incluido al alternar entre tarjetas.
+
+Se reemplazan letras y simbolos genericos por SVG originales de X, GitHub,
+Discord y WhatsApp, descargados de sus sitios o archivos de marca oficiales.
+Se preservan los bytes y colores; solo cambia su tamano de visualizacion.
+Fuentes y propiedad en `tools/web/launcher/social-icons/SOURCES.md`.
+El staging restaura los cuatro iconos y el empaquetador los incluira cuando
+el usuario solicite publicar; no se ejecuta ninguna subida ni despliegue.
+
+Verificados por HTTP siete recursos locales, bytes exactos y MIME image/svg+xml
+de los logos; node --check pasa para contributors.js. Pendiente revision visual
+e interactiva del usuario. Evidencia:
+`build/launcher-contributor-socials-20261023/http-verification.json`.
+No cambia el runtime ni el ejecutable:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+
+## Tarjetas sociales de contribuidores, solo local (2026-10-23)
+
+Al pulsar machinebreak o Galavic se abre una tarjeta con su avatar, nombre y
+cuatro filas: X, GitHub, grupo de Discord y usuario de Discord. GitHub conserva
+los perfiles ya configurados. Las otras redes quedan inactivas hasta recibir
+sus enlaces y nombres del usuario; no se deducen cuentas a partir del nombre.
+El usuario de Discord se podra copiar con confirmacion y alternativa de texto
+si el portapapeles falla. Se reutilizan cierre con Escape, clic exterior,
+boton de cierre, limite de tabulacion y restauracion del foco del launcher.
+
+El modulo contributors.js guarda la configuracion de cada perfil; staging y
+empaquetado incluyen el modulo. No se ejecuta despliegue, subida ni push.
+Verificados por HTTP los cuatro archivos editados, bytes exactos y MIME de
+los modulos; node --check pasa para start.js y contributors.js. Pendientes
+revision visual/interactiva (inventario de navegadores vacio) y enlaces de X,
+invitaciones de Discord y usuarios de Discord para ambos contribuidores.
+Evidencia: `build/launcher-contributor-cards-20261023/http-verification.json`.
+No cambia el runtime ni el ejecutable:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+
+## Favicon del launcher, solo local (2026-10-23)
+
+Se usa el PNG indicado por el usuario como favicon del launcher. Copia local
+persistente en `build/launcher-assets/favicon.png`; stage_launcher lo restaura
+en el sitio servido y el HTML lo referencia como image/png. Se conserva la
+imagen original (810 x 810) sin modificarla. El empaquetado podra incluirla
+cuando el usuario solicite publicar; no se ejecuta ningun despliegue ni subida.
+
+Servidor local iniciado en `http://127.0.0.1:8771/`. Verificados referencia HTML,
+HTTP 200, MIME image/png y bytes exactos del favicon por HTTP.
+SHA-256: `400dc5c4b4f1c47e3142e94961cc214d4a2bf45685001f673ad5f9d62f340a28`.
+Evidencia: `build/launcher-favicon-20261023/http-verification.json`.
+No cambia el runtime ni la identidad del ejecutable:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Pendiente revision visual de la pestana del usuario; no hay navegador disponible
+para automatizacion. Las siguientes mejoras del launcher quedan solo en local
+hasta instruccion expresa del usuario para subirlas.
+
+## Copia preparada alojada y descarga automatica (2026-10-23)
+
+El usuario autoriza subir los archivos del juego para no seleccionar carpetas.
+La causa de la diferencia con local esta comprobada en prepare_singleplayer.py:
+el servidor usa variants/singleplayer/prepared con DLL auxiliares preparadas y
+reubicadas, no los bytes de las DLL instaladas. En particular vorbisFile.dll
+procede de vorbisHooked.dll antes de su preparacion. Las correcciones anteriores
+de importacion no hacian equivalentes estas dos carpetas.
+
+Se aloja la copia preparada (417 archivos, 5.004.941.035 bytes) en R2, build
+`a033b7fd3a69b951`. Los archivos grandes se transfieren en bloques de 64 MiB.
+El Worker solo sirve objetos del inventario y del build configurado. El launcher
+inicia la descarga al abrir la pagina si la copia no esta lista, conserva los
+archivos terminados para reintentos y comprueba hashes de bloques y archivos
+antes del sello final. OPFS mantiene los archivos del juego separados de los
+perfiles; no se suben partidas, credenciales ni archivos del juego a Git.
+En esta configuracion se ocultan los botones de seleccion de carpeta/ZIP.
+
+Publicado Worker `8f22e343-0b9a-423a-8246-62a13ff72f7b`. Verificados por HTTPS
+los seis recursos cambiados con bytes exactos, HEAD y tamanos de los 461 objetos
+de transferencia con COOP/COEP, descarga y SHA-256 del ejecutable y las cuatro
+DLL, y descarga/hash de un bloque completo de 64 MiB. Evidencia local:
+`build/cloudflare-release-20261023-hosted-game/http-verification.json` y
+`build/cloudflare-release-20261023-hosted-game/chunk-verification.json`.
+Pasan 39 pruebas Node y 7 Python (incluyen descarga por bloques, corrupcion,
+fallos HTTP, reanudacion, aislamiento y empaquetado/subida sinteticos).
+
+Ejecutable: `a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Wasm publico conservado:
+`5889d8ddf6efc047b12791dad6cc1f526447d35f5d67f5865a37e195601fe036`.
+Pendiente: primera preparacion completa y siguiente arranque en navegador del
+dominio publico. La herramienta de navegador devuelve inventario vacio, por lo
+que no se afirma verificacion interactiva ni gameplay en este despliegue.
+Se conserva debajo la evidencia de las etapas anteriores y sus identidades.
+
+## DLL automaticas durante la importacion de carpeta (2026-10-23)
+
+A peticion del usuario, la importacion de carpeta prepara las DLL requeridas
+sin una seleccion adicional: normaliza sus nombres antes de copiar a OPFS,
+comprueba que estan en la carpeta antes de copiar archivos grandes y valida
+los hashes guardados antes de escribir el sello de importacion completada.
+La reimportacion vuelve a copiar una DLL corrupta aunque su tamano y fecha
+coincidan con el manifiesto anterior. La misma logica sirve para ZIP.
+Si la carpeta carece de una DLL o contiene otra version, informa el nombre;
+no puede obtener del disco un archivo que no fue seleccionado.
+
+Pasan 20 pruebas Node: importacion automatica con mayusculas, ausencia previa
+a copia, rechazo de DLL incompatible sin sello y reparacion en reimportacion,
+ademas de transporte y recuperacion selectiva. Publicado en el Worker
+`8eaa36fc-b735-4a68-a4e2-966a6e5b800b`; verificados por HTTPS core.js, app.js
+y games.json con bytes exactos, MIME y aislamiento. Evidencia local:
+`build/cloudflare-release-20261023-auto-dll-import/http-verification.json`.
+Ejecutable: `a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Wasm publico conservado:
+`5889d8ddf6efc047b12791dad6cc1f526447d35f5d67f5865a37e195601fe036`.
+Pendiente verificar importacion real y arranque en navegador; no se afirma gameplay.
+
+## Recuperacion de DLL en el dominio publico (2026-10-23)
+
+La captura del usuario muestra `Missing eax.dll` tras importar y pulsar jugar
+en gta.galavic.world. El launcher solo validaba sello y carpetas; el player
+publico rechazaba las DLL ausentes sin ofrecer una recuperacion selectiva.
+Ahora el launcher comprueba los hashes reales de las cuatro DLL auxiliares.
+El boton `Complete DLLs` abre el player, donde `Select missing DLLs` permite
+seleccionar archivos locales compatibles sin repetir la importacion del juego.
+Se validan antes de escribir, se comprueba la copia y se normalizan nombres
+con mayusculas para OPFS. Los archivos permanecen en el navegador; los perfiles
+no se modifican. No se publican DLL ni se habilita /install en el servidor.
+
+Publicado en el Worker, version `74b671b5-2fe8-4298-b981-cf78b03c9db3`.
+Verificados por HTTPS seis recursos con bytes exactos, MIME y COOP/COEP.
+Pasan 30 pruebas Node y 6 Python, incluyendo espera de seleccion, rechazo,
+reintento y continuacion tras una reparacion sintetica. Evidencia local:
+`build/cloudflare-release-20261023-dll-recovery-v2/http-verification.json`.
+Ejecutable: `a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Wasm publico conservado:
+`5889d8ddf6efc047b12791dad6cc1f526447d35f5d67f5865a37e195601fe036`.
+Pendiente: seleccion de DLL compatibles y siguiente arranque real en el
+navegador del usuario. Estas pruebas no verifican gameplay.
+
+## Dominio gta.galavic.world activo en Cloudflare (2026-10-23)
+
+El usuario anadio los nameservers gracie.ns.cloudflare.com y
+yahir.ns.cloudflare.com en Namecheap. La delegacion propago y la zona
+galavic.world (cfec2730fb45705cb99e6e5af8e8f0f0) figura active desde
+2026-10-23T20:23:35Z. El apex conserva el A de Vercel, los MX de
+registrar-servers.com y el SPF; solo se movieron los nameservers. El origen
+Vercel del apex responde 402 con x-vercel-error DEPLOYMENT_DISABLED tambien
+de forma directa (216.198.79.1), por lo que esa incidencia es anterior a la
+migracion y ajena a este cambio. www.galavic.world sigue sin registro, igual
+que antes.
+
+gta.galavic.world se sirve desde el Worker gta-sa-oc mediante custom domain,
+no desde el hostname de Pages. HTTPS responde 200 con certificado Let's
+Encrypt de la zona (expira 2027-01-21) y HTML con COOP/COEP. Los dos objetos
+del runtime responden 200 con application/wasm y application/octet-stream,
+266206438 y 35073821 bytes, cache inmutable y las mismas cabeceras de
+aislamiento; /install y un build de runtime desconocido responden 404. El
+endpoint Pages gta-galavic.pages.dev sigue respondiendo 200.
+
+Se publica el Worker version b21fe8f6-1302-400e-a203-819591463bba, que
+conserva la redireccion 301 de HTTP a HTTPS y retira el credito "Ported by /
+San Andreas Community" del launcher (HTML y CSS). El endpoint Pages
+gta-galavic.pages.dev se redespliega como 2e4a07f7 con los mismos assets y
+worker; ambos siguen sirviendo el runtime desde el mismo bucket. Los assets y
+el runtime R2 son los mismos de c94da1d7. tools/tests/worker.test.mjs cubre
+redirect, cabeceras, runtime, 404 y 405; 6/6 tests pasan. Tambien se actualizan
+fixtures y aserciones obsoletas de player_boot y test_serve_variant: pasan 16/16
+tests JS de tools y 12/12 tests Python de tools.
+
+Pendiente: el custom domain homonimo del proyecto Pages queda pending
+("CNAME record not set") porque el Worker ocupa el hostname; no sirve trafico
+y conviene retirarlo desde el panel. No se verifica gameplay ni importacion en
+el dominio nuevo: OPFS es por origen, asi que hace falta importar de nuevo la
+carpeta del juego en gta.galavic.world. La resolucion nativa 1080p sigue sin
+verificarse.
+
+## Cambio de DNS a Cloudflare solicitado; creacion de zona bloqueada (2026-10-23)
+
+Superado por la seccion superior; se conserva como evidencia del bloqueo inicial.
+
+El usuario solicita gestionar galavic.world en Cloudflare DNS. Confirma que solo
+usa la web apex en Vercel y deja su migracion de contenido para otra tarea.
+Se consulta la cuenta conectada: no existe una zona galavic.world. El POST de
+creacion de zona full recibe HTTP 403: falta el permiso de cuenta zone.create.
+La sesion OAuth actual permite el despliegue pero no esta operacion. No hay
+credenciales de Namecheap ni navegador habilitado para crear la zona por UI.
+
+Falta que el usuario anada galavic.world en Cloudflare, plan Free. Despues se
+pueden leer los nameservers asignados, crear el CNAME gta al Pages existente y
+completar en Namecheap el cambio a Custom DNS. Aun no hay nameservers Cloudflare
+asignados, no se ha creado la zona ni cambiado DNS, apex o correo. La web sigue
+publicada en gta-galavic.pages.dev y gta.galavic.world sigue pendiente de DNS/TLS.
+
+## Dominio gta.galavic.world preparado (2026-10-23)
+
+El usuario solicita el subdominio de galavic.world, registrado y servido por
+DNS de Namecheap. La zona no esta incorporada a Cloudflare; el apex tiene su
+sitio existente y MX de Namecheap. Se elige Pages con funcion avanzada + R2 para
+conectar solo el subdominio mediante CNAME, conservando el resto del DNS.
+
+Proyecto gta-galavic, https://gta-galavic.pages.dev/ , despliegue 4dda85ca.
+El hostname gta.galavic.world ya esta registrado en Pages; el estado inicial de
+Cloudflare es initializing/verificacion pending. Falta guardar en Namecheap un
+CNAME con host gta y destino gta-galavic.pages.dev, TTL Automatic. No hay acceso
+a Namecheap ni superficies de navegador habilitadas en esta sesion para guardarlo.
+No se han cambiado los nameservers, registros apex ni correo.
+
+El nuevo endpoint Pages, launcher, reproductor y ambos endpoints R2 responden
+200 con COOP/COEP; MIME application/wasm correcto. Se conserva el mismo bucket y
+Wasm publico `5889d8ddf6efc047b12791dad6cc1f526447d35f5d67f5865a37e195601fe036`.
+Pendiente: DNS CNAME, emision TLS y comprobacion HTTPS en gta.galavic.world.
+No se verifica gameplay ni se resuelve la incidencia de resolucion con este cambio.
+
+## Publicacion en Cloudflare Workers y R2 (2026-10-23)
+
+Web publicada: https://gta-sa-oc.enrimilioano09.workers.dev/ . Worker gta-sa-oc, version
+c94da1d7-cb1a-4d44-ad5d-83455ef2fb1f. Bucket privado gta-sa-oc-runtime;
+el Worker solo permite GET/HEAD de los dos objetos del runtime de esta version.
+El usuario autorizo publicar el proyecto y dejo sin efecto las restricciones
+anteriores que impedian alojar artefactos generados. Los binarios siguen fuera de Git.
+
+20 archivos estaticos del launcher/reproductor y 2 objetos R2 verificados desde
+el dominio publico, con SHA-256, MIME e aislamiento COOP/COEP. Wasm (266206438 bytes)
+y data (35073821 bytes) se sirven como streams bajo el mismo dominio. La preparacion
+publica elimina prefijos personales de cadenas del compilador sin cambiar longitud
+ni instrucciones. V8 completo valida ese Wasm. Las rutas /install y los objetos
+R2 no permitidos responden 404. Se incluyen medios seleccionados del launcher,
+fuente CSS y efectos de sus botones; no se sube la instalacion del juego, sus DLL,
+archivos de mundo/modelos, pruebas locales ni volcados o registros privados.
+
+Wasm local de origen:
+`4530b7f65c519561952cd2e70044719650f32d99633d9d4c8a143f29e2af5e74`.
+Wasm publico con cadenas de rutas saneadas:
+`5889d8ddf6efc047b12791dad6cc1f526447d35f5d67f5865a37e195601fe036`.
+Se conserva la logica del juego y la incidencia de resoluciones sigue pendiente.
+No se verifica gameplay ni importacion real en el dominio publico. Cada usuario
+necesita importar su carpeta compatible completa con las DLL esperadas; la reparacion
+automatica desde el servidor local se sustituye por validacion local. OPFS esta
+separado por dominio: la importacion de localhost no se transfiere a esta web.
+
+Fuente del despliegue: cloudflare/worker.mjs y tools/prepare_cloudflare.py.
+Instrucciones en cloudflare/README.md. Evidencia de despliegue privada bajo build/.
+
+## Resolucion: el usuario sigue sin ver 1080p (2026-10-23)
+
+El usuario indica que no observa cambios y 1080p no aparece tras la compilacion
+`35a69f19cc7f7964408df5a4356a1c61495e1c742f358ed4bcc562e6e4f7ab97`.
+La correccion del presupuesto de memoria NO esta verificada como solucion completa.
+Se mantiene pendiente el menu real y el cambio de resolucion nativa.
+
+Se sirven recursos con query de identidad SHA para diferenciar compilaciones,
+y el log local indica Player build con SHA completo. GetAvailableVidMem registra
+hasta cuatro resultados (presupuesto, punteros y validez); la enumeracion D3D9
+registra de forma acotada formatos, conteos y dimensiones. No imprime por frame.
+Se prepara una URL de diagnostico con PERF_WATCH generico que lee, sin modificar,
+los campos auditados de VRAM y el puntero a la lista de modos. Los logs siguen
+ocultos por defecto. Falta que el usuario inicie esta compilacion y abra el menu;
+no se dispone de acceso interactivo al navegador para hacerlo desde esta sesion.
+
+Wasm de diagnostico servido: `4530b7f65c519561952cd2e70044719650f32d99633d9d4c8a143f29e2af5e74`.
+Compilacion web, V8 y entrega JS/Wasm/data por HTTP verificadas. No se ejecutan
+suites de pruebas ni se aplica estirado. La evidencia no verifica modos del menu.
+
+## Resoluciones nativas ocultas por presupuesto de VRAM (2026-10-23)
+
+El usuario muestra que el menu original ofrece solo 640x480 a 16/32 bits.
+Se auditaron los bytes del PE original
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`:
+GetVideoMemInfo en 007455e0 obtiene la memoria mediante DirectDraw7;
+GetVideoModeList en 00745af0 conserva la excepcion 640x480 y descarta los demas
+modos cuando VRAM libre menos el framebuffer no supera 45 MiB (00745bf6).
+La implementacion DirectDraw devolvia solo 24 MiB libres y 32 MiB totales.
+La tabla D3D9 ya contiene 1280x720 y 1920x1080; no faltaban esas entradas.
+
+Se unifican GetCaps y GetAvailableVidMem en un presupuesto virtual de compatibilidad
+de 256 MiB totales / 224 MiB libres, coherente con el adaptador D3D9 modelado.
+No es una medicion de memoria fisica ni una reserva adicional de GPU. Se mantiene
+el filtrado original y el cambio de modo original de GTA mediante Reset; no se
+modifican la proyeccion, el aspect fit, la camara ni los recursos del juego.
+El intento anterior de estirar se retiro antes de compilar o servirlo.
+Referencia de apoyo: https://github.com/gta-reversed/gta-reversed/blob/master/source/app/platform/win/VideoMode.cpp
+
+Compilacion web y validacion completa V8 pasan. JS/Wasm/data coinciden entre
+salida, sitio y HTTP; cero imports invoke_. No se ejecutan suites de pruebas.
+Wasm nuevo: `35a69f19cc7f7964408df5a4356a1c61495e1c742f358ed4bcc562e6e4f7ab97`.
+Pendiente: el usuario recarga, elige una resolucion panoramica con izquierda/derecha
+y aplica con Enter. Aun no se verifica el menu ni el cambio de modo en navegador.
+Esta compilacion no acredita gameplay adicional ni rendimiento.
+
+## Logs ocultos al entrar al juego (2026-10-23)
+
+El reproductor servido comienza con todo el panel de logs oculto. El boton
+Show logs y F8 permiten abrirlo y volver a ocultarlo. Los avisos no quitan el
+atributo hidden; el registro sigue disponible. Se actualiza solo HTML mediante
+stage_player(), sin ejecutar pruebas ni recompilar, por peticion del usuario.
+Verificacion interactiva pendiente. Wasm conservado:
+`610f22f845bb15950ce369a39b92de908f191e9897860b1b8460444f48242f40`.
+
+## Launcher en ingles (2026-10-23)
+
+Textos, accesibilidad, ayuda de guardado, biblioteca, estados y errores del launcher
+pasan a ingles. Se elimina la capa que convertia mensajes originales del runtime
+al espanol, conservando el seguimiento de estado y progreso y los controles.
+El mensaje de timeout y el estado de indisponibilidad del runtime tambien se
+traducen; el cambio se incluye en el parche completo.
+
+Verificado: sintaxis JavaScript, cuatro pruebas del transporte, HTML/start/app
+servidos identicos a los archivos locales. Verificacion visual pendiente.
+Sin cambio nativo; Wasm conservado:
+`610f22f845bb15950ce369a39b92de908f191e9897860b1b8460444f48242f40`.
+
+## Tamano de texto del launcher (2026-10-23)
+
+Los textos de estado, credito, ayuda, contribuidores, biblioteca y progreso usan
+la misma variable CSS que los botones principales: 18-23 px segun el viewport,
+19 px en pantallas estrechas. Se mantiene la fuente local de San Andreas.
+Los avatares pasan a 48 px y las pantallas estrechas distribuyen los bloques en
+flujo vertical con desplazamiento para evitar superposiciones al ampliar textos.
+Se conserva el fondo, el logo y el comportamiento del launcher.
+
+Verificado: CSS servido por HTTP identico a la fuente, sin tamanos de texto de
+11-14 px; comprobacion visual de esta revision en navegador pendiente. Cambio
+solo de presentacion, sin recompilacion ni nueva verificacion de gameplay.
+Wasm conservado: `610f22f845bb15950ce369a39b92de908f191e9897860b1b8460444f48242f40`.
+
+## Organizacion del repositorio (2026-10-23)
+
+Se movieron 70 scripts Python y el preparador PowerShell de la raiz a tools/.
+Se actualizaron sus rutas de proyecto, llamadas entre scripts, imports de pruebas
+y comandos documentados. BROWSER_STATUS.md y PORT_STATUS.md estan en docs/archive/;
+el README anterior tambien se conserva alli. La raiz presenta el acceso al proyecto,
+la configuracion y las dependencias. No se eliminan auditorias ni datos de evidencia.
+
+La limpieza se publica sobre el commit remoto ff15470 y conserva su parche completo
+y el gitlink del runtime. No cambia el ejecutable ni establece nuevo gameplay. Pasan 92 pruebas en el
+arbol de publicacion y 100 en la copia local; todos los scripts Python parsean.
+Los ajustes locales pendientes del launcher y runtime se mantienen separados.
+
+## Contribuidores en el launcher (2026-10-23)
+
+La esquina inferior derecha muestra machinebreak y Galavic con sus avatares y
+perfiles enlazados, ademas del enlace al listado del repositorio. Lista consultada
+en https://api.github.com/repos/Galavic/Gta-SA-OC/contributors?per_page=100 en esta
+fecha; el contenido HTML es una instantanea, no una consulta durante cada arranque.
+Se conserva la fuente local del menu, el fondo y el logo existentes. Los avatares
+publicos de GitHub usan CORS anonimo; no se publican recursos originales del juego.
+HTML/CSS servidos coinciden con las fuentes y ambos avatares responden 200 con
+Access-Control-Allow-Origin: *. Verificacion visual en navegador pendiente.
+Sin cambios al ejecutable Wasm servido
+`610f22f845bb15950ce369a39b92de908f191e9897860b1b8460444f48242f40`.
+
+## Pantalla completa y Escape mantenido (2026-10-23)
+
+El reproductor solicita pantalla completa y Pointer Lock desde el clic explicito
+en el canvas; tambien ofrece un boton de pantalla completa. En pantalla completa
+solicita Keyboard Lock exclusivamente para Escape. No intercepta el Escape corto:
+sigue llegando a SDL y al menu original. La salida con Escape mantenido queda a
+cargo del navegador (Chrome documenta unos dos segundos), sin recaptura automatica.
+Salir de pantalla completa libera el puntero; perder foco libera teclado y puntero.
+Los rechazos de permisos y la ausencia de Keyboard Lock se notifican en los logs;
+en esos casos el navegador conserva su comportamiento de Escape corto.
+
+Referencia: https://developer.chrome.com/blog/better-full-screen-mode y
+https://developer.chrome.com/articles/keyboard-lock . Esta capacidad depende del
+soporte y permiso del navegador y de pantalla completa iniciada por la pagina.
+
+Verificado: cuatro pruebas Node con eventos/APIs simulados, seis pruebas Python
+del servidor, HTML local identico al servido por HTTP con aislamiento COOP/COEP.
+No hay recompilacion nativa: se conserva Wasm
+`610f22f845bb15950ce369a39b92de908f191e9897860b1b8460444f48242f40`
+y el PE original `a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Pendiente: prueba real del permiso, Esc corto en menus y Esc mantenido en el
+navegador del usuario. Las pruebas simuladas no verifican esos gestos del navegador.
+No se retoma optimizacion.
+
+## Limites del cursor y clics coherentes con Pointer Lock (2026-10-23)
+
+La captura del usuario muestra que el cursor original ya aparece en Language,
+pero se detiene antes de Back. La integracion relativa limitaba sus coordenadas
+al modo inicial de 640x480; el log muestra CreateDevice/Reset a 800x600. La ruta
+Direct3D puede ajustar el cliente invitado sin pasar por el callback de modo
+DirectDraw que actualizaba esos limites.
+
+Se consulta el rectangulo del cliente invitado bajo el baton al integrar el
+movimiento. Ese tamano positivo gobierna los limites; el modo anterior queda
+como respaldo si no hay ventana valida. Los deltas DirectInput permanecen sin
+limitar. Ademas, botones y rueda decodifican si el evento ocurrio con Pointer
+Lock y usan la misma posicion virtual al entregarse: no vuelven a mapear la
+posicion absoluta fija del navegador ni generan deltas adicionales. Las rutas
+sin bloqueo conservan su mapeo existente.
+
+Compilacion web, V8 completo, comprobaciones de fuentes y parche inverso pasan.
+JS/Wasm/data coinciden entre salida, sitio y HTTP. Wasm servido: `610f22f845bb15950ce369a39b92de908f191e9897860b1b8460444f48242f40`.
+No se ejecuta la suite host_tests, cuyo bloqueo anterior en esta variante por
+macros ajenas permanece documentado. Queda pendiente comprobar en navegador
+que se alcanza Back y los cuatro bordes, que los clics no saltan y que la camara
+sigue libre. La captura confirma el cursor visible de la revision anterior;
+no se midio directamente el hash del binario cargado en esa pesta?a.
+Evidencia privada: build/cursor-bounds-20261023.
+
+## Cursor original del menu con Pointer Lock (2026-10-23)
+
+El usuario informa que desaparece el cursor del juego al bloquear el raton.
+La ruta relativa agregada anteriormente enviaba DirectInput pero omitia
+WM_MOUSEMOVE. El menu original consume las posiciones de ese mensaje para
+actualizar y mostrar su sprite de cursor. Se confirma en el ejecutable local
+que el caso en 00748323 escribe las dos coordenadas (evidencia privada con su
+identidad original a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26).
+
+La ruta relativa devuelve ahora si el movimiento se entrego; el host publica
+WM_MOUSEMOVE con la posicion absoluta limitada, ademas de conservar los deltas
+sin limitar para DirectInput. Ambas entregas se hacen bajo el baton del scheduler.
+Si un mod consume el evento, no se publica el mensaje. No se agrega un cursor
+superpuesto del navegador ni se cambia la logica original de visibilidad del
+menu. Se extiende la regresion de movimiento relativo para comprobar entrega.
+
+Compilacion web, validacion V8 completa, limites de fuentes y revision del
+parche completo pasan. JS/Wasm/data coinciden entre salida, sitio y HTTP;
+no hay imports invoke_. Wasm servido: `c2642c996ba595e58b403193f404ffee960d94a33e9fea40cb21cc978b566567`.
+La suite host_tests no se ejecuto en este cambio: el intento anterior en esta
+variante sigue bloqueado por macros de otro juego, documentado en la evidencia
+de pointer-lock-20261022. Sigue pendiente verificar visualmente el cursor del
+menu/pause, su clic y la camara en navegador. La compilacion no prueba esa
+interaccion. Evidencia privada: build/menu-cursor-20261023.
+
+## Sonidos originales de menu para el launcher (2026-10-23)
+
+Banco frontend 60 de la copia local: pares 4/5 para resaltar y 6/7 para confirmar,
+segun AEFrontendAudioEntity.cpp de gta-reversed. El exportador existente admite
+salida explicita y --menu-only, preservando el modo previo. WAV estereo privados
+bajo el sitio ignorado; ningun sonido se incorpora a Git.
+
+Hover y foco de teclado usan resalte; clic confirma. Web Audio se desbloquea en
+la primera interaccion. Se excluyen botones deshabilitados y movimientos entre
+hijos; el clic interno reenviado por Jugar no duplica la confirmacion. Antes de
+navegar se espera el efecto, con un maximo de 350 ms para no bloquear el inicio
+si el audio no responde. No hay musica ni cambios al sonido del motor.
+
+Pasan 4 pruebas Node de eventos/audio simulado y 6 pruebas Python del servidor.
+Se verifican HTTP, MIME/sintaxis JS, muestras no silenciosas y WAV estereo de
+16 bits a 44,1 kHz: resalte 0,1424 s, confirmar 0,1602 s. Escucha y operacion en
+navegador pendientes. Antes del primer clic/tecla el navegador puede bloquear
+el sonido de hover.
+Fuente:
+https://raw.githubusercontent.com/gta-reversed/gta-reversed/master/source/game_sa/Audio/Entities/AEFrontendAudioEntity.cpp
+
+## Tarjetas oscuras segun la referencia (2026-10-23)
+
+Se aplica el acabado gris oscuro con marco y relieve de la referencia del usuario
+a los paneles de progreso y biblioteca, almacenamiento, tarjeta de juego, avisos
+y controles de ayuda. Se mantienen los botones claros y la fuente local comun.
+Los indicadores de importacion usan barras claras sobre recuadros oscuros.
+El cambio es solo CSS; la hoja servida coincide por HTTP con la fuente del
+proyecto. La revision visual en navegador sigue pendiente. No cambia el motor.
+
+## Una misma fuente para todos los textos del launcher (2026-10-23)
+
+El usuario pide extender la letra de los botones a toda la pantalla. Se genera
+una fuente CSS local a partir de los glifos del subfont de menu en fonts.txd y
+sus avances de fonts.dat. Las siluetas se construyen por franjas del canal alfa,
+con umbral 96, mediante FontTools; los glifos latinos descompuestos conservan
+el mismo mapeo usado por el renderizador anterior. La fuente resultante queda
+en el sitio ignorado original-menu/menu.ttf, sin publicar recursos del juego.
+
+Se aplica Local SA Menu por herencia a titulos, avisos, controles, botones y
+biblioteca. Se elimina el renderizador canvas por etiqueta: el navegador ajusta
+ahora los parrafos y mensajes dinamicos de forma normal, conservando el texto
+HTML accesible y los observadores existentes. Se mantienen los colores de
+texto/botones. FontTools se declara en tools/web/launcher/requirements.txt.
+
+Se comprueban la familia, cobertura de caracteres habituales y coincidencia
+HTTP de la fuente. Tras reiniciar el servidor con respaldo de logs, se confirma
+Content-Type font/ttf; las seis pruebas Python pasan con asercion de ese MIME.
+Identidad de la fuente generada en esta comprobacion: `de807ae588d1146e250fac589b73181a8c2c829a483143817eb9c510a586cf89`.
+La apariencia en navegador sigue pendiente de revision del usuario; no se toca
+el motor ni su compilacion.
+
+## Botones segun la referencia del usuario (2026-10-23)
+
+Se aplica a las acciones del launcher el acabado de la referencia: gris claro,
+relieve con borde doble, esquinas pequenas, sombra inferior y texto negro
+centrado. Las opciones principales conservan los glifos originales de San Andreas,
+recoloreados en negro, sin el contorno negro del menu previo. La seleccion se
+indica con un borde exterior y el estado pulsado baja tres pixeles. Se conservan
+logo, fondo y funciones. Los botones de biblioteca comparten el mismo acabado.
+Sintaxis JS y 6 pruebas del servidor pasan; CSS/JS coinciden por HTTP. Revision
+visual en navegador pendiente; no se cambia el motor ni sus archivos.
+
+## Correccion de MIME para modulos JavaScript (2026-10-23)
+
+La siguiente captura del usuario muestra Failed to fetch dynamically imported
+module para repair-import.mjs. La comprobacion HTTP encontro respuesta 200 con
+Content-Type text/plain, heredado de las asociaciones MIME de Windows. Es una
+regresion introducida al agregar el modulo de reparacion: verificar bytes y
+sintaxis no detecto que el navegador rechazaria ese tipo. font-layout.mjs tenia
+el mismo problema, lo que tambien impedia cargar el renderizador de letras.
+
+Handler declara ahora application/javascript para .mjs y .js, y application/wasm
+para .wasm, independientemente del registro del sistema. Se respalda el log y
+se reinicia solo el servidor de esta tarea. Las seis pruebas Python pasan,
+incluida una peticion HTTP de modulo que comprueba Content-Type. Las respuestas
+HEAD del servidor real confirman los cuatro recursos (reparacion, mapeo de fuente,
+renderizador y Wasm) con los tipos correctos. La siguiente carga del navegador
+y el arranque del juego siguen pendientes; no se afirma verificacion interactiva.
+
+## Reparacion de DLL auxiliares antes del arranque (2026-10-23)
+
+La captura del usuario y el log local muestran que el motor no puede leer
+`eax.dll` junto al ejecutable en OPFS. La configuracion actual exige cuatro DLL
+auxiliares; el servidor tiene las cuatro y entrega los hashes configurados.
+La validacion previa solo comprobaba ejecutable, sello y carpetas, por lo que
+una importacion anterior podia pasar sin estas nuevas DLL.
+
+Se agrega un inventario generado desde modules.aux (solo nombre, tamano, hash e
+identidad del ejecutable) y una reparacion local previa a WebGPU/Wasm. Comprueba
+los archivos reales de OPFS; si faltan o no coinciden, descarga solo esa DLL del
+servidor local, valida SHA-256 antes de escribir y vuelve a leerla para comprobar
+la copia. Las importaciones grandes y los perfiles no se tocan. Los fallos de
+red/escritura se muestran antes de iniciar el motor. No se modifica el Wasm.
+
+Pasan 6 pruebas Python y 16 Node, incluidos casos de archivo ausente, correcto,
+corrupto, descarga incorrecta y fallo de escritura. Se comprueban por HTTP las
+cuatro DLL y el orden/sintaxis del script servido. Queda pendiente verificar la
+reparacion y el siguiente arranque en el navegador del usuario. Identidad Wasm
+servida en esta comprobacion: `d5da9162b55b676be96256ba082d1d00dbc43747752f8addc85a2b414137f7cf`.
+
+## Fondo elegido por el usuario (2026-10-23)
+
+Se reemplaza el fondo local por el nuevo PNG indicado por el usuario, conservando
+su contenido sin modificar, a pantalla completa con cover. El staging restaura
+la imagen desde build/launcher-assets/background.png; el archivo queda ignorado,
+sin publicar la imagen ni la ruta personal de origen. Se conserva el logo elegido
+y la tipografia original. 120130e14ad09aa7c75746046179ff33b9c68325993f617997483b44ee04d7ef-256 servido: `120130e14ad09aa7c75746046179ff33b9c68325993f617997483b44ee04d7ef`.
+La copia HTTP coincide con el archivo elegido; revision visual en navegador
+pendiente. No se modifica el juego.
+
+## Logo PNG elegido por el usuario (2026-10-23)
+
+Se incorpora como imagen del encabezado el PNG especificado por el usuario en
+PNGmart. Se descarga sin modificar al cache privado build/launcher-assets y el
+staging lo copia al sitio local. Dimensiones: 1965x1814; SHA-256
+`e3c54f3082f1e2461bb74b80d521c68a53cdaf07f6ec4ed0a748504fa83d507c`.
+Se mantiene la foto de fondo, la fuente original y las funciones del launcher.
+La imagen no se incorpora a Git. tools/prepare_launcher_logo.py reproduce la
+descarga comprobando firma y hash. HTTP entrega la imagen exacta y el HTML la
+referencia; 5 pruebas del servidor pasan. Revision visual en navegador pendiente.
+
+## Fuente original de San Andreas para el launcher (2026-10-23)
+
+A peticion del usuario se retira la fuente de sustitucion UnifrakturCook. El
+launcher decodifica fonts.txd y lee los avances proporcionales de data/fonts.dat
+de la copia local preparada. Las opciones se dibujan con los glifos originales
+del subfont de menu (font2, estilo 2); los titulos de biblioteca usan estilo 0.
+Se reutiliza el mapeo de glifos existente, con texto accesible separado y repintado
+al cambiar la etiqueta o el tama?o. Se conserva la foto de fondo sin cambios.
+
+El exportador y renderizador son codigo publicable; las imagenes de fuente y
+sus medidas quedan solo en el sitio ignorado original-menu. No se publican
+assets del juego. Si no estan disponibles, queda texto HTML normal como respaldo.
+Los recursos se verifican identicos por HTTP, la sintaxis Node pasa y las 15
+pruebas previas pasan. Se inspecciono el atlas y su canal alfa localmente; queda
+pendiente la comprobacion visual en navegador. No cambia la compilacion Wasm.
+
+## Launcher con menu clasico y fondo completo (2026-10-23)
+
+Se conserva intacta la foto local background.png con su logotipo integrado;
+ocupa toda la ventana con cover, sin filtros ni capas que la oscurezcan.
+Se retiran titulo duplicado, SVG superpuesto, ticker de colores y panel de
+controles. Menu en blanco/gris, sombra negra, tipografia gotica y seleccion
+simple; biblioteca con panel oscuro recto. Se conservan importaciones, partidas,
+estados de error, reintento y navegacion por teclado.
+
+Fuente UnifrakturCook original embebida en CSS, SIL OFL 1.1; licencia completa
+en tools/web/launcher/FONT-LICENSE.txt. Origen: google/fonts,
+ofl/unifrakturcook/UnifrakturCook-Bold.ttf. No necesita conexion externa.
+La imagen sigue local y no se publica. Recursos de pantalla identicos por HTTP;
+15 pruebas pasan. Revision visual del navegador pendiente (sin navegador en
+la herramienta). El juego y su Wasm no cambian. Se inicia el servidor con WMI
+oculto para mantenerlo disponible despues de cerrar el proceso de terminal.
+
+## Continuacion del launcher de DeepSeek (2026-10-23)
+
+Por indicacion del usuario se detiene el trabajo de optimizacion y se continua
+con el launcher. Se encontro la pantalla y start.js solo en la carpeta generada
+del sitio: se conservaron en tools/web/launcher y se agrego stage_launcher para
+restaurarlos al iniciar el servidor, junto a app/core/worker del runtime.
+Se conserva el fondo local existente; ninguna imagen ni asset del juego se
+incorpora al repositorio. El SVG incluido proporciona una alternativa visual.
+
+La consulta de estado tiene ahora un limite de 15 segundos. Los fallos del
+worker rechazan las solicitudes pendientes y el error se muestra en la biblioteca
+con Volver a comprobar, sin exigir importar otra vez. Ese limite no afecta a las
+importaciones, que pueden durar varios minutos. Se conserva el timeout que dejo
+DeepSeek para las consultas opcionales de espacio/persistencia. No se afirma una
+causa de bloqueo confirmada en navegador. El servidor estaba apagado y se inicio
+de nuevo, respaldando los logs previos antes del arranque.
+
+Verificacion: 5 pruebas Python del servidor/staging y 10 pruebas Node (6 del
+importador y 4 del transporte), sintaxis de cuatro modulos y coincidencia HTTP
+de la pantalla y scripts. La herramienta de UI no devuelve navegadores: quedan
+pendientes la revision visual y el estado real del OPFS del usuario. Durante este
+trabajo no se recompilo ni cambio el Wasm, que conserva la identidad
+`d5da9162b55b676be96256ba082d1d00dbc43747752f8addc85a2b414137f7cf`.
+
+## Captura del raton en el navegador (2026-10-22)
+
+Implementada la solicitud de Pointer Lock al hacer clic en el canvas una vez
+inicializado el runtime. Escape o perder el foco libera el raton; la captura
+solo se solicita de nuevo con otro clic. El navegador oculta el cursor.
+El estado se publica mediante un atomico de la capa de plataforma; los eventos
+SDL relativos se encolan y se entregan a DirectInput bajo el baton del scheduler.
+Sus deltas se conservan aunque la posicion absoluta alcance el borde, con
+acumulacion fraccionaria y sin correccion hacia un cursor absoluto fijo.
+Se conserva el control de logs por boton/F8.
+
+Compilacion web y validacion completa V8 pasan; JS/Wasm/data coinciden entre
+origen, sitio y HTTP. Wasm servido: `d5da9162b55b676be96256ba082d1d00dbc43747752f8addc85a2b414137f7cf`.
+Pasan cuatro pruebas del servidor, sintaxis JS y simulacion DOM de captura,
+liberacion, foco, errores de permiso y proteccion antes de inicializar el runtime.
+La suite host_tests no compila en esta configuracion por referencias antiguas
+RECOMP_GLOBAL_SIMULATION_TURN_ADDR/COMMAND_FRAME_ADDR y hooks de raton de otro
+juego; la nueva regresion relativa queda sin ejecutar. No se afirma validacion
+de la camara en navegador: queda pendiente comprobar giro continuo y Escape en
+la partida. La meta de 60 FPS sigue pendiente. Evidencia privada separada de las
+mediciones historicas en build/pointer-lock-20261022.
+
+## Control de logs del reproductor local (2026-10-22)
+
+El reproductor servido incorpora un boton para ocultar el panel completo y el
+atajo F8 para alternarlo. La captura de logs sigue activa; los avisos posteriores
+no vuelven a mostrar un panel ocultado por el usuario. Al mostrarlo se expande y
+el foco regresa al juego. Se verificaron HTTP local, sintaxis JavaScript, control
+con click/F8, repeticion de tecla y persistencia ante avisos con DOM simulado;
+las cuatro pruebas del servidor pasan. Interaccion visual en navegador pendiente.
+Solo cambia HTML; conserva Wasm
+`f0fc5978a330d36846879f7d8996409662cab43210c43e1a9678ed036a44a49f`.
+La captura relativa del raton y la meta de 60 FPS siguen pendientes.
+
+## Corrección de retiro de texturas WebGPU; 60 FPS aún pendientes (2026-10-22)
+
+La ejecución diagnóstica sirviendo
+`044083ea544b8a014dfa2d706d8d42968c0a220a757610883b7b282c9ec98be0` registró limitador de
+menú=0, replay=0, frameLimit=30 y beat count=0 en una fase ligera de frontend
+/carga. No verifica el estado de esas condiciones durante gameplay. Tras una
+ventana de unos 2.700 frames del backend aparecieron errores de asignación
+CreateCommittedResource/CreateTexture y después objetos/comandos inválidos.
+No se trata esa cifra de frames ni el ritmo del menú como evidencia de 60 FPS.
+
+El dispositivo WebGPU genérico soltaba referencias de texturas propias sin
+solicitar su destrucción explícita. El SDK instalado elimina la entrada JS al
+liberar el handle; su TextureDestroy es una llamada separada a destroy(). Se
+corrigió esa ruta: la textura se destruye cuando ya no quedan encoders abiertos
+que puedan necesitar enviarla, conservando el handle hasta entonces. Según
+[la especificación](https://www.w3.org/TR/webgpu/#texture-destruction), el agente
+puede recuperar esa memoria cuando terminan los usos previamente enviados.
+Los recursos importados siguen siendo externos y los drawables del canvas
+solo sueltan su referencia, para permitir la presentación del navegador.
+
+Con PERF_STATS se informan cada 1.000 destrucciones las creaciones,
+destrucciones y diferencia de las texturas propias rastreadas. No incluye
+las importadas ni las del canvas, y no mide VRAM física. La relación entre
+esta ruta y el agotamiento observado es una hipótesis de corrección que aún
+requiere reproducir la sesión en navegador; no se declara resuelto el OOM.
+
+Build, compilación completa V8 y entrega idéntica por HTTP pasan. Wasm servido:
+`f0fc5978a330d36846879f7d8996409662cab43210c43e1a9678ed036a44a49f`, 266204169 bytes. Ejecutable original:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Faltan la validación GPU, el recorrido menú/carga/partida durante más tiempo
+que la sesión fallida y comprobar que las texturas pendientes quedan acotadas.
+El objetivo de un mínimo de 60 FPS en gameplay sigue sin verificar. Evidencia
+privada: `build/texture-retirement-20261022/`, incluido `baseline-oom.log`.
+
+## Menos entregas GPU; medición pendiente del límite interno (2026-10-22)
+
+La captura posterior del usuario con las opciones nuevas muestra 22,5 NEW FPS,
+mediana 39,8 ms, P95 55,3 ms y finalización GPU 6,4 ms. La cámara difiere de la
+captura anterior: no prueba una regresión ni ganancia controlada. Una ventana
+con 638 dibujos registra 3,64 submits, 7,57 grupos nuevos, 56,4 versiones de
+buffers y 2,6 barreras por fotograma, con 8,22 ms de encoding y 3,32 ms de
+espera en Present. Otra ventana registra 701.984 comprobaciones de resumption
+SEH/s y 12.706 consultas de profundidad/s. Las opciones están actuando, pero
+el objetivo de 60 FPS continúa sin alcanzar/verificar. El Wasm servido en esa
+prueba era `483ed423995b0794caf7800c1ff98ee3b17144f77ba11000179317098b5239eb`; no se midió
+el hash cargado en navegador ni equivalencia de píxeles.
+
+El [bucle de referencia](https://github.com/gta-reversed/gta-reversed/blob/master/source/app/platform/win/WinMain.cpp)
+condiciona el frame también a replay/beat info, además del ajuste del menú.
+La lectura del PE original verifica las ramas en `00748d62`–`00748d96` y
+`IsBeatInfoPresent` en `005071d0`, que consulta el dato en ECX+8+A0 tras
+GetBeatInfo. Es una hipótesis pendiente de observación en la partida, no una
+causa establecida de los FPS actuales. No se modifica el reloj, la simulación
+ni el ejecutable para saltar esa condición.
+
+Se añadió `PERF_WATCH` genérico, opcional y de solo lectura: hasta ocho campos
+hexadecimal:ancho, con ancho 1/2/4; las peticiones inválidas desactivan la lista.
+Se lee desde el titular del baton al emitir el informe, no desde el sampler.
+Pasan 21 comprobaciones nuevas, las 68 de rutas y 403 de arranque. Build,
+V8 completo y entrega idéntica por HTTP pasan. Wasm diagnóstico servido:
+`044083ea544b8a014dfa2d706d8d42968c0a220a757610883b7b282c9ec98be0`, 266202717 bytes. Identidad original:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Falta leer el estado de menú/replay/frameLimit/beat info en gameplay con el
+flag configurado. Evidencia privada: `build/frame-gate-watch-20261022/`.
+
+## Objetivo solicitado de 60 FPS: versiones de buffers y caché persistente (2026-10-22)
+
+El objetivo solicitado es un mínimo de 60 FPS durante gameplay; todavía no
+está verificado. Se mantiene la evidencia anterior de 29 NEW FPS aportada por
+el usuario, con escena distinta al baseline. El registro sin sampler muestra
+ventanas de mundo con 487 dibujos/32,2 FPS y 668 dibujos/23,1 FPS; ventanas
+ligeras de 50–52 dibujos no prueban 60 FPS en gameplay. Había unas 30–45
+entregas WebGPU por fotograma en ventanas de mundo.
+
+Se compiló `RECOMP_D3D9_RENAME_BUFFERS=1`, desactivado por defecto. Cuando
+un buffer ya usado por el encoder se modifica, la ruta experimental conserva
+una copia completa e inmutable en un offset distinto del ring, evitando cerrar
+el pase por esa modificación. Se preservan las actualizaciones parciales y los
+offsets de vértices/índices. Acepta buffers de hasta 256 KiB y hasta 4 MiB de
+copias por encoder; fuera de ese presupuesto conserva la barrera anterior.
+Después de queueSubmit restaura el respaldo persistente en orden de cola,
+antes de reutilizarlo. Los contadores nuevos distinguen versiones temporales
+y barreras restantes; no constituyen todavía evidencia de mejora de FPS.
+
+Otra opción, `RECOMP_D3D9_PERSIST_GROUP_CACHE=1`, mantiene bindings entre
+Present, con límite de 4.096 e invalidación antes de retirar vistas de texturas.
+También se evita consultar el TLS de callbacks en las dos comprobaciones SEH
+cuando la lista de registros está vacía. La ruta con registros activos se
+conserva. `D3D9_STATS=0` ahora desactiva el informe; antes su mera presencia
+seguía activándolo.
+
+La prueba aislada SEH pasa 8 comprobaciones, incluidos registros/ESP intactos,
+sin consultas de profundidad en despachos vacíos y adopción de un registro
+creado después. Un intento amplio con la configuración resumable produjo
+cuatro fallos de aserción en delay-load y después desbordamiento de stack;
+no se declara aprobada la suite completa. Se añadió `--empty-dispatch` para
+la comprobación específica, y memoria Emscripten suficiente para ese binario.
+
+Build, compilación V8 completa, cero imports invoke, entrega idéntica por HTTP
+y límites de fuente pasan. Wasm servido: `483ed423995b0794caf7800c1ff98ee3b17144f77ba11000179317098b5239eb`,
+266199893 bytes. Original: `a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+No se ha medido el hash cargado en navegador ni probado gameplay del candidato.
+Faltan comparar la misma escena, entregas/grupos/tiempos y comprobar imagen
+con las opciones nuevas. Evidencia privada: `build/buffer-renaming-20261022/`.
+
+## Caché experimental de rutas de lectura (2026-10-22)
+
+La nueva captura con diagnóstico muestra CJ en BMX y 18,5 NEW FPS. En ocho
+ventanas finales seleccionadas, `004dc2b0` acumula 772/4554 muestras
+(17.0 %). Los bytes originales y su IAT `008580a0` verifican que
+esa rutina llama a CreateFileA. Las muestras incluyen esperas y trabajo del
+shim, no tiempo CPU exclusivo. `004eeead` incluye Sleep(1) de un trabajador;
+no se trata su espera como coste exclusivo de simulación. La parada desconocida
+anterior no se ha reproducido en el registro diagnóstico capturado.
+
+Se preparó `RECOMP_READ_PATH_CACHE=1`, desactivado por defecto: recuerda hasta
+1.024 resoluciones positivas de rutas de lectura normalizadas. Cada apertura
+sigue creando un descriptor independiente y leyendo los datos bajo demanda.
+No se almacenan contenidos, metadatos, escrituras ni respuestas negativas.
+Las invalidaciones existentes por mutaciones, cambio de raíz o de overlays
+vacían también esta caché. Los cambios externos de capas requieren la misma
+invalidación explícita del resolver. `perf-files` mide ahora el adaptador
+CreateFile completo, incluidas resolución y apertura del host; la medición
+previa de ReadFile no incluía ese coste.
+
+Pasan 68 comprobaciones específicas y las 403 de arranque existentes. Cubren
+posiciones independientes, normalización, borrado/recreación, cambio de raíz,
+escrituras e invalidación de overlays. Build, compilación completa V8 y entrega
+idéntica JS/Wasm/paquete por HTTP pasan. Wasm servido:
+`55838ff08ef441052dd60f2dcc1f677549273b9d567969128941639d983756ab`, 266198190 bytes.
+Ejecutable original: `a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+La prueba posterior del usuario con el flag activo muestra CJ en BMX, 29 NEW FPS, mediana 37,4 ms, P95 54,1 ms y finalización GPU 4,7 ms; informa que se siente algo más fluido. La cámara/escena difiere del baseline de 18,5 FPS, por lo que no verifica una ganancia controlada. Los contadores confirman una ventana con 28 aperturas/s, 28 aciertos/s, cero fallos de caché y 0,66 ms/s en CreateFile. Otras ventanas con nombres nuevos siguen teniendo fallos y mayor coste. El perfilador y los logs continúan activos; falta comparar sin diagnóstico. No se midió el hash cargado dentro del navegador. El registro posterior se conserva como `candidate-browser.log`. Evidencia
+privada: `build/read-path-cache-20261022/` conserva perfil, baseline, pruebas,
+build, preparación y entrega; los artefactos previos mantienen su identidad.
+
+## Lecturas bajo demanda y subidas WebGPU agrupadas (2026-10-22)
+
+Se integraron seis archivos con cambios locales posteriores de DeepSeek:
+tiempos de preparación de función fija, trabajo de encoding y espera en
+Present, más diez callers del sampler. Esos cambios todavía no estaban
+en el Wasm servido. Se conserva su trabajo y se desactivan relojes y
+atómicos de diagnóstico cuando PERF_STATS no está activo.
+
+El host monta los archivos del juego en OPFS y ReadFile solicita rangos:
+no precarga los 5 GB de instalación en RAM. El paquete del runtime mide
+35.073.821 bytes. Se midieron ahora llamadas/bytes/tiempo de lectura de
+ReadFile e instrucciones del intérprete. Aperturas, seeks y lecturas de
+codecs nativos quedan fuera de esa medición. Las llamadas interpretadas
+anidadas consumen el presupuesto externo una sola vez; las funciones
+traducidas no consumen instrucciones de ese contador.
+
+El usuario dejó la escena quieta con PERF_STATS, D3D9_STATS, LOG=0 y la
+caché de grupos experimental activa. Se servía
+`d50efdfa774d17b788241cdbf754bd7f2c6272c01f59541505eba95e9dd9cced`,
+266.181.302 bytes; el hash cargado en el navegador no se midió. Identidad
+original: `a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+
+En las ventanas de gameplay seleccionadas, las lecturas muestran 0–24,45 ms
+por segundo y el intérprete unos pocos miles de instrucciones por segundo.
+Una ventana de 751 dibujos/fotograma registra 12,68 ms de encoding,
+1,45 ms en Present y 2,73 ms de preparación de función fija. Los intervalos
+pueden solaparse y no se suman. La captura del usuario muestra 21 NEW FPS,
+mediana 50,2 ms y GPU 6,0 ms. Estas observaciones justifican medir primero
+el trabajo del renderer; no descartan todo posible coste de streaming ni
+constituyen una comparación de FPS con otra escena.
+
+Se preparó `RECOMP_D3D9_BATCH_UPLOADS=1`, desactivado por defecto. Las
+asignaciones de los dibujos mantienen sus offsets distintos, se copian a
+staging y se sube cada prefijo usado antes de su entrega GPU original.
+Se conservan las barreras de entrega. `ring_uploads/frame` cuenta las
+llamadas de subida reales por separado de las asignaciones lógicas. La
+sesión del usuario confirma la activación: una ventana de 909 dibujos
+muestra 955,7 asignaciones y 140,4 subidas por fotograma (85,3 % menos
+llamadas respecto a subir cada asignación), pero 14,74 ms de encoding.
+Otra de 1.062 dibujos registra 1.102 asignaciones y 121,2 subidas, también
+14,74 ms de encoding. El usuario informa que no hay defectos gráficos;
+no se midió equivalencia de píxeles ni una ganancia controlada de FPS.
+La opción continúa desactivada por defecto.
+
+Se reabre una hipótesis de pacing con evidencia distinta a los hooks de
+GetTickCount rechazados históricamente. Los bytes originales verifican
+QueryPerformanceCounter en la IAT `008580c8` y una condición de dibujo
+en `00748d81` que compara tiempo transcurrido contra `1000 / [00c1704c]`,
+precedida por el flag `00ba6794`. Se pidió comprobar Frame Limiter en el
+menú original. La captura posterior del usuario confirma «Limitar cuadros p. segundo: NO», efectos visuales bajos y antialiasing desactivado. El menú muestra 44 NEW FPS; eso no mide gameplay. El ajuste visible ya está desactivado, por lo que no justifica atribuir los pocos FPS a ese limitador. Falta medir de nuevo la misma escena con CJ; no se leyó directamente el flag en memoria.
+La captura siguiente muestra CJ en BMX en otra calle: NEW 22,5 FPS, mediana 41,4 ms, P95 60,8 ms y finalización GPU 6,0 ms. No es una comparación controlada con la cámara anterior. Después, el registro termina en `recomp_unknown_call` y abort; LOG=0 omitió el destino desconocido. Se conserva el registro privado como `limiter-off-browser.log`. Falta repetir con LOG=1 y sampler para recuperar la dirección y atribuir el coste; las frecuencias elevadas de dispatch/SEH no prueban por sí solas su tiempo CPU. No se escaló el reloj ni se parcheó el ejecutable. El resultado histórico
+de la hipótesis anterior se conserva por separado.
+
+El Wasm del experimento servido es `1922c93bebee518a72e8d771a85bb56c19f954ff556f4752416f4f25ec8d4735`,
+266,183,103 bytes. Build, V8 completo, cero imports invoke y hashes de
+JS/Wasm/paquete entre salida/sitio/HTTP pasan. El intérprete pasa 446
+comprobaciones y su contabilidad 7; la suite de función fija pasa 180 y las
+pruebas Python relevantes 13. Cinco expectativas gráficas antiguas se
+actualizaron para rechazar vertex blending y una operación inválida, en
+vez de iluminación y multiply-add ya implementados. El código de dibujo
+no se cambió para satisfacer esas expectativas.
+
+El usuario resolvió un fallo de validación de la importación volviendo a
+importar. El jugador conserva ahora el motivo original del error en el
+mensaje; no se atribuye ese incidente al renderer ni a falta de FPS.
+No se demuestra una ganancia estable de FPS, una misión completa ni 120 FPS.
+
+Evidencia privada: `build/performance-followup-20261022/` contiene build,
+pruebas y entrega de los contadores. `build/batch-uploads-20261022/` conserva
+`baseline.log`, `baseline-delivery.json`, `build.log`, `browser-prepare.log`,
+`delivery.json` y `result.json`. Los resultados históricos siguen separados
+por identidad de ejecutable y artefacto.
+
+## Partida con BMX confirmada por el usuario; perfil de rendimiento (2026-10-22)
+
+El usuario confirma que la compilación corregida funciona y aporta una
+captura de CJ en la BMX con el objetivo inicial visible. Se servía el Wasm
+`0b9293973f72e4495289b71df6e3ea918a635f0892890d5827c3b76d77319b59`;
+no se midió el hash cargado dentro del navegador. Ejecutable:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Esto verifica la escena mostrada y el informe de funcionamiento del usuario,
+no la misión completa, una conversión 1:1 ni estabilidad prolongada.
+
+La captura indica NEW 18,0 FPS, DSP 98,5, mediana 53,5 ms, P95 82,2 ms,
+GPU 7,1 ms y 82 % de repeticiones. DSP incluye imágenes repetidas: no son
+98,5 fotogramas nuevos del juego. El indicador GPU es tiempo hasta la
+finalización, no un timestamp aislado del hardware; la diferencia con el
+intervalo de imagen nueva sugiere investigar CPU y sincronización.
+
+Se pidió una pasada con PROFILE, PROFILE_INTERVAL_MS=2000, D3D9_STATS,
+PERF_STATS y LOG=0. El registro muestra, en ventanas distintas:
+
+| Dibujos por fotograma | FPS reportados | Grupos nuevos/fotograma | Entregas GPU/fotograma |
+| --- | --- | --- | --- |
+| 681 | 14,5 | 351,12 | 79,74 |
+| 970 | 13,4 | 414,63 | 103,05 |
+| 136 | 21,4 | 63,98 | 25,15 |
+
+No son una comparación A/B: cambian la cámara/carga de escena y el
+perfilador también añade coste. El sampler atribuye shims y esperas al
+caller publicado; sus muestras no equivalen a tiempo CPU exclusivo.
+
+El backend vaciaba los grupos en cada submit. Se compiló una opción
+experimental, `RECOMP_D3D9_FRAME_GROUP_CACHE=1`, para conservarlos entre
+entregas del mismo fotograma. Present y retirada de texturas invalidan la
+caché; se invalida antes de liberar vistas cuyos handles podrían reutilizarse.
+El límite de 4.096 entradas acota la retención incluso sin Present.
+**Sigue desactivada por defecto** mientras se compara la imagen y el coste
+con el comportamiento anterior. No se cambia la resolución ni la simulación.
+
+El Wasm experimental servido es
+`709d5924c68ee2222fdc668b1882c272379288f12a9fbc02381f60c65555af9e`,
+266.178.214 bytes. Build, compilación completa V8, identidad JS/Wasm/paquete
+entre salida/sitio/HTTP y cero imports invoke pasan. El registro confirma
+que la opción se activó. Falta una comparación de partida con la misma
+escena, cámara y opciones, y confirmación visual. No hay una ganancia de
+FPS verificada ni una meta de 60 FPS alcanzada.
+
+Para la comparación externa, [Grand-V](https://github.com/SebasKitten/Grand-V)
+declara WebAssembly memory64, workers compartidos y WebGPU; esa descripción
+no ofrece un benchmark equivalente a este equipo y escena. Esas tecnologías
+no explican por sí solas una diferencia de FPS.
+
+Evidencia privada: `build/performance-20261022/baseline.log`,
+`baseline-delivery.json`, `build.log`, `browser-prepare.log`,
+`delivery.json` y `result.json`. El progreso de carga/menu con pocos dibujos
+no se usa como rendimiento de gameplay.
+
+## TEST de byte e INC en memoria al continuar la carga (2026-10-22)
+
+La siguiente captura y el registro local muestran un alto estricto en
+`01560a22`: el intérprete no admitía `TEST byte ptr [EDX+EDI],0x80` en
+`01560a3b` (`f6 04 3a 80`). El Wasm servido era
+`4004a5657d3ad14f19911fe66736de1710ce2146fb611b63477b837fceaea250`;
+el hash cargado dentro del navegador no se midió. Ejecutable verificado:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+La captura no demuestra que la versión reconciliada haya llegado a gameplay.
+
+Se admite ahora F6 /0 con operandos de un byte, incluidos registros altos
+y memoria SIB, sin escribir el operando. La prueba acotada de la rutina
+original reveló después `INC dword ptr [ESP+0x10]` en `01560a7d`;
+se añadieron FF /0 y /1 sobre el camino existente de INC/DEC. Las pruebas
+con acarreo inicial 0 y 1 detectaron que ese camino perdía CF cuando no
+había flags pendientes: ahora conserva el indicador de entrada.
+
+Pasan **446 comprobaciones unitarias, 76 casos concretos contra Unicorn y
+la decodificación acotada completa de `01560a22`**. No se ejecutó la suite
+aleatoria de Unicorn en esta pasada. Las pruebas cubren flags, registros
+altos, memoria vecina, acceso al último byte del arena y acarreo conservado.
+El resto de operaciones de grupo 3 byte sigue rechazado. La decodificación
+del original no ejecuta su lógica ni verifica sus llamadas.
+
+El rebuild incremental terminó con código 0, conservando los datos de
+traducción reconciliados. El nuevo Wasm es
+`0b9293973f72e4495289b71df6e3ea918a635f0892890d5827c3b76d77319b59`,
+266.177.413 bytes, 212.978 funciones definidas, máximo 2.929 locales y
+cero imports `invoke_*`. Pasa la compilación completa con V8. Los hashes
+de JS, Wasm y paquete coinciden entre salida, sitio y HTTP; se comprobaron
+COOP, COEP, `no-store`, MIME Wasm y STRICT_UNKNOWN por defecto. Entrega
+verificada en `2026-10-23T01:05:46Z` (22 de octubre local).
+
+El registro anterior también contiene `GPU completion timed out` antes
+del alto estricto. No se modificó el presentador para ocultarlo; su causa
+y su repetición tras esta corrección siguen pendientes de comprobar.
+Falta una nueva ejecución en navegador del Wasm corregido. No se afirma
+que pase la carga ni que ejecute la misión.
+
+Evidencia privada: `build/byte-test-20261022/browser-failure.log`,
+`unit.log`, `decode.log`, `unicorn.log`, `build-verified.log`,
+`browser-prepare.log`, `delivery.json` y `result.json`. El cambio queda en
+el parche completo del runtime; los recursos y traducciones generadas
+permanecen privados.
+
+## Reconciliación de entradas locales tras GitHub (2026-10-22)
+
+El nuevo informe del usuario se detiene en `01564df9`, por `CMP word ptr
+[ESI+4],DI` en `01564dfe` (`66 39 7e 04`), con STRICT_UNKNOWN activo.
+GitHub y el checkout principal coinciden en `d948a51`: no había otro commit
+pendiente de descargar. Sin embargo, la variante privada conservaba 11
+entradas explícitas y 13 contratos de sitios de llamada. La documentación
+publicada ya registraba ocho entradas observadas adicionales para esta misma
+imagen, ausentes de esa configuración. Las compilaciones anteriores se
+hicieron con el runtime nuevo y esos datos locales antiguos; las extensiones
+del intérprete no reconstruían las entradas de código faltantes.
+
+Se ejecutó `tools/audit_allbytes_call_thunks.py` sobre el ejecutable verificado:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+La auditoría de bytes prueba 7.645 formas completas de llamada/RET4 (3.853
+fijas y 3.792 con checksum), 7.640 ausentes de los contratos locales.
+Tras unirlos con los anteriores quedan 7.653 sitios auditados y 8.134
+entradas explícitas: continuaciones/destinos verificados, las ocho entradas
+históricas documentadas y los tres destinos de los altos locales recientes.
+Los nuevos puntos también se comprobaron contra las secciones ejecutables
+y las regiones de datos declaradas de la imagen original.
+
+El aplicador ahora admite que el último elemento y `]` compartan línea,
+ignora corchetes en comentarios, verifica la identidad del ejecutable antes
+de modificar entradas y conserva los primeros respaldos. Pasan seis pruebas
+de esta reconciliación. `config/singleplayer-entry-points.json` publica solo
+once direcciones escritas a mano con identidad y referencias de evidencia;
+los listados y el informe completo de la auditoría siguen siendo privados.
+README.md documenta cómo reconstruir los contratos y aplicar esas entradas.
+
+La primera regeneración se interrumpió al escribir los archivos de salida:
+el disco estaba lleno. Se conservó un registro antiguo de 2.628.592.044 bytes
+en gzip (47.959.724 bytes), verificando por SHA-256 la descompresión completa,
+y se retiraron 3.882.705.776 bytes de duplicados Wasm tras comprobar sus
+copias idénticas conservadas. No se retiraron recursos originales ni partidas.
+El empaquetador web copiaba también los probes y los Wasm linked/browser/
+stripped del directorio de salida. Ahora copia solo el módulo referenciado
+por el jugador, su paquete y sus scripts auxiliares; pasan tres pruebas de
+esa selección. El parche completo recoge este ajuste del empaquetado.
+
+La regeneración estricta terminó: el informe principal registra 59.809
+funciones examinadas, 59.127 aceptadas y 168.081 entradas; cero fallos,
+formas sin modelar, huecos de tablas o tablas sin decodificar. Los cuatro
+informes auxiliares también registran cero en esos controles. Se comprobó
+la presencia de las once direcciones documentadas en la tabla de despacho
+real, incluido `01564df9`, cuyo bloque contiene la comparación de 16 bits.
+Estos recuentos describen la traducción, no la ejecución del juego.
+
+La interrupción de la sesión detuvo la compilación en el paso 177; se
+reanudó sin regenerar ni repetir los objetos terminados y concluyó con
+código 0. El módulo preparado conserva sus 212.978 funciones definidas,
+máximo 2.929 locales y ninguna función por encima del límite comprobado.
+Pasa la compilación completa de V8 y conserva cero imports `invoke_*`.
+
+Wasm nuevo servido: `4004a5657d3ad14f19911fe66736de1710ce2146fb611b63477b837fceaea250`,
+266.177.461 bytes. Los hashes de JS, Wasm y paquete coinciden entre la
+salida de compilación, el sitio y la respuesta HTTP. El servidor local
+entrega COOP `same-origin`, COEP `require-corp`, `no-store` y MIME Wasm
+correcto; el HTML mantiene STRICT_UNKNOWN por defecto. La entrega se
+verificó en `2026-10-23T00:56:16Z` (22 de octubre local). No se midió el
+hash del módulo de la captura anterior: solo se conoce que entonces se
+servía `d73a8a0586e64f3f63ea1b89188493799820a558fea83bdf06f8f9be82f032d8`.
+
+Para conservar margen de disco se archivaron también salidas antiguas de
+compilación y diagnóstico, verificando la descompresión de cada una por
+SHA-256 antes de retirar sus copias sin comprimir. Las rutas y sus
+identidades están en los manifiestos privados; los originales del juego
+y las partidas no se modificaron.
+
+Queda pendiente una nueva prueba en navegador de este artefacto reconciliado.
+No se afirma que haya superado la carga, que ejecute la misión, ni que sea
+idéntico bit a bit al artefacto histórico que abrió el juego. La evidencia
+histórica sigue separada por identidad. Evidencia privada:
+`build/sync-inputs-20261022/result.json`, `allbytes.json`,
+`observed-entries.json`, `browser-failure.log`, `pipeline.log`,
+`pipeline-retry.log`, `pipeline-resume.log`, `browser-prepare.log`,
+`delivery.json`, `log-compression.json`, `site-linked-compression.json`,
+`archived-diagnostics/manifest.json` y `duplicate-cleanup.json`.
+
+## Lectura absoluta de byte tras la primera corrección de carga (2026-10-22)
+
+El siguiente registro recibido del navegador se detiene en `0156c146`, por
+`MOV AL,[009654bf]` en `0156c15d` (opcode A0). Esta vez STRICT_UNKNOWN sí
+está activo y detiene el proceso antes de omitir la rutina. El Wasm servido
+al recibirlo era `73bc1112a5c61917b9e6d26e4749ee33f4fe8bbb1b70b2bdaaff828f7d8ca76c`;
+la identidad cargada dentro del navegador no se midió. Ejecutable:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+La traza se conserva en `build/byte-shift-20261022/browser-moffs-failure.log`.
+
+Se admiten ahora las lecturas y escrituras absolutas de AL (A0/A2) usando
+los accesos de un byte existentes. Las pruebas verifican los otros bits de
+EAX, los bytes vecinos, los flags sin cambios y el último byte del arena.
+Pasan **420 comprobaciones del intérprete y 65 casos contra Unicorn**.
+El análisis acotado sobre la imagen original acepta `0156c146` completo;
+no es una prueba de ejecución del juego.
+
+El enlace web y la compilación completa de V8 pasan. Nuevo Wasm servido:
+`d73a8a0586e64f3f63ea1b89188493799820a558fea83bdf06f8f9be82f032d8`.
+JS/Wasm/data responden HTTP 200 y sus hashes coinciden con los construidos.
+El parche completo recoge también este ajuste, sin aplicar parches parciales
+ni cambiar el pin del runtime. Resultado y hashes privados en
+`build/byte-shift-20261022/moffs-result.json`; pruebas en `unit-moffs.log`,
+`unicorn-moffs.log` y `decode-moffs.log` en ese directorio. Sigue pendiente
+confirmar la continuación de la carga con este último artefacto en navegador.
+
+## Bloqueo de carga en operaciones de byte del intérprete (2026-10-22)
+
+La nueva captura y el registro del usuario llegan al arte de carga, pero el
+proceso invitado termina con `0xc0000005`; el presentador conserva la imagen.
+El primer rechazo es la rutina `0156f890`: el decodificador no admite
+`SHR DL,5` en `0156f98b` (`c0 ea 05`). La URL observada no activa el modo
+estricto y el runtime devuelve cero. A continuación intenta continuar en
+`0d68f7e5`, devuelve cero otra vez y llama a `00000206`. La salida del juego
+precede a los contadores de audio sin datos: esos contadores no demuestran
+que siga avanzando la carga. Ejecutable:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Wasm servido al recibir el informe:
+`f58b1d6197f2afe4a45bf92403a7fbb92dc14fe43b84c7fef58732ceb7b154ed`;
+no se midió el hash del Wasm cargado dentro del navegador.
+
+El intérprete ahora decodifica SHL/SHR/SAR de byte con inmediato, uno implícito
+y CL. Reutiliza los helpers de flags de 8 bits y las lecturas/escrituras de un
+solo byte, incluidos AH..BH y el límite del arena. El siguiente análisis de
+la rutina original detectó `AND DL,1` en `0156f990`; también se admiten las
+operaciones inmediatas de byte del grupo 1 que ya tenían semántica de byte
+implementada. ADC/SBB y los prefijos no soportados siguen rechazados.
+No se editó el ejecutable ni el código generado y no fue necesaria otra
+regeneración: solo cambiaron el intérprete y su enlace con el juego.
+
+Verificación: **415 comprobaciones, cero fallos**, **62 casos contra Unicorn**
+y **4 pruebas del servidor** pasan. Cubren preservación de bits superiores,
+registros byte altos, vecinos de memoria, flags, contadores de desplazamiento
+cero/enmascarados y rechazo de ADC/SBB. El decodificador acotado del probe
+sobre el ejecutable verificado acepta ahora `0156f890` completo; ese ensayo
+no ejecuta la rutina original ni verifica gameplay.
+
+La compilación web y la validación completa de V8 terminan con salida 0.
+Wasm actualizado:
+`73bc1112a5c61917b9e6d26e4749ee33f4fe8bbb1b70b2bdaaff828f7d8ca76c`.
+Los tres archivos JS/Wasm/data servidos responden HTTP 200 y coinciden por
+SHA-256 con los construidos; siguen sin existir importaciones `invoke_*`.
+La preparación local del jugador activa STRICT_UNKNOWN incluso en la URL
+sin parámetros. Las opciones RECOMP_ explícitas conservan su prioridad.
+Esto evita omitir otra rutina pendiente y perder su estado antes de informar
+el primer error. El servidor estaba detenido durante la comprobación final;
+se inició de nuevo y las cabeceras de aislamiento y ausencia de caché se
+comprobaron por HTTP.
+
+El parche completo del runtime está actualizado y conserva sus cambios
+anteriores. Evidencia privada: `build/byte-shift-20261022/result.json`,
+`browser-failure.log`, `unit-final.log`, `unicorn-final.log`,
+`decode-final.log`, `server-tests.log`, `web-build.log` y
+`browser-prepare.log`. La continuación de carga en el navegador con este
+Wasm está pendiente de confirmación del usuario; no se atribuye a estas
+pruebas CPU una partida, prólogo o misión completados.
+
+## Recompilación web local de la actualización de GitHub (2026-10-22)
+
+Se regeneró y recompiló la variante `gtasa-singleplayer` con los cambios de
+`d948a513896ca9403711eea59c69c4dde7f25262` y el parche completo del runtime
+verificado en la sincronización anterior. Ejecutable original:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+La traducción estricta de la imagen principal y las cuatro DLL terminó sin
+fallos, instrucciones no modeladas, huecos de tabla ni tablas sin decodificar.
+Se usó Release con optimización normal del código generado; el modo diagnóstico
+permanece desactivado. Tras una interrupción controlada para aumentar el
+paralelismo de cuatro a seis procesos, se reutilizaron los objetos terminados
+y la compilación finalizó con salida 0.
+
+El módulo completo pasó la compilación de V8. Tiene
+196,562 funciones definidas y un máximo de
+2,929 locales por función; no requirió
+coalescencia adicional de locales. El artefacto servido tiene
+232 433 735 bytes y SHA-256:
+`f58b1d6197f2afe4a45bf92403a7fbb92dc14fe43b84c7fef58732ceb7b154ed`.
+La inspección de sus importaciones confirma cero `invoke_*` entre
+332 importaciones; el Wasm local anterior tenía
+25 de esos puentes.
+Estos datos identifican esta compilación y no establecen su rendimiento.
+
+Se preparó de nuevo el HTML y se inició el servidor de loopback en
+`http://127.0.0.1:8771/gtasa-singleplayer/?RECOMP_STRICT_UNKNOWN=1`.
+El HTML responde HTTP 200 con las cabeceras COOP/COEP y sin caché; JavaScript,
+Wasm y paquete de recursos responden HTTP 200 y coinciden por SHA-256 con los
+archivos recién construidos. El Wasm se entrega como `application/wasm`.
+Los recursos originales y las partidas no se modificaron.
+
+El usuario informa que esta versión supera la carga y permite jugar en web.
+Se conserva la evidencia histórica de gameplay con sus identidades originales.
+No se repitió una prueba interactiva en esta sesión: el control nativo informa
+que su canal no está disponible y el inventario de navegadores está vacío.
+Tampoco se midieron FPS de este artefacto. Sigue documentada la ausencia en el
+remoto del commit fijado para el runtime; se compiló el árbol del parche
+completo comprobado sobre la base local disponible, sin cambiar el pin.
+
+Evidencia privada: `build/rebuild-20261022/result.json`, `pipeline.log`,
+`compile.log`, `browser-prepare.log` y registro del servidor en ese directorio.
+Los artefactos ejecutables y los recursos permanecen excluidos de Git.
+
+## Sincronización local con GitHub (2026-10-22)
+
+Se descargaron e integraron por avance directo los siete commits desde
+`e903029` hasta `d948a513896ca9403711eea59c69c4dde7f25262`.
+El runtime local coincidía exactamente con el parche completo anterior y se
+respaldó antes de retirarlo y aplicar una sola vez el parche completo nuevo.
+La comparación de árboles Git del resultado da
+`da8fbe192f6868fd49541f4abd231737e22a9d43` tanto para la aplicación aislada
+del parche como para los archivos locales actualizados. No se recompiló ni
+se ejecutó el juego durante esta sincronización; las mediciones históricas
+conservan su alcance y sus identidades originales.
+
+Bloqueo de reproducción pendiente: el nuevo gitlink y
+`patches/recomp-kit-base.txt` señalan
+`ad47228c5b0ab2d1453251999bbd86795e178fac`, que el remoto original rechaza
+como revisión inexistente. Se conserva disponible localmente la base
+`eb32cc42623e0e9e868b9d27423a57d5a5cba56b`; el parche entrante se aplica
+íntegro sobre ella y el árbol resultante está verificado. No se modificó
+el pin publicado ni se reconstruyó artificialmente el commit ausente.
+Evidencia privada: `build/github-sync-20261022/result.json` y respaldo del
+parche anterior en ese mismo directorio.
+
 ## Rendimiento: no hay limitador que retirar; el techo lo pone la simulación (2026-10-22)
 
 Esta sección **corrige la siguiente**, que daba por hecho que el limitador de frames del

@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "id": "san-andreas-web",
+  "name": "San Andreas Web",
+  "version": "1.0.0",
+  "description": "Launch the GTA San Andreas browser port, see what is verified, and keep your own test checks. Unofficial.",
+  "author": "Galavic",
+  "icon": "icon.svg",
+  "color": "#e8a33d",
+  "category": "other",
+  "permissions": ["open-url"],
+  "network": [],
+  "sdk": 1,
+  "contributes": {
+    "panel": { "entry": "index.html", "scope": "workspace", "size": { "width": 340, "height": 500 } }
+  }
+}

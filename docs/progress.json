@@ -1,5 +1,62 @@
 {
-  "last_translation_run_utc": "2026-10-21T09:10:39.239871+00:00",
+  "web_git_snapshot_20261027": {
+    "checked_utc": "2026-10-27T06:19:25.072272+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "python_tests_passed": 112,
+    "javascript_tests_passed": 47,
+    "staged_publication_check_passed": true,
+    "runtime_pin": "ad47228c5b0ab2d1453251999bbd86795e178fac",
+    "runtime_changes": "Complete patches/current-vendor.patch; local dependency checkout preserved.",
+    "browser_gameplay_retested": false,
+    "outstanding_blockers": "Existing runtime/gameplay blockers and build-specific verification remain recorded below.",
+    "pushed": false
+  },
+"deska_panel": {
+    "updated_utc": "2026-10-24T03:59:29Z",
+    "path": "deska/san-andreas-web",
+    "panel_id": "san-andreas-web",
+    "manifest_check": "passed with deska-panels-examples tools/lib/manifest.mjs",
+    "preview_scenarios": 4,
+    "preview_scenarios_passed": 4,
+    "preview_scope": "English and Spanish, dark and light; storage persistence, clear, tabs and simulated openUrl",
+    "layout_widths_px": [
+      240,
+      300,
+      340,
+      400
+    ],
+    "panel_console_errors": 0,
+    "evidence_path": "build/deska-panel-20261023",
+    "permissions": [
+      "open-url"
+    ],
+    "network": [],
+    "interactive_deska_load_verified": false,
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "published_wasm_sha256": "5889d8ddf6efc047b12791dad6cc1f526447d35f5d67f5865a37e195601fe036",
+    "scope": "Desk companion UI only; does not verify gameplay."
+  },
+  "upstream_40fps_review": {
+    "review_date": "2026-10-23",
+    "source_commit": "ff1547048f9924df73f9f99c9d0b7a839f361dc3",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "published_wasm_sha256": "5889d8ddf6efc047b12791dad6cc1f526447d35f5d67f5865a37e195601fe036",
+    "author_reported_fps": {
+      "normal_clock": 24.35,
+      "qpc_scale_2": 37.8,
+      "wasm_opt_and_qpc_scale_8": 39.5
+    },
+    "evidence_scope": "Reviewed upstream report; FPS measurements have not been reproduced locally.",
+    "diagnostic_caveat": "Clock scaling is off by default and distorts guest simulation timing; 39.5 FPS is not a verified production optimization.",
+    "wasm_opt_claim": "Author retracts speed benefit; retained size reduction from 254.2 to 229.7 MB.",
+    "runtime_changed_by_review": false,
+    "blockers": [
+      "Upstream runtime round is not incorporated in the deployed Wasm.",
+      "Compatible integration, rebuild and controlled browser comparison remain pending.",
+      "Physics, animation and traffic correctness with altered timing are unverified."
+    ]
+  },
+  "last_translation_run_utc": "2026-10-22T23:54:19.234130+00:00",
   "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
   "translation_complete": false,
   "failed_functions": 0,
@@ -10,8 +67,8 @@
   "original_intro_verified": false,
   "first_original_mission_verified": false,
   "original_vehicle_physics_verified": false,
-  "last_triage_utc": "2026-10-22T14:20:00+00:00",
-  "triage_scope": "Performance round on wasm sha256 6276422a... (266527447 bytes): -fwasm-exceptions plus -sSUPPORT_LONGJMP=wasm applied globally removed all 26 invoke_* imports (331 total remain), and the unconditional per-dispatch instrumentation was gated. Gameplay in the Los Santos alley measures 23.4-24.4 FPS at 743-777 draws, against 22.87 FPS before. The round's opening hypothesis, that the game's own frame limiter was sleeping the guest and left 2x of headroom, is REFUTED by the runtime's baton sampler: the guest is idle only 0-7% of samples. The previous round's claim that 60 FPS is out of reach with arithmetic is corrected: it rests on a profile that could not see the executing thread. The remaining dominant cost is the game's frame limiter spinning on GetTickCount (~40-55k clock reads per frame); wiring the kit's audited frame-clock substitution needs five hook addresses this variant does not define. Details under browser_performance_triage_frame_limiter_round. Missions, vehicles, audio heard, save/load and city-wide coverage remain unverified.",
+  "last_triage_utc": "2026-10-23T03:30:13.127922+00:00",
+  "triage_scope": "Integrated the additional renderer timers supplied locally by DeepSeek, gated diagnostic clocks/atomics behind PERF_STATS, added ReadFile and interpreter counters, and built a default-off ring upload batching experiment. Browser measurements show low ReadFile traffic and interpreter instruction counts in the observed stationary scene; rendering encoding is a measured candidate. Visual/queue-order checks and controlled FPS gain for batching remain pending.",
   "scope": "Current isolated executable; prototype rendering and older-image boot probes are separate evidence",
   "recreation": {
     "updated_utc": "2026-10-14T23:29:46Z",
@@ -1333,5 +1390,4310 @@
       "No claim of 60 FPS, of playable status, or of a completion percentage.",
       "Missions, vehicles, audio actually heard, save/load and stability beyond about 35 minutes remain unverified."
     ]
+  },
+  "github_sync_2026_10_22": {
+    "parent_commit": "d948a513896ca9403711eea59c69c4dde7f25262",
+    "runtime_available_base": "eb32cc42623e0e9e868b9d27423a57d5a5cba56b",
+    "runtime_requested_pin": "ad47228c5b0ab2d1453251999bbd86795e178fac",
+    "runtime_requested_pin_available": false,
+    "expected_patched_tree": "da8fbe192f6868fd49541f4abd231737e22a9d43",
+    "actual_patched_tree": "da8fbe192f6868fd49541f4abd231737e22a9d43",
+    "runtime_source_matches_incoming_patch": true,
+    "previous_local_source_matched_previous_patch": true,
+    "recompiled": false,
+    "date": "2026-10-22",
+    "commits_downloaded": 7,
+    "integration": "fast-forward",
+    "previous_commit": "e903029",
+    "browser_retested": false,
+    "blocker": "The published runtime pin is not available from its upstream remote. The complete incoming patch was applied and its resulting tree verified on the available eb32cc4 base; the published pin was preserved."
+  },
+  "web_rebuild_2026_10_22": {
+    "started_utc": "2026-10-22T22:15:58.149259+00:00",
+    "repository_commit": "d948a513896ca9403711eea59c69c4dde7f25262",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "variant_config_sha256": "603218357dbf34e55b41b8b08337c9982d8563a47b5dba05d1dbb31f36bf8e8d",
+    "complete_runtime_patch_sha256": "f32f007ef3ecb2652c35745ab9df578c4dd2baba61fb4a3d709b06bd30dd8dad",
+    "previous_served_wasm_sha256": "c0c388e86cc58811d72f20e49b13f7cc05c85ce101755eb14b49dbf3f3b23ddf",
+    "target": "web",
+    "optimization": "Release; standard generated-code optimization; diagnostic-all disabled",
+    "jobs": 6,
+    "regenerate": true,
+    "browser_retested": false,
+    "state": "ready",
+    "browser_control_available": false,
+    "browser_control_blocker": "Native Computer Use pipe unavailable; browser inventory contains no browser.",
+    "translation_reports": [
+      {
+        "report": "translate-eax-report.json",
+        "functions_total": 987,
+        "functions_ok": 987,
+        "entry_points": 3800,
+        "failures": 0,
+        "unmodelled": 0,
+        "table_gaps": 0,
+        "table_sites_undecoded": 0
+      },
+      {
+        "report": "translate-ogg-report.json",
+        "functions_total": 144,
+        "functions_ok": 144,
+        "entry_points": 511,
+        "failures": 0,
+        "unmodelled": 0,
+        "table_gaps": 0,
+        "table_sites_undecoded": 0
+      },
+      {
+        "report": "translate-report.json",
+        "functions_total": 51876,
+        "functions_ok": 51472,
+        "entry_points": 155125,
+        "failures": 0,
+        "unmodelled": 0,
+        "table_gaps": 0,
+        "table_sites_undecoded": 0
+      },
+      {
+        "report": "translate-vorbis-report.json",
+        "functions_total": 521,
+        "functions_ok": 521,
+        "entry_points": 2302,
+        "failures": 0,
+        "unmodelled": 0,
+        "table_gaps": 0,
+        "table_sites_undecoded": 0
+      },
+      {
+        "report": "translate-vorbisfile-report.json",
+        "functions_total": 279,
+        "functions_ok": 279,
+        "entry_points": 1149,
+        "failures": 0,
+        "unmodelled": 0,
+        "table_gaps": 0,
+        "table_sites_undecoded": 0
+      }
+    ],
+    "controlled_restart": "Stopped the first compile to raise parallelism from four to six; regenerated sources and completed objects preserved. Resumed without --regenerate. First pipeline exit 1 is the intentional interruption, not a compiler diagnosis.",
+    "previous_wasm_imports_count": 366,
+    "previous_wasm_invoke_imports_count": 25,
+    "build_exit_code": 0,
+    "browser_preparation": {
+      "state": "finished",
+      "before": {
+        "functions": 196562,
+        "maximum_locals": 2929,
+        "excessive_locals": []
+      },
+      "after": {
+        "functions": 196562,
+        "maximum_locals": 2929,
+        "excessive_locals": []
+      },
+      "v8_compile_passed": true,
+      "exit_code": 0,
+      "bytes": 232433735,
+      "seconds": 2.698249578475952
+    },
+    "linked_wasm_sha256": "63a77cc16abbea5e737388bcd02a3d007daa17d8a85581bbd7d21d306dbb7ed1",
+    "served_wasm_sha256": "f58b1d6197f2afe4a45bf92403a7fbb92dc14fe43b84c7fef58732ceb7b154ed",
+    "wasm_imports_count": 332,
+    "wasm_invoke_imports_count": 0,
+    "http_player_status": 200,
+    "http_checks": [
+      {
+        "file": "GTASASingleplayer.js",
+        "status": 200,
+        "sha256": "bc63a06c1d0e279abc32967d26669b21639069039c6904c7117bd240eecd0889",
+        "bytes": 471619,
+        "mime": "application/javascript"
+      },
+      {
+        "file": "GTASASingleplayer.wasm",
+        "status": 200,
+        "sha256": "f58b1d6197f2afe4a45bf92403a7fbb92dc14fe43b84c7fef58732ceb7b154ed",
+        "bytes": 232433735,
+        "mime": "application/wasm"
+      },
+      {
+        "file": "GTASASingleplayer.data",
+        "status": 200,
+        "sha256": "3d85a1fea3d9b89797d45786decbfb1595e3d0c51e21c674ff0e79b50e5baff1",
+        "bytes": 32430331,
+        "mime": "application/octet-stream"
+      }
+    ],
+    "completed_utc": "2026-10-22T22:43:39.470933+00:00",
+    "player_url": "http://127.0.0.1:8771/gtasa-singleplayer/?RECOMP_STRICT_UNKNOWN=1",
+    "user_reports_new_version_passes_loading_and_is_playable": true,
+    "performance_remeasured": false
+  },
+  "byte_interpreter_loading_fix_2026_10_22": {
+    "completed_utc": "2026-10-22T23:12:41.672977+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "wasm_served_at_failure_sha256": "f58b1d6197f2afe4a45bf92403a7fbb92dc14fe43b84c7fef58732ceb7b154ed",
+    "loaded_browser_wasm_measured": false,
+    "served_wasm_sha256": "73bc1112a5c61917b9e6d26e4749ee33f4fe8bbb1b70b2bdaaff828f7d8ca76c",
+    "probe_wasm_sha256": "f7051783bdb4425143c1cf867b33eb3d18cb2a583f440a596ef4239f4737495f",
+    "interp_tests_wasm_sha256": "b96214a11b7ea688cdb963bd670548f39b65b132999e1f021e63b81c332872a2",
+    "browser_failure_target": "0156f890",
+    "initial_unsupported_instruction": "0156f98b: SHR DL,5",
+    "next_unsupported_instruction": "0156f990: AND DL,1",
+    "original_target_decode_passed": true,
+    "unit_checks": 415,
+    "unit_failures": 0,
+    "unicorn_cases_passed": 62,
+    "server_tests_passed": 4,
+    "default_strict_unknown": true,
+    "build_exit_code": 0,
+    "v8_compile_passed": true,
+    "invoke_imports_count": 0,
+    "browser_fix_verified": false,
+    "http_checks": [
+      {
+        "file": "GTASASingleplayer.wasm",
+        "sha256": "73bc1112a5c61917b9e6d26e4749ee33f4fe8bbb1b70b2bdaaff828f7d8ca76c",
+        "http_status": 200
+      },
+      {
+        "file": "GTASASingleplayer.js",
+        "sha256": "57985b9f32b44d26d1a7a4a940b5945bfa2fa42742c71b00e826a5b65371cbd0",
+        "http_status": 200
+      },
+      {
+        "file": "GTASASingleplayer.data",
+        "sha256": "3d85a1fea3d9b89797d45786decbfb1595e3d0c51e21c674ff0e79b50e5baff1",
+        "http_status": 200
+      }
+    ],
+    "server_session": 96330
+  },
+  "absolute_byte_move_loading_fix_2026_10_22": {
+    "completed_utc": "2026-10-22T23:17:00.890336+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "wasm_served_at_failure_sha256": "73bc1112a5c61917b9e6d26e4749ee33f4fe8bbb1b70b2bdaaff828f7d8ca76c",
+    "served_wasm_sha256": "d73a8a0586e64f3f63ea1b89188493799820a558fea83bdf06f8f9be82f032d8",
+    "loaded_browser_wasm_measured": false,
+    "browser_failure_target": "0156c146",
+    "unsupported_instruction": "0156c15d: MOV AL,moffs32",
+    "probe_wasm_sha256": "dacbcc97ead2a59ea5deb61ebc7d112e3e1c37da01e5b8c04dc72d8565341e36",
+    "unit_checks": 420,
+    "unit_failures": 0,
+    "unicorn_cases_passed": 65,
+    "original_target_decode_passed": true,
+    "v8_compile_passed": true,
+    "build_exit_code": 0,
+    "browser_fix_verified": false,
+    "http_checks": [
+      {
+        "file": "GTASASingleplayer.wasm",
+        "sha256": "d73a8a0586e64f3f63ea1b89188493799820a558fea83bdf06f8f9be82f032d8",
+        "http_status": 200
+      },
+      {
+        "file": "GTASASingleplayer.js",
+        "sha256": "e1348fccf3cfe3d0358c57e21f66dc7784870d7269974c47a6d9e0b0b81393a8",
+        "http_status": 200
+      },
+      {
+        "file": "GTASASingleplayer.data",
+        "sha256": "3d85a1fea3d9b89797d45786decbfb1595e3d0c51e21c674ff0e79b50e5baff1",
+        "http_status": 200
+      }
+    ]
+  },
+  "translation_inputs_reconciliation_2026_10_22": {
+    "repository_commit": "d948a513896ca9403711eea59c69c4dde7f25262",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "audited_call_contracts": 7645,
+    "old_call_sites": 13,
+    "updated_call_sites": 7653,
+    "old_explicit_entries": 11,
+    "updated_explicit_entries": 8134,
+    "documented_entries_restored": 8,
+    "witnessed_local_entries_added": 3,
+    "variant_config_sha256": "dac09e18f63972d24f84f42ca914eab47e9f58c9fa49871b6dd9849bd31c0286",
+    "build_state": "finished",
+    "browser_gameplay_retested": false,
+    "preparation_tests_passed": 6,
+    "web_staging_tests_passed": 3,
+    "initial_regeneration_failure": "Output could not be written because the disk was full; no compiler or unsupported-instruction diagnosis from that attempt.",
+    "log_archive": {
+      "original": "build/rebuild-20261022/previous-bootlog.txt",
+      "archive": "build/rebuild-20261022/previous-bootlog.txt.gz",
+      "uncompressed_bytes": 2628592044,
+      "compressed_bytes": 47959724,
+      "uncompressed_sha256": "cf5c3e45efc3ef285ee0c3b6bce2327aa4a214ccf4189f1512a7457b2e249585",
+      "round_trip_verified": true
+    },
+    "verified_duplicate_bytes_removed": 3882705776,
+    "translation_reports": [
+      {
+        "report": "translate-eax-report.json",
+        "functions_total": 987,
+        "functions_ok": 987,
+        "entry_points": 3800,
+        "failures": 0,
+        "unmodelled": 0,
+        "table_gaps": 0,
+        "table_sites_undecoded": 0
+      },
+      {
+        "report": "translate-ogg-report.json",
+        "functions_total": 144,
+        "functions_ok": 144,
+        "entry_points": 511,
+        "failures": 0,
+        "unmodelled": 0,
+        "table_gaps": 0,
+        "table_sites_undecoded": 0
+      },
+      {
+        "report": "translate-report.json",
+        "functions_total": 59809,
+        "functions_ok": 59127,
+        "entry_points": 168081,
+        "failures": 0,
+        "unmodelled": 0,
+        "table_gaps": 0,
+        "table_sites_undecoded": 0
+      },
+      {
+        "report": "translate-vorbis-report.json",
+        "functions_total": 521,
+        "functions_ok": 521,
+        "entry_points": 2302,
+        "failures": 0,
+        "unmodelled": 0,
+        "table_gaps": 0,
+        "table_sites_undecoded": 0
+      },
+      {
+        "report": "translate-vorbisfile-report.json",
+        "functions_total": 279,
+        "functions_ok": 279,
+        "entry_points": 1149,
+        "failures": 0,
+        "unmodelled": 0,
+        "table_gaps": 0,
+        "table_sites_undecoded": 0
+      }
+    ],
+    "required_dispatch_targets_verified": [
+      "005245bd",
+      "006338e0",
+      "00684ce6",
+      "006c1a04",
+      "007acbe1",
+      "007c7b90",
+      "007cac60",
+      "007caf50",
+      "01564df9",
+      "0156c146",
+      "0156f890"
+    ],
+    "required_dispatch_indices": {
+      "005245bd": 31235,
+      "006338e0": 59387,
+      "00684ce6": 69209,
+      "006c1a04": 75061,
+      "007acbe1": 94037,
+      "007c7b90": 95131,
+      "007cac60": 95302,
+      "007caf50": 95303,
+      "01564df9": 167031,
+      "0156c146": 167632,
+      "0156f890": 167982
+    },
+    "additional_archived_diagnostics": [
+      {
+        "original": "build/cmake/web/lib/librecomp_gen.a",
+        "archive": "build/sync-inputs-20261022/archived-diagnostics/0-librecomp_gen.a.gz",
+        "uncompressed_bytes": 937470276,
+        "compressed_bytes": 304325071,
+        "uncompressed_sha256": "72aa31395e045f45861cf789d39c51f6bef7e44de7eca1ec3679c755c2ab8952",
+        "round_trip_verified": true
+      },
+      {
+        "original": "variants/singleplayer/build/cmake/windows/lib/recomp_gen.lib",
+        "archive": "build/sync-inputs-20261022/archived-diagnostics/1-recomp_gen.lib.gz",
+        "uncompressed_bytes": 872956874,
+        "compressed_bytes": 220100677,
+        "uncompressed_sha256": "abf4d67f7233de13204710df6d801855683c82f515e72def10831dad88976164",
+        "round_trip_verified": true
+      },
+      {
+        "original": "build/web/recomp/GTASARecomp.linked.wasm",
+        "archive": "build/sync-inputs-20261022/archived-diagnostics/2-GTASARecomp.linked.wasm.gz",
+        "uncompressed_bytes": 775071382,
+        "compressed_bytes": 214498216,
+        "uncompressed_sha256": "97e5cb4cb1a199e6252746b44534b1784dab5c8e983f1739475caf2070ef71a7",
+        "round_trip_verified": true
+      },
+      {
+        "original": "variants/singleplayer/build/web/recomp/game_boot_probe.wasm",
+        "archive": "build/sync-inputs-20261022/archived-diagnostics/3-game_boot_probe.wasm.gz",
+        "uncompressed_bytes": 825579629,
+        "compressed_bytes": 220215471,
+        "uncompressed_sha256": "dacbcc97ead2a59ea5deb61ebc7d112e3e1c37da01e5b8c04dc72d8565341e36",
+        "round_trip_verified": true
+      }
+    ],
+    "previous_site_linked_archive": {
+      "original": "variants/singleplayer/build/web-site/gtasa-singleplayer/GTASASingleplayer.linked.wasm",
+      "archive": "build/sync-inputs-20261022/previous-site-linked.wasm.gz",
+      "uncompressed_bytes": 854259054,
+      "compressed_bytes": 229153449,
+      "uncompressed_sha256": "212da64c3e7e4c091becb58f3bd99807d35c2488446914dceb3951a94919d7d6",
+      "round_trip_verified": true
+    },
+    "previous_served_wasm_sha256": "d73a8a0586e64f3f63ea1b89188493799820a558fea83bdf06f8f9be82f032d8",
+    "previous_served_wasm_bytes": 232434439,
+    "previous_browser_loaded_wasm_identity_measured": false,
+    "build_resumed_after_turn_interruption": true,
+    "resume_log": "build/sync-inputs-20261022/pipeline-resume.log",
+    "build_exit_code": 0,
+    "verified_at_utc": "2026-10-23T00:56:16.305335+00:00",
+    "delivery": {
+      "verified_at_utc": "2026-10-23T00:56:16.305335+00:00",
+      "http_headers": {
+        "Server": "SimpleHTTP/0.6 Python/3.11.9",
+        "Date": "Fri, 23 Oct 2026 00:56:15 GMT",
+        "Content-type": "text/html",
+        "Content-Length": "8488",
+        "Last-Modified": "Fri, 23 Oct 2026 00:56:15 GMT",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Embedder-Policy": "require-corp",
+        "Cache-Control": "no-store"
+      },
+      "files": [
+        {
+          "name": "GTASASingleplayer.js",
+          "sha256": "aa5b80adab337ebaf70d38d3c579244d74af6361f6c7f827f485beffa12a206e",
+          "bytes": 471619,
+          "content_type": "application/javascript",
+          "source_site_http_identical": true
+        },
+        {
+          "name": "GTASASingleplayer.wasm",
+          "sha256": "4004a5657d3ad14f19911fe66736de1710ce2146fb611b63477b837fceaea250",
+          "bytes": 266177461,
+          "content_type": "application/wasm",
+          "source_site_http_identical": true
+        },
+        {
+          "name": "GTASASingleplayer.data",
+          "sha256": "63b5a7056570aa52e13bd93c067dbe279874e8cbf97ff5c6c2b0cc72df68605d",
+          "bytes": 35073821,
+          "content_type": "application/octet-stream",
+          "source_site_http_identical": true
+        }
+      ],
+      "browser_preparation": {
+        "state": "finished",
+        "pid": 10904,
+        "playable_verified": false,
+        "before": {
+          "functions": 212978,
+          "maximum_locals": 2929,
+          "excessive_locals": []
+        },
+        "after": {
+          "functions": 212978,
+          "maximum_locals": 2929,
+          "excessive_locals": []
+        },
+        "v8_compile_passed": true,
+        "exit_code": 0,
+        "bytes": 266177461,
+        "seconds": 2.5078418254852295
+      },
+      "import_count": 332,
+      "invoke_imports": [],
+      "browser_gameplay_retested": false
+    },
+    "current_browser_blocker": "Waiting for a new browser run of the reconciled artifact; prior screenshot cannot verify the newly served binary.",
+    "linked_wasm_sha256": "6ee6054d3d4c0f68d10c38196e225094158e07f751d455940e57bf53c59a4d9e",
+    "linked_wasm_bytes": 982752084
+  },
+  "byte_test_and_incdec_loading_fix_2026_10_22": {
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "repository_commit": "d948a513896ca9403711eea59c69c4dde7f25262",
+    "browser_failure_target": "01560a22",
+    "first_refused_instruction": "01560a3b: F6 /0 TEST byte ptr [EDX+EDI],0x80",
+    "second_refused_instruction": "01560a7d: FF /0 INC dword ptr [ESP+0x10]",
+    "previous_served_wasm_sha256": "4004a5657d3ad14f19911fe66736de1710ce2146fb611b63477b837fceaea250",
+    "browser_loaded_wasm_identity_measured": false,
+    "unit_checks": 446,
+    "unit_failures": 0,
+    "unicorn_extended_cases_passed": 76,
+    "unicorn_random_suite_run": false,
+    "original_bounded_decode_passed": [
+      "01560a22"
+    ],
+    "build_exit_code": 0,
+    "delivery": {
+      "verified_at_utc": "2026-10-23T01:05:46.571342+00:00",
+      "http_headers": {
+        "Server": "SimpleHTTP/0.6 Python/3.11.9",
+        "Date": "Fri, 23 Oct 2026 01:05:45 GMT",
+        "Content-type": "text/html",
+        "Content-Length": "8488",
+        "Last-Modified": "Fri, 23 Oct 2026 01:05:45 GMT",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Embedder-Policy": "require-corp",
+        "Cache-Control": "no-store"
+      },
+      "files": [
+        {
+          "name": "GTASASingleplayer.js",
+          "sha256": "f0dac9e6db3a4a478a3a34dedd8bdc4a66190c9e58957bb75930d00d1b8d6a68",
+          "bytes": 471619,
+          "content_type": "application/javascript",
+          "source_site_http_identical": true
+        },
+        {
+          "name": "GTASASingleplayer.wasm",
+          "sha256": "0b9293973f72e4495289b71df6e3ea918a635f0892890d5827c3b76d77319b59",
+          "bytes": 266177413,
+          "content_type": "application/wasm",
+          "source_site_http_identical": true
+        },
+        {
+          "name": "GTASASingleplayer.data",
+          "sha256": "63b5a7056570aa52e13bd93c067dbe279874e8cbf97ff5c6c2b0cc72df68605d",
+          "bytes": 35073821,
+          "content_type": "application/octet-stream",
+          "source_site_http_identical": true
+        }
+      ],
+      "browser_preparation": {
+        "state": "finished",
+        "pid": 132,
+        "playable_verified": false,
+        "before": {
+          "functions": 212978,
+          "maximum_locals": 2929,
+          "excessive_locals": []
+        },
+        "after": {
+          "functions": 212978,
+          "maximum_locals": 2929,
+          "excessive_locals": []
+        },
+        "v8_compile_passed": true,
+        "exit_code": 0,
+        "bytes": 266177413,
+        "seconds": 2.076054811477661
+      },
+      "import_count": 332,
+      "invoke_imports": [],
+      "browser_gameplay_retested": false
+    },
+    "browser_gameplay_retested": false,
+    "outstanding": [
+      "A new browser run of the corrected artifact is pending.",
+      "The previous browser log also recorded a GPU completion timeout; its cause and recurrence after the interpreter fix remain unverified."
+    ],
+    "private_evidence": "build/byte-test-20261022"
+  },
+  "browser_gameplay_performance_2026_10_22": {
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "baseline_served_wasm_sha256": "0b9293973f72e4495289b71df6e3ea918a635f0892890d5827c3b76d77319b59",
+    "user_confirmed_game_running": true,
+    "user_screenshot": {
+      "new_fps": 18.0,
+      "display_fps": 98.5,
+      "median_frame_ms": 53.5,
+      "p95_ms": 82.2,
+      "gpu_completion_ms": 7.1,
+      "repeat_percent": 82,
+      "scene": "CJ on the BMX with the opening objective visible; mission completion not established"
+    },
+    "baseline_world_reports": [
+      {
+        "frame": 2701.0,
+        "fps": 14.5,
+        "draws_per_frame": 681.0,
+        "textures": 598.0,
+        "pipelines": 110.0,
+        "writes_per_frame": 721.4,
+        "new_groups_per_frame": 351.12,
+        "new_pipelines_per_frame": 0.25,
+        "submits_per_frame": 79.74
+      },
+      {
+        "frame": 3001.0,
+        "fps": 13.4,
+        "draws_per_frame": 970.0,
+        "textures": 750.0,
+        "pipelines": 139.0,
+        "writes_per_frame": 1014.9,
+        "new_groups_per_frame": 414.63,
+        "new_pipelines_per_frame": 0.1,
+        "submits_per_frame": 103.05
+      },
+      {
+        "frame": 3301.0,
+        "fps": 21.4,
+        "draws_per_frame": 136.0,
+        "textures": 771.0,
+        "pipelines": 139.0,
+        "writes_per_frame": 145.1,
+        "new_groups_per_frame": 63.98,
+        "new_pipelines_per_frame": 0.0,
+        "submits_per_frame": 25.15
+      }
+    ],
+    "candidate_world_reports": [],
+    "candidate_delivery": {
+      "verified_at_utc": "2026-10-23T01:15:32.573894+00:00",
+      "http_headers": {
+        "Server": "SimpleHTTP/0.6 Python/3.11.9",
+        "Date": "Fri, 23 Oct 2026 01:15:31 GMT",
+        "Content-type": "text/html",
+        "Content-Length": "8488",
+        "Last-Modified": "Fri, 23 Oct 2026 01:15:31 GMT",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Embedder-Policy": "require-corp",
+        "Cache-Control": "no-store"
+      },
+      "files": [
+        {
+          "name": "GTASASingleplayer.js",
+          "sha256": "562c12de1489e7aa64e0fc1080972450e4d00a105a625b0679b2e0eef21499f0",
+          "bytes": 471619,
+          "content_type": "application/javascript",
+          "source_site_http_identical": true
+        },
+        {
+          "name": "GTASASingleplayer.wasm",
+          "sha256": "709d5924c68ee2222fdc668b1882c272379288f12a9fbc02381f60c65555af9e",
+          "bytes": 266178214,
+          "content_type": "application/wasm",
+          "source_site_http_identical": true
+        },
+        {
+          "name": "GTASASingleplayer.data",
+          "sha256": "63b5a7056570aa52e13bd93c067dbe279874e8cbf97ff5c6c2b0cc72df68605d",
+          "bytes": 35073821,
+          "content_type": "application/octet-stream",
+          "source_site_http_identical": true
+        }
+      ],
+      "browser_preparation": {
+        "state": "finished",
+        "pid": 15552,
+        "playable_verified": false,
+        "before": {
+          "functions": 212978,
+          "maximum_locals": 2929,
+          "excessive_locals": []
+        },
+        "after": {
+          "functions": 212978,
+          "maximum_locals": 2929,
+          "excessive_locals": []
+        },
+        "v8_compile_passed": true,
+        "exit_code": 0,
+        "bytes": 266178214,
+        "seconds": 3.4066543579101562
+      },
+      "import_count": 332,
+      "invoke_imports": [],
+      "browser_gameplay_retested": false
+    },
+    "candidate_env": "RECOMP_D3D9_FRAME_GROUP_CACHE=1",
+    "candidate_enabled_by_default": false,
+    "controlled_fps_gain_verified": false,
+    "rendering_equivalence_verified": false,
+    "method_limits": [
+      "Different draw counts and camera/world states are not an A/B performance comparison.",
+      "Profiling itself adds overhead.",
+      "GPU completion metric is not an isolated hardware timestamp.",
+      "The sampler includes shims and host waits in the published caller."
+    ],
+    "private_evidence": "build/performance-20261022"
+  },
+  "streaming_and_upload_measurement_2026_10_22": {
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "repository_commit": "d948a513896ca9403711eea59c69c4dde7f25262",
+    "baseline_served_wasm_sha256": "d50efdfa774d17b788241cdbf754bd7f2c6272c01f59541505eba95e9dd9cced",
+    "browser_loaded_hash_measured": false,
+    "baseline_io_windows": [
+      {
+        "reads_per_second": 122.0,
+        "KiB_per_second": 146.4,
+        "read_wall_ms_per_second": 212.04,
+        "outer_interp_calls_per_second": 7.0,
+        "interp_instructions_per_second": 30.0
+      },
+      {
+        "reads_per_second": 418.0,
+        "KiB_per_second": 2062.3,
+        "read_wall_ms_per_second": 646.86,
+        "outer_interp_calls_per_second": 0.0,
+        "interp_instructions_per_second": 0.0
+      },
+      {
+        "reads_per_second": 50.0,
+        "KiB_per_second": 3246.2,
+        "read_wall_ms_per_second": 106.34,
+        "outer_interp_calls_per_second": 0.0,
+        "interp_instructions_per_second": 0.0
+      },
+      {
+        "reads_per_second": 49.0,
+        "KiB_per_second": 131.7,
+        "read_wall_ms_per_second": 82.31,
+        "outer_interp_calls_per_second": 0.0,
+        "interp_instructions_per_second": 0.0
+      },
+      {
+        "reads_per_second": 56.0,
+        "KiB_per_second": 2351.4,
+        "read_wall_ms_per_second": 102.32,
+        "outer_interp_calls_per_second": 0.0,
+        "interp_instructions_per_second": 0.0
+      },
+      {
+        "reads_per_second": 2.0,
+        "KiB_per_second": 430.4,
+        "read_wall_ms_per_second": 6.11,
+        "outer_interp_calls_per_second": 0.0,
+        "interp_instructions_per_second": 0.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 0.0,
+        "interp_instructions_per_second": 0.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 0.0,
+        "interp_instructions_per_second": 0.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 0.0,
+        "interp_instructions_per_second": 0.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 0.0,
+        "interp_instructions_per_second": 0.0
+      },
+      {
+        "reads_per_second": 90.0,
+        "KiB_per_second": 627.5,
+        "read_wall_ms_per_second": 120.88,
+        "outer_interp_calls_per_second": 5.0,
+        "interp_instructions_per_second": 85.0
+      },
+      {
+        "reads_per_second": 96.0,
+        "KiB_per_second": 313.6,
+        "read_wall_ms_per_second": 134.28,
+        "outer_interp_calls_per_second": 10.0,
+        "interp_instructions_per_second": 69.0
+      },
+      {
+        "reads_per_second": 84.0,
+        "KiB_per_second": 225.0,
+        "read_wall_ms_per_second": 104.67,
+        "outer_interp_calls_per_second": 0.0,
+        "interp_instructions_per_second": 0.0
+      },
+      {
+        "reads_per_second": 90.0,
+        "KiB_per_second": 931.8,
+        "read_wall_ms_per_second": 162.19,
+        "outer_interp_calls_per_second": 165.0,
+        "interp_instructions_per_second": 11435.0
+      },
+      {
+        "reads_per_second": 178.0,
+        "KiB_per_second": 9855.7,
+        "read_wall_ms_per_second": 274.32,
+        "outer_interp_calls_per_second": 68.0,
+        "interp_instructions_per_second": 4387.0
+      },
+      {
+        "reads_per_second": 74.0,
+        "KiB_per_second": 659.0,
+        "read_wall_ms_per_second": 122.93,
+        "outer_interp_calls_per_second": 0.0,
+        "interp_instructions_per_second": 0.0
+      },
+      {
+        "reads_per_second": 78.0,
+        "KiB_per_second": 653.8,
+        "read_wall_ms_per_second": 110.44,
+        "outer_interp_calls_per_second": 0.0,
+        "interp_instructions_per_second": 0.0
+      },
+      {
+        "reads_per_second": 200.0,
+        "KiB_per_second": 994.0,
+        "read_wall_ms_per_second": 271.02,
+        "outer_interp_calls_per_second": 182.0,
+        "interp_instructions_per_second": 8418.0
+      },
+      {
+        "reads_per_second": 280.0,
+        "KiB_per_second": 10441.4,
+        "read_wall_ms_per_second": 383.59,
+        "outer_interp_calls_per_second": 733.0,
+        "interp_instructions_per_second": 2979.0
+      },
+      {
+        "reads_per_second": 409.0,
+        "KiB_per_second": 3833.1,
+        "read_wall_ms_per_second": 503.15,
+        "outer_interp_calls_per_second": 154.0,
+        "interp_instructions_per_second": 3294.0
+      },
+      {
+        "reads_per_second": 23.0,
+        "KiB_per_second": 2407.0,
+        "read_wall_ms_per_second": 51.95,
+        "outer_interp_calls_per_second": 533.0,
+        "interp_instructions_per_second": 22996.0
+      },
+      {
+        "reads_per_second": 280.0,
+        "KiB_per_second": 2728.7,
+        "read_wall_ms_per_second": 354.85,
+        "outer_interp_calls_per_second": 64.0,
+        "interp_instructions_per_second": 5176.0
+      },
+      {
+        "reads_per_second": 288.0,
+        "KiB_per_second": 3751.2,
+        "read_wall_ms_per_second": 323.51,
+        "outer_interp_calls_per_second": 77.0,
+        "interp_instructions_per_second": 452.0
+      },
+      {
+        "reads_per_second": 7.0,
+        "KiB_per_second": 643.0,
+        "read_wall_ms_per_second": 20.31,
+        "outer_interp_calls_per_second": 33.0,
+        "interp_instructions_per_second": 265.0
+      },
+      {
+        "reads_per_second": 3.0,
+        "KiB_per_second": 303.9,
+        "read_wall_ms_per_second": 6.07,
+        "outer_interp_calls_per_second": 24.0,
+        "interp_instructions_per_second": 284.0
+      },
+      {
+        "reads_per_second": 48.0,
+        "KiB_per_second": 5854.0,
+        "read_wall_ms_per_second": 335.83,
+        "outer_interp_calls_per_second": 951.0,
+        "interp_instructions_per_second": 22780.0
+      },
+      {
+        "reads_per_second": 16.0,
+        "KiB_per_second": 1617.9,
+        "read_wall_ms_per_second": 36.7,
+        "outer_interp_calls_per_second": 278.0,
+        "interp_instructions_per_second": 8588.0
+      },
+      {
+        "reads_per_second": 2.0,
+        "KiB_per_second": 99.7,
+        "read_wall_ms_per_second": 4.11,
+        "outer_interp_calls_per_second": 62.0,
+        "interp_instructions_per_second": 6198.0
+      },
+      {
+        "reads_per_second": 4.0,
+        "KiB_per_second": 53.0,
+        "read_wall_ms_per_second": 6.87,
+        "outer_interp_calls_per_second": 90.0,
+        "interp_instructions_per_second": 7169.0
+      },
+      {
+        "reads_per_second": 2.0,
+        "KiB_per_second": 49.0,
+        "read_wall_ms_per_second": 3.1,
+        "outer_interp_calls_per_second": 70.0,
+        "interp_instructions_per_second": 6070.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 52.0,
+        "read_wall_ms_per_second": 1.64,
+        "outer_interp_calls_per_second": 81.0,
+        "interp_instructions_per_second": 7870.0
+      },
+      {
+        "reads_per_second": 6.0,
+        "KiB_per_second": 102.0,
+        "read_wall_ms_per_second": 13.0,
+        "outer_interp_calls_per_second": 56.0,
+        "interp_instructions_per_second": 4476.0
+      },
+      {
+        "reads_per_second": 2.0,
+        "KiB_per_second": 57.0,
+        "read_wall_ms_per_second": 3.66,
+        "outer_interp_calls_per_second": 36.0,
+        "interp_instructions_per_second": 2563.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 5.9,
+        "read_wall_ms_per_second": 1.55,
+        "outer_interp_calls_per_second": 48.0,
+        "interp_instructions_per_second": 4024.0
+      },
+      {
+        "reads_per_second": 7.0,
+        "KiB_per_second": 1117.3,
+        "read_wall_ms_per_second": 13.69,
+        "outer_interp_calls_per_second": 106.0,
+        "interp_instructions_per_second": 6693.0
+      },
+      {
+        "reads_per_second": 8.0,
+        "KiB_per_second": 137.0,
+        "read_wall_ms_per_second": 14.1,
+        "outer_interp_calls_per_second": 73.0,
+        "interp_instructions_per_second": 5626.0
+      },
+      {
+        "reads_per_second": 9.0,
+        "KiB_per_second": 589.0,
+        "read_wall_ms_per_second": 16.86,
+        "outer_interp_calls_per_second": 35.0,
+        "interp_instructions_per_second": 2109.0
+      },
+      {
+        "reads_per_second": 2.0,
+        "KiB_per_second": 137.9,
+        "read_wall_ms_per_second": 6.25,
+        "outer_interp_calls_per_second": 163.0,
+        "interp_instructions_per_second": 4914.0
+      },
+      {
+        "reads_per_second": 7.0,
+        "KiB_per_second": 153.0,
+        "read_wall_ms_per_second": 12.54,
+        "outer_interp_calls_per_second": 74.0,
+        "interp_instructions_per_second": 4305.0
+      },
+      {
+        "reads_per_second": 11.0,
+        "KiB_per_second": 549.0,
+        "read_wall_ms_per_second": 22.84,
+        "outer_interp_calls_per_second": 62.0,
+        "interp_instructions_per_second": 3810.0
+      },
+      {
+        "reads_per_second": 6.0,
+        "KiB_per_second": 68.0,
+        "read_wall_ms_per_second": 9.3,
+        "outer_interp_calls_per_second": 97.0,
+        "interp_instructions_per_second": 6637.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 56.0,
+        "interp_instructions_per_second": 5062.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 26.0,
+        "read_wall_ms_per_second": 2.05,
+        "outer_interp_calls_per_second": 38.0,
+        "interp_instructions_per_second": 2071.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 108.0,
+        "read_wall_ms_per_second": 1.32,
+        "outer_interp_calls_per_second": 40.0,
+        "interp_instructions_per_second": 2202.0
+      },
+      {
+        "reads_per_second": 4.0,
+        "KiB_per_second": 420.0,
+        "read_wall_ms_per_second": 6.14,
+        "outer_interp_calls_per_second": 29.0,
+        "interp_instructions_per_second": 1215.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 5.0,
+        "read_wall_ms_per_second": 0.97,
+        "outer_interp_calls_per_second": 22.0,
+        "interp_instructions_per_second": 389.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 12.7,
+        "read_wall_ms_per_second": 1.29,
+        "outer_interp_calls_per_second": 13.0,
+        "interp_instructions_per_second": 413.0
+      },
+      {
+        "reads_per_second": 15.0,
+        "KiB_per_second": 349.5,
+        "read_wall_ms_per_second": 24.45,
+        "outer_interp_calls_per_second": 0.0,
+        "interp_instructions_per_second": 4.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 0.0,
+        "interp_instructions_per_second": 0.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 0.0,
+        "interp_instructions_per_second": 0.0
+      },
+      {
+        "reads_per_second": 2.0,
+        "KiB_per_second": 41.0,
+        "read_wall_ms_per_second": 4.65,
+        "outer_interp_calls_per_second": 11.0,
+        "interp_instructions_per_second": 132.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 19.0,
+        "read_wall_ms_per_second": 2.31,
+        "outer_interp_calls_per_second": 13.0,
+        "interp_instructions_per_second": 162.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 26.0,
+        "read_wall_ms_per_second": 2.04,
+        "outer_interp_calls_per_second": 28.0,
+        "interp_instructions_per_second": 1694.0
+      },
+      {
+        "reads_per_second": 2.0,
+        "KiB_per_second": 40.0,
+        "read_wall_ms_per_second": 3.84,
+        "outer_interp_calls_per_second": 17.0,
+        "interp_instructions_per_second": 210.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 17.0,
+        "interp_instructions_per_second": 353.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 24.0,
+        "interp_instructions_per_second": 863.0
+      },
+      {
+        "reads_per_second": 2.0,
+        "KiB_per_second": 139.0,
+        "read_wall_ms_per_second": 4.42,
+        "outer_interp_calls_per_second": 20.0,
+        "interp_instructions_per_second": 238.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 28.0,
+        "interp_instructions_per_second": 1480.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 51.0,
+        "read_wall_ms_per_second": 2.09,
+        "outer_interp_calls_per_second": 15.0,
+        "interp_instructions_per_second": 172.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 15.0,
+        "interp_instructions_per_second": 394.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 22.0,
+        "interp_instructions_per_second": 1265.0
+      },
+      {
+        "reads_per_second": 2.0,
+        "KiB_per_second": 40.0,
+        "read_wall_ms_per_second": 3.87,
+        "outer_interp_calls_per_second": 22.0,
+        "interp_instructions_per_second": 1700.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 149.0,
+        "read_wall_ms_per_second": 2.16,
+        "outer_interp_calls_per_second": 188.0,
+        "interp_instructions_per_second": 4575.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 20.0,
+        "interp_instructions_per_second": 240.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 31.0,
+        "read_wall_ms_per_second": 1.88,
+        "outer_interp_calls_per_second": 19.0,
+        "interp_instructions_per_second": 234.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 22.0,
+        "read_wall_ms_per_second": 1.91,
+        "outer_interp_calls_per_second": 23.0,
+        "interp_instructions_per_second": 705.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 20.0,
+        "interp_instructions_per_second": 246.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 18.0,
+        "interp_instructions_per_second": 216.0
+      },
+      {
+        "reads_per_second": 3.0,
+        "KiB_per_second": 316.0,
+        "read_wall_ms_per_second": 5.34,
+        "outer_interp_calls_per_second": 76.0,
+        "interp_instructions_per_second": 1786.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 19.0,
+        "interp_instructions_per_second": 228.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 17.0,
+        "interp_instructions_per_second": 207.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 131.0,
+        "read_wall_ms_per_second": 1.63,
+        "outer_interp_calls_per_second": 150.0,
+        "interp_instructions_per_second": 3698.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 41.0,
+        "interp_instructions_per_second": 2234.0
+      },
+      {
+        "reads_per_second": 2.0,
+        "KiB_per_second": 130.0,
+        "read_wall_ms_per_second": 3.19,
+        "outer_interp_calls_per_second": 40.0,
+        "interp_instructions_per_second": 2280.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 41.0,
+        "interp_instructions_per_second": 2234.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 44.0,
+        "interp_instructions_per_second": 3302.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 62.0,
+        "interp_instructions_per_second": 5992.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 16.0,
+        "read_wall_ms_per_second": 1.09,
+        "outer_interp_calls_per_second": 27.0,
+        "interp_instructions_per_second": 1421.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 14.0,
+        "read_wall_ms_per_second": 1.85,
+        "outer_interp_calls_per_second": 56.0,
+        "interp_instructions_per_second": 5103.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 47.0,
+        "interp_instructions_per_second": 3141.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 41.0,
+        "interp_instructions_per_second": 2261.0
+      },
+      {
+        "reads_per_second": 3.0,
+        "KiB_per_second": 150.0,
+        "read_wall_ms_per_second": 5.8,
+        "outer_interp_calls_per_second": 40.0,
+        "interp_instructions_per_second": 2176.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 34.0,
+        "interp_instructions_per_second": 2054.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 36.0,
+        "interp_instructions_per_second": 2039.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 36.0,
+        "interp_instructions_per_second": 2086.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 34.0,
+        "interp_instructions_per_second": 1853.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 40.0,
+        "interp_instructions_per_second": 2180.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 42.0,
+        "interp_instructions_per_second": 2289.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 43.0,
+        "interp_instructions_per_second": 2343.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 43.0,
+        "interp_instructions_per_second": 2343.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 41.0,
+        "interp_instructions_per_second": 2234.0
+      },
+      {
+        "reads_per_second": 3.0,
+        "KiB_per_second": 141.0,
+        "read_wall_ms_per_second": 6.14,
+        "outer_interp_calls_per_second": 33.0,
+        "interp_instructions_per_second": 1582.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 38.0,
+        "interp_instructions_per_second": 3239.0
+      },
+      {
+        "reads_per_second": 2.0,
+        "KiB_per_second": 51.0,
+        "read_wall_ms_per_second": 3.65,
+        "outer_interp_calls_per_second": 19.0,
+        "interp_instructions_per_second": 448.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 19.0,
+        "interp_instructions_per_second": 234.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 14.0,
+        "read_wall_ms_per_second": 1.84,
+        "outer_interp_calls_per_second": 24.0,
+        "interp_instructions_per_second": 792.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 21.0,
+        "interp_instructions_per_second": 258.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 21.0,
+        "interp_instructions_per_second": 252.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 116.0,
+        "read_wall_ms_per_second": 1.95,
+        "outer_interp_calls_per_second": 166.0,
+        "interp_instructions_per_second": 4700.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 34.0,
+        "interp_instructions_per_second": 2267.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 24.0,
+        "read_wall_ms_per_second": 1.86,
+        "outer_interp_calls_per_second": 18.0,
+        "interp_instructions_per_second": 222.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 37.0,
+        "interp_instructions_per_second": 3381.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 23.0,
+        "interp_instructions_per_second": 782.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 22.0,
+        "interp_instructions_per_second": 478.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 32.0,
+        "read_wall_ms_per_second": 2.06,
+        "outer_interp_calls_per_second": 22.0,
+        "interp_instructions_per_second": 260.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 98.0,
+        "read_wall_ms_per_second": 1.76,
+        "outer_interp_calls_per_second": 21.0,
+        "interp_instructions_per_second": 242.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 17.0,
+        "interp_instructions_per_second": 418.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 26.0,
+        "interp_instructions_per_second": 1244.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 23.0,
+        "read_wall_ms_per_second": 2.13,
+        "outer_interp_calls_per_second": 21.0,
+        "interp_instructions_per_second": 893.0
+      },
+      {
+        "reads_per_second": 2.0,
+        "KiB_per_second": 56.0,
+        "read_wall_ms_per_second": 3.99,
+        "outer_interp_calls_per_second": 33.0,
+        "interp_instructions_per_second": 1738.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 23.0,
+        "read_wall_ms_per_second": 1.82,
+        "outer_interp_calls_per_second": 42.0,
+        "interp_instructions_per_second": 2388.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 32.0,
+        "read_wall_ms_per_second": 1.89,
+        "outer_interp_calls_per_second": 49.0,
+        "interp_instructions_per_second": 3474.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 21.0,
+        "read_wall_ms_per_second": 1.98,
+        "outer_interp_calls_per_second": 41.0,
+        "interp_instructions_per_second": 2236.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 22.0,
+        "read_wall_ms_per_second": 1.58,
+        "outer_interp_calls_per_second": 44.0,
+        "interp_instructions_per_second": 2398.0
+      },
+      {
+        "reads_per_second": 2.0,
+        "KiB_per_second": 48.0,
+        "read_wall_ms_per_second": 3.75,
+        "outer_interp_calls_per_second": 38.0,
+        "interp_instructions_per_second": 2071.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 77.0,
+        "interp_instructions_per_second": 7690.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 73.0,
+        "interp_instructions_per_second": 7495.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 73.0,
+        "interp_instructions_per_second": 7522.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 64.0,
+        "interp_instructions_per_second": 6603.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 21.0,
+        "read_wall_ms_per_second": 1.73,
+        "outer_interp_calls_per_second": 75.0,
+        "interp_instructions_per_second": 7681.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 60.0,
+        "interp_instructions_per_second": 6184.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 74.0,
+        "interp_instructions_per_second": 7550.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 73.0,
+        "interp_instructions_per_second": 7424.0
+      },
+      {
+        "reads_per_second": 2.0,
+        "KiB_per_second": 54.0,
+        "read_wall_ms_per_second": 3.49,
+        "outer_interp_calls_per_second": 47.0,
+        "interp_instructions_per_second": 3064.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 13.0,
+        "read_wall_ms_per_second": 1.52,
+        "outer_interp_calls_per_second": 31.0,
+        "interp_instructions_per_second": 1313.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 25.0,
+        "read_wall_ms_per_second": 2.2,
+        "outer_interp_calls_per_second": 19.0,
+        "interp_instructions_per_second": 514.0
+      },
+      {
+        "reads_per_second": 2.0,
+        "KiB_per_second": 155.0,
+        "read_wall_ms_per_second": 4.15,
+        "outer_interp_calls_per_second": 190.0,
+        "interp_instructions_per_second": 4245.0
+      },
+      {
+        "reads_per_second": 1.0,
+        "KiB_per_second": 26.0,
+        "read_wall_ms_per_second": 1.78,
+        "outer_interp_calls_per_second": 29.0,
+        "interp_instructions_per_second": 1202.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 29.0,
+        "interp_instructions_per_second": 1420.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 18.0,
+        "interp_instructions_per_second": 222.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 19.0,
+        "interp_instructions_per_second": 228.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 0.0,
+        "read_wall_ms_per_second": 0.0,
+        "outer_interp_calls_per_second": 39.0,
+        "interp_instructions_per_second": 3405.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 4.0,
+        "read_wall_ms_per_second": 1.05,
+        "outer_interp_calls_per_second": 28.0,
+        "interp_instructions_per_second": 1761.0
+      },
+      {
+        "reads_per_second": 0.0,
+        "KiB_per_second": 15.0,
+        "read_wall_ms_per_second": 1.36,
+        "outer_interp_calls_per_second": 24.0,
+        "interp_instructions_per_second": 1289.0
+      }
+    ],
+    "baseline_renderer_windows": [
+      {
+        "encode_ms_per_frame": 1.76,
+        "batches_per_frame": 1.0,
+        "present_wait_ms_per_frame": 0.0,
+        "present_calls_per_frame": 0.0,
+        "ffp_microseconds_per_draw": 645.0,
+        "ffp_ms_per_frame": 1.29
+      },
+      {
+        "encode_ms_per_frame": 0.46,
+        "batches_per_frame": 1.0,
+        "present_wait_ms_per_frame": 0.6,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 11.6,
+        "ffp_ms_per_frame": 0.02
+      },
+      {
+        "encode_ms_per_frame": 0.4,
+        "batches_per_frame": 1.0,
+        "present_wait_ms_per_frame": 0.59,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 12.1,
+        "ffp_ms_per_frame": 0.02
+      },
+      {
+        "encode_ms_per_frame": 0.31,
+        "batches_per_frame": 1.0,
+        "present_wait_ms_per_frame": 0.41,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 8.8,
+        "ffp_ms_per_frame": 0.02
+      },
+      {
+        "encode_ms_per_frame": 0.77,
+        "batches_per_frame": 1.0,
+        "present_wait_ms_per_frame": 0.91,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 8.2,
+        "ffp_ms_per_frame": 0.06
+      },
+      {
+        "encode_ms_per_frame": 0.85,
+        "batches_per_frame": 1.0,
+        "present_wait_ms_per_frame": 0.94,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 6.8,
+        "ffp_ms_per_frame": 0.06
+      },
+      {
+        "encode_ms_per_frame": 1.57,
+        "batches_per_frame": 1.7,
+        "present_wait_ms_per_frame": 0.86,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 6.9,
+        "ffp_ms_per_frame": 0.12
+      },
+      {
+        "encode_ms_per_frame": 1.29,
+        "batches_per_frame": 1.5,
+        "present_wait_ms_per_frame": 0.86,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 6.6,
+        "ffp_ms_per_frame": 0.11
+      },
+      {
+        "encode_ms_per_frame": 1.13,
+        "batches_per_frame": 1.4,
+        "present_wait_ms_per_frame": 0.87,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 6.7,
+        "ffp_ms_per_frame": 0.09
+      },
+      {
+        "encode_ms_per_frame": 0.52,
+        "batches_per_frame": 1.0,
+        "present_wait_ms_per_frame": 0.64,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 5.6,
+        "ffp_ms_per_frame": 0.04
+      },
+      {
+        "encode_ms_per_frame": 0.51,
+        "batches_per_frame": 1.2,
+        "present_wait_ms_per_frame": 0.55,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 5.8,
+        "ffp_ms_per_frame": 0.04
+      },
+      {
+        "encode_ms_per_frame": 10.87,
+        "batches_per_frame": 18.8,
+        "present_wait_ms_per_frame": 1.46,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 4.2,
+        "ffp_ms_per_frame": 2.68
+      },
+      {
+        "encode_ms_per_frame": 15.47,
+        "batches_per_frame": 26.3,
+        "present_wait_ms_per_frame": 1.82,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 3.9,
+        "ffp_ms_per_frame": 3.8
+      },
+      {
+        "encode_ms_per_frame": 12.68,
+        "batches_per_frame": 19.8,
+        "present_wait_ms_per_frame": 1.45,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 3.6,
+        "ffp_ms_per_frame": 2.73
+      },
+      {
+        "encode_ms_per_frame": 15.51,
+        "batches_per_frame": 22.4,
+        "present_wait_ms_per_frame": 1.61,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 3.9,
+        "ffp_ms_per_frame": 3.39
+      },
+      {
+        "encode_ms_per_frame": 14.8,
+        "batches_per_frame": 23.6,
+        "present_wait_ms_per_frame": 1.6,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 3.7,
+        "ffp_ms_per_frame": 3.37
+      },
+      {
+        "encode_ms_per_frame": 14.13,
+        "batches_per_frame": 23.9,
+        "present_wait_ms_per_frame": 1.4,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 3.5,
+        "ffp_ms_per_frame": 3.2
+      },
+      {
+        "encode_ms_per_frame": 15.97,
+        "batches_per_frame": 25.1,
+        "present_wait_ms_per_frame": 1.77,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 4.0,
+        "ffp_ms_per_frame": 3.95
+      },
+      {
+        "encode_ms_per_frame": 13.99,
+        "batches_per_frame": 25.1,
+        "present_wait_ms_per_frame": 1.24,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 3.5,
+        "ffp_ms_per_frame": 3.49
+      },
+      {
+        "encode_ms_per_frame": 13.73,
+        "batches_per_frame": 23.7,
+        "present_wait_ms_per_frame": 1.27,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 3.4,
+        "ffp_ms_per_frame": 3.18
+      },
+      {
+        "encode_ms_per_frame": 14.91,
+        "batches_per_frame": 22.9,
+        "present_wait_ms_per_frame": 1.81,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 3.7,
+        "ffp_ms_per_frame": 3.38
+      },
+      {
+        "encode_ms_per_frame": 13.97,
+        "batches_per_frame": 22.0,
+        "present_wait_ms_per_frame": 1.63,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 3.5,
+        "ffp_ms_per_frame": 3.05
+      },
+      {
+        "encode_ms_per_frame": 15.21,
+        "batches_per_frame": 23.0,
+        "present_wait_ms_per_frame": 1.53,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 3.9,
+        "ffp_ms_per_frame": 3.55
+      },
+      {
+        "encode_ms_per_frame": 14.16,
+        "batches_per_frame": 22.0,
+        "present_wait_ms_per_frame": 1.24,
+        "present_calls_per_frame": 1.0,
+        "ffp_microseconds_per_draw": 3.7,
+        "ffp_ms_per_frame": 3.15
+      }
+    ],
+    "candidate_delivery": {
+      "verified_at_utc": "2026-10-23T03:30:13.127922+00:00",
+      "http_headers": {
+        "Server": "SimpleHTTP/0.6 Python/3.11.9",
+        "Date": "Fri, 23 Oct 2026 03:30:12 GMT",
+        "Content-type": "text/html",
+        "Content-Length": "8586",
+        "Last-Modified": "Fri, 23 Oct 2026 03:30:11 GMT",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Embedder-Policy": "require-corp",
+        "Cache-Control": "no-store"
+      },
+      "files": [
+        {
+          "name": "GTASASingleplayer.js",
+          "sha256": "dda6a1b0f415349c474515f978fc763020b7932033dee0187f3494209ea55238",
+          "bytes": 471619,
+          "content_type": "application/javascript",
+          "source_site_http_identical": true
+        },
+        {
+          "name": "GTASASingleplayer.wasm",
+          "sha256": "1922c93bebee518a72e8d771a85bb56c19f954ff556f4752416f4f25ec8d4735",
+          "bytes": 266183103,
+          "content_type": "application/wasm",
+          "source_site_http_identical": true
+        },
+        {
+          "name": "GTASASingleplayer.data",
+          "sha256": "63b5a7056570aa52e13bd93c067dbe279874e8cbf97ff5c6c2b0cc72df68605d",
+          "bytes": 35073821,
+          "content_type": "application/octet-stream",
+          "source_site_http_identical": true
+        }
+      ],
+      "browser_preparation": {
+        "state": "finished",
+        "pid": 3976,
+        "playable_verified": false,
+        "before": {
+          "functions": 212987,
+          "maximum_locals": 2929,
+          "excessive_locals": []
+        },
+        "after": {
+          "functions": 212987,
+          "maximum_locals": 2929,
+          "excessive_locals": []
+        },
+        "v8_compile_passed": true,
+        "exit_code": 0,
+        "bytes": 266183103,
+        "seconds": 3.2712624073028564
+      },
+      "import_count": 332,
+      "invoke_imports": [],
+      "browser_gameplay_retested": false
+    },
+    "candidate_env": "RECOMP_D3D9_BATCH_UPLOADS=1",
+    "candidate_default": false,
+    "gpu_order_and_visual_equivalence_verified": false,
+    "controlled_fps_gain_verified": false,
+    "tests": {
+      "interpreter_checks": 446,
+      "interpreter_counter_checks": 7,
+      "fixed_function_checks": 180,
+      "python_tests": 13
+    },
+    "limits": [
+      "ReadFile timing excludes open/seek and native codec I/O.",
+      "Encoder, Present wait and GPU completion intervals can overlap.",
+      "300-frame report windows can contain loading or time outside foreground focus; no controlled FPS comparison is claimed."
+    ],
+    "private_evidence": "build/batch-uploads-20261022",
+    "observed_batch_world_reports": [
+      {
+        "frame": 2701.0,
+        "reported_fps": 16.5,
+        "draws_per_frame": 123.0,
+        "logical_ring_writes_per_frame": 134.0,
+        "submits_per_frame": 21.77,
+        "actual_ring_upload_calls_per_frame": 30.0,
+        "encode_ms_per_frame": 4.12,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 77.61194029850746
+      },
+      {
+        "frame": 3001.0,
+        "reported_fps": 16.2,
+        "draws_per_frame": 788.0,
+        "logical_ring_writes_per_frame": 835.5,
+        "submits_per_frame": 95.45,
+        "actual_ring_upload_calls_per_frame": 128.0,
+        "encode_ms_per_frame": 14.64,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 84.67983243566727
+      },
+      {
+        "frame": 3301.0,
+        "reported_fps": 16.9,
+        "draws_per_frame": 909.0,
+        "logical_ring_writes_per_frame": 955.7,
+        "submits_per_frame": 109.21,
+        "actual_ring_upload_calls_per_frame": 140.4,
+        "encode_ms_per_frame": 14.74,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 85.30919744689756
+      },
+      {
+        "frame": 3601.0,
+        "reported_fps": 5.8,
+        "draws_per_frame": 693.0,
+        "logical_ring_writes_per_frame": 722.2,
+        "submits_per_frame": 75.24,
+        "actual_ring_upload_calls_per_frame": 94.1,
+        "encode_ms_per_frame": 12.5,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 86.9703683190252
+      },
+      {
+        "frame": 3901.0,
+        "reported_fps": 18.2,
+        "draws_per_frame": 1062.0,
+        "logical_ring_writes_per_frame": 1102.0,
+        "submits_per_frame": 96.54,
+        "actual_ring_upload_calls_per_frame": 121.2,
+        "encode_ms_per_frame": 14.74,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 89.00181488203268
+      },
+      {
+        "frame": 4201.0,
+        "reported_fps": 19.6,
+        "draws_per_frame": 1015.0,
+        "logical_ring_writes_per_frame": 1054.7,
+        "submits_per_frame": 95.08,
+        "actual_ring_upload_calls_per_frame": 119.7,
+        "encode_ms_per_frame": 13.53,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 88.65080117568978
+      },
+      {
+        "frame": 4501.0,
+        "reported_fps": 17.3,
+        "draws_per_frame": 1060.0,
+        "logical_ring_writes_per_frame": 1102.2,
+        "submits_per_frame": 100.56,
+        "actual_ring_upload_calls_per_frame": 126.6,
+        "encode_ms_per_frame": 15.23,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 88.51388132825258
+      },
+      {
+        "frame": 4801.0,
+        "reported_fps": 18.1,
+        "draws_per_frame": 1106.0,
+        "logical_ring_writes_per_frame": 1148.7,
+        "submits_per_frame": 103.76,
+        "actual_ring_upload_calls_per_frame": 130.8,
+        "encode_ms_per_frame": 14.84,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 88.61321493862627
+      },
+      {
+        "frame": 5101.0,
+        "reported_fps": 18.1,
+        "draws_per_frame": 1084.0,
+        "logical_ring_writes_per_frame": 1128.0,
+        "submits_per_frame": 99.42,
+        "actual_ring_upload_calls_per_frame": 127.4,
+        "encode_ms_per_frame": 15.08,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 88.70567375886525
+      },
+      {
+        "frame": 5401.0,
+        "reported_fps": 18.8,
+        "draws_per_frame": 1048.0,
+        "logical_ring_writes_per_frame": 1094.4,
+        "submits_per_frame": 101.2,
+        "actual_ring_upload_calls_per_frame": 131.9,
+        "encode_ms_per_frame": 15.01,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 87.94773391812866
+      },
+      {
+        "frame": 5701.0,
+        "reported_fps": 18.5,
+        "draws_per_frame": 1059.0,
+        "logical_ring_writes_per_frame": 1102.8,
+        "submits_per_frame": 97.28,
+        "actual_ring_upload_calls_per_frame": 125.1,
+        "encode_ms_per_frame": 13.93,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 88.65614798694233
+      },
+      {
+        "frame": 6001.0,
+        "reported_fps": 19.8,
+        "draws_per_frame": 1087.0,
+        "logical_ring_writes_per_frame": 1131.9,
+        "submits_per_frame": 94.39,
+        "actual_ring_upload_calls_per_frame": 122.9,
+        "encode_ms_per_frame": 13.24,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 89.14215036664017
+      },
+      {
+        "frame": 6301.0,
+        "reported_fps": 20.4,
+        "draws_per_frame": 973.0,
+        "logical_ring_writes_per_frame": 1014.3,
+        "submits_per_frame": 90.59,
+        "actual_ring_upload_calls_per_frame": 115.6,
+        "encode_ms_per_frame": 13.32,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 88.6029774228532
+      },
+      {
+        "frame": 6601.0,
+        "reported_fps": 20.9,
+        "draws_per_frame": 976.0,
+        "logical_ring_writes_per_frame": 1016.6,
+        "submits_per_frame": 90.66,
+        "actual_ring_upload_calls_per_frame": 115.4,
+        "encode_ms_per_frame": 13.02,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 88.64843596301397
+      },
+      {
+        "frame": 6901.0,
+        "reported_fps": 21.2,
+        "draws_per_frame": 1031.0,
+        "logical_ring_writes_per_frame": 1074.7,
+        "submits_per_frame": 93.22,
+        "actual_ring_upload_calls_per_frame": 121.2,
+        "encode_ms_per_frame": 13.5,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 88.7224341676747
+      },
+      {
+        "frame": 7201.0,
+        "reported_fps": 19.6,
+        "draws_per_frame": 1054.0,
+        "logical_ring_writes_per_frame": 1099.2,
+        "submits_per_frame": 94.84,
+        "actual_ring_upload_calls_per_frame": 124.4,
+        "encode_ms_per_frame": 14.35,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 88.68267831149927
+      },
+      {
+        "frame": 7501.0,
+        "reported_fps": 18.3,
+        "draws_per_frame": 1015.0,
+        "logical_ring_writes_per_frame": 1060.2,
+        "submits_per_frame": 95.42,
+        "actual_ring_upload_calls_per_frame": 124.3,
+        "encode_ms_per_frame": 15.23,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 88.27579701943029
+      },
+      {
+        "frame": 7801.0,
+        "reported_fps": 19.8,
+        "draws_per_frame": 899.0,
+        "logical_ring_writes_per_frame": 940.6,
+        "submits_per_frame": 94.26,
+        "actual_ring_upload_calls_per_frame": 120.0,
+        "encode_ms_per_frame": 13.17,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 87.24218583882629
+      },
+      {
+        "frame": 8101.0,
+        "reported_fps": 18.9,
+        "draws_per_frame": 949.0,
+        "logical_ring_writes_per_frame": 992.0,
+        "submits_per_frame": 95.88,
+        "actual_ring_upload_calls_per_frame": 122.6,
+        "encode_ms_per_frame": 13.96,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 87.64112903225806
+      },
+      {
+        "frame": 8401.0,
+        "reported_fps": 20.8,
+        "draws_per_frame": 938.0,
+        "logical_ring_writes_per_frame": 981.2,
+        "submits_per_frame": 93.15,
+        "actual_ring_upload_calls_per_frame": 120.3,
+        "encode_ms_per_frame": 13.04,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 87.73950264981654
+      },
+      {
+        "frame": 8701.0,
+        "reported_fps": 20.8,
+        "draws_per_frame": 914.0,
+        "logical_ring_writes_per_frame": 954.9,
+        "submits_per_frame": 92.98,
+        "actual_ring_upload_calls_per_frame": 118.0,
+        "encode_ms_per_frame": 12.55,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 87.64268509791602
+      },
+      {
+        "frame": 9001.0,
+        "reported_fps": 18.7,
+        "draws_per_frame": 895.0,
+        "logical_ring_writes_per_frame": 934.7,
+        "submits_per_frame": 97.38,
+        "actual_ring_upload_calls_per_frame": 121.0,
+        "encode_ms_per_frame": 13.2,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 87.05466994757676
+      },
+      {
+        "frame": 9301.0,
+        "reported_fps": 18.7,
+        "draws_per_frame": 898.0,
+        "logical_ring_writes_per_frame": 936.5,
+        "submits_per_frame": 94.78,
+        "actual_ring_upload_calls_per_frame": 117.9,
+        "encode_ms_per_frame": 13.51,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 87.41057127602775
+      },
+      {
+        "frame": 9601.0,
+        "reported_fps": 21.4,
+        "draws_per_frame": 886.0,
+        "logical_ring_writes_per_frame": 924.5,
+        "submits_per_frame": 87.71,
+        "actual_ring_upload_calls_per_frame": 110.5,
+        "encode_ms_per_frame": 12.4,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 88.04759329367225
+      },
+      {
+        "frame": 9901.0,
+        "reported_fps": 19.0,
+        "draws_per_frame": 934.0,
+        "logical_ring_writes_per_frame": 974.9,
+        "submits_per_frame": 91.3,
+        "actual_ring_upload_calls_per_frame": 116.6,
+        "encode_ms_per_frame": 14.15,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 88.03979895373885
+      },
+      {
+        "frame": 10201.0,
+        "reported_fps": 20.6,
+        "draws_per_frame": 914.0,
+        "logical_ring_writes_per_frame": 954.6,
+        "submits_per_frame": 92.51,
+        "actual_ring_upload_calls_per_frame": 118.1,
+        "encode_ms_per_frame": 13.46,
+        "api_upload_calls_reduction_vs_immediate_same_allocations_percent": 87.62832600041902
+      }
+    ],
+    "user_reports_no_new_graphical_defects": true,
+    "pixel_equivalence_measured": false,
+    "api_call_reduction_observed": true,
+    "original_frame_limiter_check": {
+      "state": "menu_setting_off_verified_by_user_screenshot",
+      "qpc_import_verified": "008580c8",
+      "frame_gate_verified": "00748d81",
+      "fps_limit_address": "00c1704c",
+      "menu_flag_address": "00ba6794",
+      "constant_00858c4c": 1000.0,
+      "scope": "Read-only disassembly of the verified original PE. No clock scaling or executable patch applied; menu setting requested from user.",
+      "menu_setting": "Limitar cuadros p. segundo: NO",
+      "screenshot_new_fps": 44.0,
+      "gameplay_comparison_pending": true,
+      "guest_flag_memory_read": false,
+      "followup_gameplay_observation": {
+        "served_wasm_sha256": "1922c93bebee518a72e8d771a85bb56c19f954ff556f4752416f4f25ec8d4735",
+        "loaded_browser_hash_measured": false,
+        "original_executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+        "evidence": "User screenshot, CJ on BMX in an urban street; not the earlier alley camera.",
+        "new_fps": 22.5,
+        "display_submissions_hz": 115.5,
+        "frame_median_ms": 41.4,
+        "frame_p95_ms": 60.8,
+        "gpu_completion_ms": 6.0,
+        "menu_frame_limiter_off_previously_visible": true,
+        "controlled_fps_gain_verified": false,
+        "subsequent_log_stop": "RuntimeError: unreachable through recomp_unknown_call; LOG=0 omitted the target address. Requires diagnostic replay.",
+        "next_measurement": "Same flags with RECOMP_LOG=1, RECOMP_PROFILE=1, RECOMP_PROFILE_INTERVAL_MS=5000; capture caller samples and any strict unknown target. Profiling overhead means this is not an FPS benchmark."
+      }
+    }
+  },
+  "read_path_cache_experiment_2026_10_22": {
+    "original_executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "baseline_served_wasm_sha256": "1922c93bebee518a72e8d771a85bb56c19f954ff556f4752416f4f25ec8d4735",
+    "candidate_served_wasm_sha256": "55838ff08ef441052dd60f2dcc1f677549273b9d567969128941639d983756ab",
+    "candidate_wasm_bytes": 266198190,
+    "loaded_browser_hash_measured": false,
+    "baseline_screenshot_new_fps": 18.5,
+    "baseline_top_caller_open_samples": 772,
+    "baseline_total_samples_selected_windows": 4554,
+    "baseline_open_caller_wall_sample_percent": 16.952129995608257,
+    "scope": "Published caller sampling includes shims and host waits, not exclusive CPU. Cache only paths, not contents, handles, metadata or failed results. Cache opt-in; mutations/root/overlay invalidation clears it. Existing host open validates every handle.",
+    "tests": {
+      "path_cache_checks": 68,
+      "startup_checks": 403,
+      "failures": 0,
+      "v8_full_compile": true,
+      "source_site_http_identical": true
+    },
+    "browser_candidate_gameplay_retested": true,
+    "controlled_fps_gain_verified": false,
+    "prior_unknown_call_reproduced_in_diagnostic_run": false,
+    "candidate_browser_observation": {
+      "user_report": "Feels a little smoother",
+      "screenshot_new_fps": 29.0,
+      "screenshot_frame_median_ms": 37.4,
+      "screenshot_frame_p95_ms": 54.1,
+      "screenshot_gpu_completion_ms": 4.7,
+      "same_camera_as_baseline": false,
+      "controlled_fps_gain_verified": false,
+      "loaded_browser_hash_measured": false,
+      "warm_windows_count": 52,
+      "warm_open_wall_ms_per_second_median": 1.065,
+      "example_window": {
+        "opens_per_second": 28.0,
+        "open_wall_ms_per_second": 0.66,
+        "path_hits_per_second": 28.0,
+        "path_misses_per_second": 0.0
+      },
+      "all_file_open_windows": [
+        {
+          "opens_per_second": 2.0,
+          "open_wall_ms_per_second": 14.72,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 5.0
+        },
+        {
+          "opens_per_second": 1.0,
+          "open_wall_ms_per_second": 6.53,
+          "path_hits_per_second": 2.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 4.0,
+          "open_wall_ms_per_second": 41.57,
+          "path_hits_per_second": 6.0,
+          "path_misses_per_second": 4.0
+        },
+        {
+          "opens_per_second": 18.0,
+          "open_wall_ms_per_second": 305.56,
+          "path_hits_per_second": 19.0,
+          "path_misses_per_second": 19.0
+        },
+        {
+          "opens_per_second": 8.0,
+          "open_wall_ms_per_second": 91.82,
+          "path_hits_per_second": 3.0,
+          "path_misses_per_second": 6.0
+        },
+        {
+          "opens_per_second": 7.0,
+          "open_wall_ms_per_second": 95.9,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 15.0
+        },
+        {
+          "opens_per_second": 15.0,
+          "open_wall_ms_per_second": 198.56,
+          "path_hits_per_second": 1.0,
+          "path_misses_per_second": 20.0
+        },
+        {
+          "opens_per_second": 8.0,
+          "open_wall_ms_per_second": 241.67,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 8.0
+        },
+        {
+          "opens_per_second": 13.0,
+          "open_wall_ms_per_second": 360.48,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 13.0
+        },
+        {
+          "opens_per_second": 12.0,
+          "open_wall_ms_per_second": 338.39,
+          "path_hits_per_second": 1.0,
+          "path_misses_per_second": 12.0
+        },
+        {
+          "opens_per_second": 2.0,
+          "open_wall_ms_per_second": 0.05,
+          "path_hits_per_second": 2.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 9.0,
+          "open_wall_ms_per_second": 232.5,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 9.0
+        },
+        {
+          "opens_per_second": 14.0,
+          "open_wall_ms_per_second": 309.61,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 14.0
+        },
+        {
+          "opens_per_second": 7.0,
+          "open_wall_ms_per_second": 148.57,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 7.0
+        },
+        {
+          "opens_per_second": 10.0,
+          "open_wall_ms_per_second": 155.58,
+          "path_hits_per_second": 7.0,
+          "path_misses_per_second": 10.0
+        },
+        {
+          "opens_per_second": 7.0,
+          "open_wall_ms_per_second": 23.34,
+          "path_hits_per_second": 4.0,
+          "path_misses_per_second": 2.0
+        },
+        {
+          "opens_per_second": 44.0,
+          "open_wall_ms_per_second": 26.46,
+          "path_hits_per_second": 43.0,
+          "path_misses_per_second": 2.0
+        },
+        {
+          "opens_per_second": 33.0,
+          "open_wall_ms_per_second": 104.8,
+          "path_hits_per_second": 33.0,
+          "path_misses_per_second": 1.0
+        },
+        {
+          "opens_per_second": 30.0,
+          "open_wall_ms_per_second": 11.22,
+          "path_hits_per_second": 29.0,
+          "path_misses_per_second": 1.0
+        },
+        {
+          "opens_per_second": 16.0,
+          "open_wall_ms_per_second": 1.58,
+          "path_hits_per_second": 16.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 45.0,
+          "open_wall_ms_per_second": 1.5,
+          "path_hits_per_second": 45.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 46.0,
+          "open_wall_ms_per_second": 1.57,
+          "path_hits_per_second": 46.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 15.0,
+          "open_wall_ms_per_second": 0.6,
+          "path_hits_per_second": 15.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 19.0,
+          "open_wall_ms_per_second": 0.67,
+          "path_hits_per_second": 19.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 19.0,
+          "open_wall_ms_per_second": 0.69,
+          "path_hits_per_second": 19.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 47.0,
+          "open_wall_ms_per_second": 103.47,
+          "path_hits_per_second": 42.0,
+          "path_misses_per_second": 5.0
+        },
+        {
+          "opens_per_second": 70.0,
+          "open_wall_ms_per_second": 2.69,
+          "path_hits_per_second": 70.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 51.0,
+          "open_wall_ms_per_second": 1.85,
+          "path_hits_per_second": 51.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 74.0,
+          "open_wall_ms_per_second": 2.2,
+          "path_hits_per_second": 74.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 86.0,
+          "open_wall_ms_per_second": 2.24,
+          "path_hits_per_second": 86.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 88.0,
+          "open_wall_ms_per_second": 2.2,
+          "path_hits_per_second": 88.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 86.0,
+          "open_wall_ms_per_second": 2.47,
+          "path_hits_per_second": 86.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 77.0,
+          "open_wall_ms_per_second": 2.3,
+          "path_hits_per_second": 77.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 56.0,
+          "open_wall_ms_per_second": 1.85,
+          "path_hits_per_second": 56.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 73.0,
+          "open_wall_ms_per_second": 1.87,
+          "path_hits_per_second": 73.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 73.0,
+          "open_wall_ms_per_second": 1.69,
+          "path_hits_per_second": 73.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 76.0,
+          "open_wall_ms_per_second": 1.71,
+          "path_hits_per_second": 76.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 71.0,
+          "open_wall_ms_per_second": 1.72,
+          "path_hits_per_second": 71.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 71.0,
+          "open_wall_ms_per_second": 1.87,
+          "path_hits_per_second": 71.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 75.0,
+          "open_wall_ms_per_second": 1.77,
+          "path_hits_per_second": 75.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 65.0,
+          "open_wall_ms_per_second": 12.92,
+          "path_hits_per_second": 64.0,
+          "path_misses_per_second": 1.0
+        },
+        {
+          "opens_per_second": 51.0,
+          "open_wall_ms_per_second": 1.46,
+          "path_hits_per_second": 51.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 72.0,
+          "open_wall_ms_per_second": 1.7,
+          "path_hits_per_second": 72.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 61.0,
+          "open_wall_ms_per_second": 9.19,
+          "path_hits_per_second": 60.0,
+          "path_misses_per_second": 1.0
+        },
+        {
+          "opens_per_second": 25.0,
+          "open_wall_ms_per_second": 0.74,
+          "path_hits_per_second": 25.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 22.0,
+          "open_wall_ms_per_second": 0.62,
+          "path_hits_per_second": 22.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 23.0,
+          "open_wall_ms_per_second": 0.63,
+          "path_hits_per_second": 23.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 30.0,
+          "open_wall_ms_per_second": 68.91,
+          "path_hits_per_second": 26.0,
+          "path_misses_per_second": 6.0
+        },
+        {
+          "opens_per_second": 85.0,
+          "open_wall_ms_per_second": 2.02,
+          "path_hits_per_second": 85.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 84.0,
+          "open_wall_ms_per_second": 2.08,
+          "path_hits_per_second": 84.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 87.0,
+          "open_wall_ms_per_second": 2.08,
+          "path_hits_per_second": 87.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 78.0,
+          "open_wall_ms_per_second": 1.99,
+          "path_hits_per_second": 78.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 56.0,
+          "open_wall_ms_per_second": 1.35,
+          "path_hits_per_second": 56.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 62.0,
+          "open_wall_ms_per_second": 1.48,
+          "path_hits_per_second": 62.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 69.0,
+          "open_wall_ms_per_second": 1.73,
+          "path_hits_per_second": 69.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 71.0,
+          "open_wall_ms_per_second": 19.23,
+          "path_hits_per_second": 69.0,
+          "path_misses_per_second": 3.0
+        },
+        {
+          "opens_per_second": 20.0,
+          "open_wall_ms_per_second": 0.54,
+          "path_hits_per_second": 20.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 16.0,
+          "open_wall_ms_per_second": 0.45,
+          "path_hits_per_second": 16.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 22.0,
+          "open_wall_ms_per_second": 0.51,
+          "path_hits_per_second": 22.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 24.0,
+          "open_wall_ms_per_second": 0.56,
+          "path_hits_per_second": 24.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 24.0,
+          "open_wall_ms_per_second": 0.6,
+          "path_hits_per_second": 24.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 22.0,
+          "open_wall_ms_per_second": 0.55,
+          "path_hits_per_second": 22.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 25.0,
+          "open_wall_ms_per_second": 0.63,
+          "path_hits_per_second": 25.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 25.0,
+          "open_wall_ms_per_second": 0.61,
+          "path_hits_per_second": 25.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 28.0,
+          "open_wall_ms_per_second": 0.66,
+          "path_hits_per_second": 28.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 27.0,
+          "open_wall_ms_per_second": 0.78,
+          "path_hits_per_second": 27.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 26.0,
+          "open_wall_ms_per_second": 0.62,
+          "path_hits_per_second": 26.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 27.0,
+          "open_wall_ms_per_second": 0.65,
+          "path_hits_per_second": 27.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 22.0,
+          "open_wall_ms_per_second": 0.53,
+          "path_hits_per_second": 22.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 20.0,
+          "open_wall_ms_per_second": 0.52,
+          "path_hits_per_second": 20.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 25.0,
+          "open_wall_ms_per_second": 0.66,
+          "path_hits_per_second": 25.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 25.0,
+          "open_wall_ms_per_second": 0.63,
+          "path_hits_per_second": 25.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 24.0,
+          "open_wall_ms_per_second": 0.68,
+          "path_hits_per_second": 24.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 24.0,
+          "open_wall_ms_per_second": 0.62,
+          "path_hits_per_second": 24.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 28.0,
+          "open_wall_ms_per_second": 0.66,
+          "path_hits_per_second": 28.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 7.0,
+          "open_wall_ms_per_second": 0.17,
+          "path_hits_per_second": 7.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 21.0,
+          "open_wall_ms_per_second": 85.2,
+          "path_hits_per_second": 16.0,
+          "path_misses_per_second": 5.0
+        },
+        {
+          "opens_per_second": 0.0,
+          "open_wall_ms_per_second": 0.0,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 0.0,
+          "open_wall_ms_per_second": 0.0,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 0.0,
+          "open_wall_ms_per_second": 0.0,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 0.0,
+          "open_wall_ms_per_second": 0.0,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 0.0,
+          "open_wall_ms_per_second": 0.0,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 0.0,
+          "open_wall_ms_per_second": 0.0,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 0.0,
+          "open_wall_ms_per_second": 0.0,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 0.0,
+          "open_wall_ms_per_second": 0.0,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 0.0,
+          "open_wall_ms_per_second": 0.0,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 0.0,
+          "open_wall_ms_per_second": 0.0,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 0.0,
+          "open_wall_ms_per_second": 0.0,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 0.0,
+          "open_wall_ms_per_second": 0.0,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 0.0,
+          "open_wall_ms_per_second": 0.0,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 0.0,
+          "open_wall_ms_per_second": 0.0,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 0.0,
+          "open_wall_ms_per_second": 0.0,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 0.0,
+          "open_wall_ms_per_second": 0.0,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 0.0,
+          "open_wall_ms_per_second": 0.0,
+          "path_hits_per_second": 0.0,
+          "path_misses_per_second": 0.0
+        },
+        {
+          "opens_per_second": 27.0,
+          "open_wall_ms_per_second": 0.73,
+          "path_hits_per_second": 27.0,
+          "path_misses_per_second": 0.0
+        }
+      ],
+      "scope": "User gameplay screenshot and live counters verify the opt-in path. New names can still miss and cost time; no general bound on all file I/O. Profiling/logging were active. Next compare diagnostics-off gameplay."
+    }
+  },
+  "buffer_renaming_experiment_2026_10_22": {
+    "requested_minimum_gameplay_fps": 60,
+    "minimum_fps_verified": false,
+    "original_executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "baseline_served_wasm_sha256": "55838ff08ef441052dd60f2dcc1f677549273b9d567969128941639d983756ab",
+    "candidate_served_wasm_sha256": "483ed423995b0794caf7800c1ff98ee3b17144f77ba11000179317098b5239eb",
+    "candidate_wasm_bytes": 266199893,
+    "loaded_browser_hash_measured": false,
+    "browser_gameplay_retested": true,
+    "controlled_fps_gain_verified": false,
+    "gpu_pixel_equivalence_measured": false,
+    "changes": [
+      "Opt-in D3D9_RENAME_BUFFERS uses immutable ring snapshots for rewritten buffers up to 256 KiB; 4 MiB per encoder budget; queue-ordered restore after submission; original barriers for larger updates. Vertex/index offsets and bounds retained.",
+      "Opt-in D3D9_PERSIST_GROUP_CACHE retains bindings across Present; implies frame cache, keeps 4096 cap and invalidates before texture-view retirement.",
+      "Empty SEH dispatch returns before querying callback TLS depth; existing nonempty paths retained.",
+      "D3D9_STATS=0 now disables reports rather than enabling them by variable presence."
+    ],
+    "tests": {
+      "seh_empty_dispatch_checks": 8,
+      "seh_empty_dispatch_failures": 0,
+      "seh_full_suite_passed": false,
+      "seh_full_attempt_note": "An attempted broad run with the current resumable variant failed four delay-load assertions and then overflowed its host stack. Full-suite success is not claimed. The focused mode checks empty state and later live-frame adoption.",
+      "v8_full_compile": true,
+      "source_site_http_identical": true,
+      "imports": 332,
+      "invoke_imports": []
+    },
+    "pending": [
+      "Foreground gameplay with renaming/persistent cache enabled; same scene/camera as control.",
+      "Measure submits, new groups, encoding time and callback-depth queries; inspect vertex/index rendering.",
+      "60 FPS gameplay target remains unverified."
+    ],
+    "browser_observation": {
+      "screenshot_new_fps": 22.5,
+      "frame_median_ms": 39.8,
+      "frame_p95_ms": 55.3,
+      "gpu_completion_ms": 6.4,
+      "same_camera_as_control": false,
+      "world_renderer_windows": [
+        {
+          "frame": 3601,
+          "reported_fps": 22.9,
+          "draws_per_frame": 732.0,
+          "new_groups_per_frame": 29.45,
+          "submits_per_frame": 3.39,
+          "ring_uploads_per_frame": 6.7,
+          "buffer_renames_per_frame": 52.4,
+          "buffer_barriers_per_frame": 2.4
+        },
+        {
+          "frame": 3901,
+          "reported_fps": 24.6,
+          "draws_per_frame": 638.0,
+          "new_groups_per_frame": 7.57,
+          "submits_per_frame": 3.64,
+          "ring_uploads_per_frame": 7.2,
+          "buffer_renames_per_frame": 56.4,
+          "buffer_barriers_per_frame": 2.6
+        },
+        {
+          "frame": 4201,
+          "reported_fps": 17.9,
+          "draws_per_frame": 369.0,
+          "new_groups_per_frame": 12.09,
+          "submits_per_frame": 3.02,
+          "ring_uploads_per_frame": 6.0,
+          "buffer_renames_per_frame": 51.7,
+          "buffer_barriers_per_frame": 2.0
+        },
+        {
+          "frame": 4501,
+          "reported_fps": 23.8,
+          "draws_per_frame": 453.0,
+          "new_groups_per_frame": 38.16,
+          "submits_per_frame": 3.01,
+          "ring_uploads_per_frame": 6.0,
+          "buffer_renames_per_frame": 50.8,
+          "buffer_barriers_per_frame": 2.0
+        },
+        {
+          "frame": 4801,
+          "reported_fps": 25.1,
+          "draws_per_frame": 339.0,
+          "new_groups_per_frame": 13.81,
+          "submits_per_frame": 3.12,
+          "ring_uploads_per_frame": 6.1,
+          "buffer_renames_per_frame": 52.4,
+          "buffer_barriers_per_frame": 2.1
+        }
+      ],
+      "example_callback_depth_queries_per_second": 12706,
+      "same_window_seh_resume_calls_per_second": 701984,
+      "scope": "Counters verify activity, not controlled FPS gain or pixel equivalence. User screenshot still below 60 FPS."
+    }
+  },
+  "frame_gate_observation_2026_10_22": {
+    "requested_minimum_fps": 60,
+    "minimum_fps_verified": false,
+    "original_executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "baseline_served_wasm_sha256": "483ed423995b0794caf7800c1ff98ee3b17144f77ba11000179317098b5239eb",
+    "candidate_served_wasm_sha256": "044083ea544b8a014dfa2d706d8d42968c0a220a757610883b7b282c9ec98be0",
+    "candidate_bytes": 266202717,
+    "loaded_browser_hash_measured": false,
+    "candidate_browser_watch_observation_pending": false,
+    "purpose": "Read-only observations of the original frame gate; no clock scaling, executable write or frame limiter bypass.",
+    "watch_fields": {
+      "BA6794:1": "menu limiter flag",
+      "A43088:1": "replay mode",
+      "C1704C:4": "frame limit",
+      "B6BD38:4": "beat count observed by original IsBeatInfoPresent after GetBeatInfo"
+    },
+    "primary_reference": "https://github.com/gta-reversed/gta-reversed/blob/master/source/app/platform/win/WinMain.cpp",
+    "local_evidence": "Original verified PE: main-loop branch 00748d62 through 00748d96; IsBeatInfoPresent 005071d0 reads ECX+8+A0 after calling 004d8fa0.",
+    "tests": {
+      "watch_checks": 21,
+      "path_cache_checks": 68,
+      "startup_checks": 403,
+      "failures": 0,
+      "v8_full_compile": true,
+      "http_delivery_identical": true
+    },
+    "watch_observation": {
+      "phase": "Light frontend/loading workload; no CJ gameplay observation established",
+      "menu_limiter": 0,
+      "replay_mode": 0,
+      "frame_limit": 30,
+      "beat_count": 0,
+      "gameplay_gate_cause_established": false,
+      "subsequent_error": "WebGPU CreateCommittedResource / CreateTexture out-of-memory; invalid texture/view/command buffer messages followed.",
+      "source_log": "Private baseline-oom.log"
+    }
+  },
+  "texture_retirement_2026_10_22": {
+    "requested_minimum_gameplay_fps": 60,
+    "minimum_fps_verified": false,
+    "original_executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "baseline_served_wasm_sha256": "044083ea544b8a014dfa2d706d8d42968c0a220a757610883b7b282c9ec98be0",
+    "candidate_served_wasm_sha256": "f0fc5978a330d36846879f7d8996409662cab43210c43e1a9678ed036a44a49f",
+    "candidate_bytes": 266204169,
+    "loaded_browser_hash_measured": false,
+    "candidate_browser_retested": false,
+    "baseline_observation": "GPU allocation exhaustion after a light frontend/loading window of about 2700 backend frames. This is not gameplay FPS evidence.",
+    "change": "Explicitly destroy owned textures after all open generic-device encoders submit; preserve externally owned imported textures and browser canvas drawables. Release references after destroy.",
+    "ownership_reference": "https://www.w3.org/TR/webgpu/#texture-destruction",
+    "sdk_evidence": "Installed emdawnwebgpu emwgpuDelete removes a JS object-table entry; wgpuTextureDestroy calls GPUTexture.destroy().",
+    "diagnostic_counter_scope": "Tracked generic-device owned textures only; excludes engine imports and canvas drawables. Outstanding count is not VRAM usage.",
+    "checks": {
+      "build": true,
+      "v8_full_compile": true,
+      "source_site_http_identical": true,
+      "invoke_imports": []
+    },
+    "pending": [
+      "Foreground GPU validation and a menu/loading/gameplay run longer than the previous failure.",
+      "Confirm tracked texture outstanding count remains bounded and GPU allocation failures do not recur.",
+      "Observe original frame-gate fields during CJ gameplay.",
+      "Minimum 60 FPS gameplay remains unverified."
+    ]
+  },
+  "local_player_log_controls": {
+    "updated_utc": "2026-10-23T05:29:43.362078+00:00",
+    "button": true,
+    "shortcut": "F8",
+    "logging_continues": true,
+    "http_and_mock_dom_verified": true,
+    "server_tests_passed": 4,
+    "browser_interaction_verified": false,
+    "wasm_sha256": "f0fc5978a330d36846879f7d8996409662cab43210c43e1a9678ed036a44a49f",
+    "pending": [
+      "Browser verification of implemented relative mouse capture",
+      "Measured minimum 60 FPS"
+    ]
+  },
+  "browser_pointer_lock": {
+    "updated_utc": "2026-10-23T05:38:12.334252+00:00",
+    "implemented": true,
+    "wasm_sha256": "d5da9162b55b676be96256ba082d1d00dbc43747752f8addc85a2b414137f7cf",
+    "capture": "Canvas click after runtime initialization",
+    "release": "Escape or blur",
+    "relative_input": "SDL xrel/yrel queued under scheduler baton; counts preserved past absolute edges",
+    "v8_and_http_delivery_verified": true,
+    "mock_dom_verified": true,
+    "server_tests_passed": 4,
+    "browser_camera_verified": false,
+    "native_regression_executed": false,
+    "native_test_blocker": "host_tests contains other-game macros absent from this variant",
+    "remaining": [
+      "Browser camera rotation and Escape verification",
+      "Minimum 60 FPS"
+    ]
+  },
+  "launcher_continuation": {
+    "updated_utc": "2026-10-23T17:39:15.274373+00:00",
+    "optimization_work_stopped_by_user": true,
+    "source": "tools/web/launcher",
+    "recovered_from_generated_site": true,
+    "status_timeout_seconds": 15,
+    "status_retry_without_reimport": true,
+    "worker_errors_reported": true,
+    "import_deadline_added": false,
+    "python_tests_passed": 5,
+    "node_tests_passed": 10,
+    "http_and_syntax_verified": true,
+    "browser_verified": false,
+    "browser_blocker": "No browser returned by UI tool inventory",
+    "local_background_kept_unpublished": true,
+    "wasm_unchanged": "d5da9162b55b676be96256ba082d1d00dbc43747752f8addc85a2b414137f7cf"
+  },
+  "launcher_redesign": {
+    "updated_utc": "2026-10-23T17:45:48.405269+00:00",
+    "background_preserved": true,
+    "background_full_viewport": true,
+    "fit": "cover",
+    "duplicate_logo_removed": true,
+    "decorative_overlays_removed": true,
+    "font": "UnifrakturCook, embedded original under SIL OFL 1.1",
+    "http_verified": true,
+    "tests_passed": 15,
+    "browser_visual_verified": false,
+    "game_build_unchanged": true
+  },
+  "launcher_original_font": {
+    "updated_utc": "2026-10-23T17:50:49.380387+00:00",
+    "source": "Prepared local models/fonts.txd and data/fonts.dat",
+    "menu_atlas": "font2",
+    "menu_style": 2,
+    "panel_title_style": 0,
+    "substitute_removed": true,
+    "background_unchanged": true,
+    "assets_published": false,
+    "http_verified": true,
+    "browser_visual_verified": false,
+    "tests_passed": 15,
+    "wasm_unchanged": true
+  },
+  "launcher_selected_logo": {
+    "updated_utc": "2026-10-23T17:55:52.061433+00:00",
+    "source": "https://www.pngmart.com/files/22/Grand-Theft-Auto-San-Andreas-Logo-PNG-Photo.png",
+    "sha256": "e3c54f3082f1e2461bb74b80d521c68a53cdaf07f6ec4ed0a748504fa83d507c",
+    "dimensions": [
+      1965,
+      1814
+    ],
+    "original_download_unchanged": true,
+    "private_cache_only": true,
+    "http_verified": true,
+    "browser_visual_verified": false,
+    "background_unchanged": true
+  },
+  "launcher_selected_background": {
+    "updated_utc": "2026-10-23T17:57:18.395717+00:00",
+    "sha256": "120130e14ad09aa7c75746046179ff33b9c68325993f617997483b44ee04d7ef",
+    "cache": "build/launcher-assets/background.png",
+    "full_viewport": true,
+    "fit": "cover",
+    "original_content_unchanged": true,
+    "http_verified": true,
+    "browser_visual_verified": false,
+    "published": false
+  },
+  "auxiliary_import_repair": {
+    "updated_utc": "2026-10-23T18:02:11.737222+00:00",
+    "observed_error": "cannot read auxiliary module eax.dll beside OPFS executable",
+    "required_files": [
+      {
+        "name": "eax.dll",
+        "sha256": "f1f749d9d0ea95d91a02126e2fd6d8d38cbb2aea9a49f2f9d2285427026c478f",
+        "size": 188416
+      },
+      {
+        "name": "ogg.dll",
+        "sha256": "66897e5e00e510abcd9b8a49c1f397f74af4d6da3c74da701675164159acd8e6",
+        "size": 36864
+      },
+      {
+        "name": "vorbis.dll",
+        "sha256": "042c21ee8b8c0af4499072747ca44db5e4f291ca157e18539cd18f3e8471cac7",
+        "size": 1060864
+      },
+      {
+        "name": "vorbisFile.dll",
+        "sha256": "64263d3ee8098a895505251f8cab852040a235612e88cb0899170287367d6e19",
+        "size": 65536
+      }
+    ],
+    "before_webgpu": true,
+    "hash_before_write_and_after_readback": true,
+    "large_import_required": false,
+    "saves_untouched": true,
+    "python_tests_passed": 6,
+    "node_tests_passed": 16,
+    "http_verified": true,
+    "browser_repair_verified": false,
+    "served_wasm_sha256": "d5da9162b55b676be96256ba082d1d00dbc43747752f8addc85a2b414137f7cf",
+    "wasm_rebuilt": false
+  },
+  "launcher_module_mime_fix": {
+    "updated_utc": "2026-10-23T18:04:30.660850+00:00",
+    "regression_introduced_by_repair_module": true,
+    "observed_mjs_mime_before": "text/plain",
+    "explicit_extension_mime_map": true,
+    "live_server_headers": {
+      "repair-import.mjs": "application/javascript",
+      "font-layout.mjs": "application/javascript",
+      "sa-font.js": "application/javascript",
+      "gtasa-singleplayer/GTASASingleplayer.wasm": "application/wasm"
+    },
+    "python_tests_passed": 6,
+    "server_restarted": true,
+    "browser_boot_verified": false,
+    "game_build_unchanged": true
+  },
+  "launcher_button_reference": {
+    "updated_utc": "2026-10-23T18:10:24.337858+00:00",
+    "style": "Light gray beveled buttons, double border, bottom shadow, centered black labels",
+    "original_sa_glyphs_preserved": true,
+    "background_and_logo_unchanged": true,
+    "http_verified": true,
+    "javascript_syntax_passed": true,
+    "server_tests_passed": 6,
+    "browser_visual_verified": false,
+    "engine_unchanged": true
+  },
+  "launcher_global_font": {
+    "updated_utc": "2026-10-23T18:26:19.803798+00:00",
+    "family": "Local SA Menu",
+    "source": "Local font2 style 2 atlas and fonts.dat metrics",
+    "private_generated_ttf": true,
+    "alpha_threshold": 96,
+    "all_launcher_texts_inherit": true,
+    "canvas_label_renderer_removed": true,
+    "html_text_and_wrapping_preserved": true,
+    "font_http_sha256": "de807ae588d1146e250fac589b73181a8c2c829a483143817eb9c510a586cf89",
+    "font_mime": "font/ttf",
+    "python_tests_passed": 6,
+    "browser_visual_verified": false,
+    "engine_unchanged": true
+  },
+  "launcher_card_reference": {
+    "updated_utc": "2026-10-23T18:31:50.887473+00:00",
+    "style": "Charcoal cards, dark outer frame, inset border and light beveled buttons",
+    "applied_to": [
+      "Progress dialog",
+      "Library",
+      "Storage",
+      "Game card",
+      "Messages",
+      "Help controls"
+    ],
+    "css_only": true,
+    "http_verified": true,
+    "browser_visual_verified": false,
+    "engine_unchanged": true
+  },
+  "launcher_menu_sounds": {
+    "updated_utc": "2026-10-23T18:42:40.681399+00:00",
+    "bank": 60,
+    "highlight_ids": [
+      4,
+      5
+    ],
+    "select_ids": [
+      6,
+      7
+    ],
+    "local_original_pcm": true,
+    "assets_published": false,
+    "first_gesture_unlock": true,
+    "keyboard_supported": true,
+    "disabled_controls_silent": true,
+    "forwarded_click_deduplicated": true,
+    "max_navigation_wait_ms": 350,
+    "background_music": false,
+    "node_audio_mock_tests_passed": 4,
+    "python_server_tests_passed": 6,
+    "http_and_pcm_verified": true,
+    "sounds": {
+      "highlight": {
+        "seconds": 0.14240362811791382,
+        "sha256": "e622560d192b90e5a5551e8b9974abbb3adbb4d1272f2865a8fffc4c3b9637c8",
+        "pcm_peak": 26028
+      },
+      "select": {
+        "seconds": 0.16024943310657597,
+        "sha256": "f34eb7b0eaac2eba54751213e6ebe45feb0eaa327174855a3e26101d6d8c03e3",
+        "pcm_peak": 26027
+      }
+    },
+    "browser_listening_verified": false,
+    "engine_unchanged": true
+  },
+  "pointer_lock_menu_cursor": {
+    "updated_utc": "2026-10-23T18:59:27.860920+00:00",
+    "cause": "Relative motion omitted WM_MOUSEMOVE consumed by original menu cursor",
+    "original_executable_dispatch_verified": true,
+    "delivers_win32_message_and_directinput": true,
+    "respects_consumed_motion": true,
+    "scheduler_baton_preserved": true,
+    "browser_cursor_overlay_added": false,
+    "web_build_passed": true,
+    "v8_compile_passed": true,
+    "http_artifacts_verified": true,
+    "wasm_sha256": "c2642c996ba595e58b403193f404ffee960d94a33e9fea40cb21cc978b566567",
+    "browser_menu_cursor_verified": false,
+    "native_regression_executed": false,
+    "native_regression_blocker": "Prior host_tests build fails on other-game macros in this variant",
+    "optimization_work_resumed": false
+  },
+  "pointer_lock_cursor_bounds": {
+    "updated_utc": "2026-10-23T19:05:57.023423+00:00",
+    "observed": "User screenshot shows menu cursor stopping above Back",
+    "initial_bounds": [
+      640,
+      480
+    ],
+    "logged_d3d9_size": [
+      800,
+      600
+    ],
+    "bounds_source": "Actual guest client window; display mode fallback",
+    "relative_clicks_and_wheel_preserve_virtual_position": true,
+    "directinput_deltas_unclamped": true,
+    "web_build_passed": true,
+    "v8_compile_passed": true,
+    "http_artifacts_verified": true,
+    "wasm_sha256": "610f22f845bb15950ce369a39b92de908f191e9897860b1b8460444f48242f40",
+    "browser_edge_and_click_verification": false,
+    "host_tests_executed": false,
+    "existing_test_blocker": "Other-game macros absent from this variant",
+    "optimization_work_resumed": false
+  },
+  "fullscreen_hold_escape": {
+    "updated_utc": "2026-10-23T19:10:06.928259+00:00",
+    "fullscreen_button": true,
+    "canvas_click_requests_fullscreen_and_pointer": true,
+    "keyboard_lock_keys": [
+      "Escape"
+    ],
+    "long_escape_handler": "Browser escape hatch; Chrome documents about two seconds",
+    "short_escape_forwarded_to_game": true,
+    "automatic_recapture": false,
+    "mock_node_tests_passed": 4,
+    "server_python_tests_passed": 6,
+    "served_html_verified": true,
+    "browser_verified": false,
+    "fallback": "Default browser short Escape when unsupported or denied",
+    "wasm_sha256": "610f22f845bb15950ce369a39b92de908f191e9897860b1b8460444f48242f40",
+    "native_rebuild": false
+  },
+  "launcher_contributors": {
+    "updated_utc": "2026-10-23T19:14:36.685811+00:00",
+    "repository": "Galavic/Gta-SA-OC",
+    "source": "https://api.github.com/repos/Galavic/Gta-SA-OC/contributors?per_page=100",
+    "snapshot_profiles": [
+      "machinebreak",
+      "Galavic"
+    ],
+    "position": "bottom right",
+    "avatars_cors_verified": true,
+    "http_sources_match": true,
+    "browser_visual_verified": false,
+    "wasm_sha256": "610f22f845bb15950ce369a39b92de908f191e9897860b1b8460444f48242f40"
+  },
+  "repository_layout_cleanup": {
+    "date": "2026-10-23",
+    "python_tools_moved": 70,
+    "powershell_tools_moved": 1,
+    "historical_reports_archived": 2,
+    "previous_readme_preserved": true,
+    "remote_base_commit": "ff15470",
+    "runtime_changed": false,
+    "gameplay_claims_added": false,
+    "verification": "92 publication-worktree tests and 100 local-workspace tests passed; all Python tools parse",
+    "publication_tests_passed": 92,
+    "local_tests_passed": 100
+  },
+  "launcher_text_size": {
+    "updated_utc": "2026-10-23T19:22:30.068032+00:00",
+    "shared_button_text_size": "clamp(18px, 1.45vw, 23px)",
+    "narrow_text_size_px": 19,
+    "avatars_px": 48,
+    "narrow_layout_scrolls": true,
+    "http_css_matches_source": true,
+    "browser_visual_verified": false,
+    "native_rebuild": false,
+    "wasm_sha256": "610f22f845bb15950ce369a39b92de908f191e9897860b1b8460444f48242f40"
+  },
+  "launcher_language": {
+    "updated_utc": "2026-10-23T19:24:01.136903+00:00",
+    "language": "en",
+    "static_and_dynamic_text": true,
+    "transport_tests_passed": 4,
+    "http_verified": true,
+    "browser_visual_verified": false,
+    "native_rebuild": false,
+    "wasm_sha256": "610f22f845bb15950ce369a39b92de908f191e9897860b1b8460444f48242f40"
+  },
+  "player_logs_default": {
+    "hidden": true,
+    "reopen": "Show logs button or F8",
+    "tests_run": false,
+    "native_rebuild": false,
+    "browser_verified": false,
+    "wasm_sha256": "610f22f845bb15950ce369a39b92de908f191e9897860b1b8460444f48242f40"
+  },
+  "native_resolution_vram_fix": {
+    "updated_utc": "2026-10-23T19:35:51.078448+00:00",
+    "original_pe_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "cause": "GetVideoModeList excludes non-640x480 modes under 45 MiB free after framebuffer; DirectDraw reported 24 MiB free",
+    "virtual_video_memory_mib": {
+      "total": 256,
+      "free": 224
+    },
+    "getcaps_and_getavailablevidmem_match": true,
+    "stretch_applied": false,
+    "aspect_preserved": true,
+    "web_build_passed": true,
+    "v8_compile_passed": true,
+    "http_artifacts_verified": true,
+    "wasm_sha256": "35a69f19cc7f7964408df5a4356a1c61495e1c742f358ed4bcc562e6e4f7ab97",
+    "browser_modes_verified": false,
+    "browser_mode_switch_verified": false,
+    "test_suites_run": false,
+    "user_reports_still_missing_1080p": true
+  },
+  "native_resolution_diagnostics": {
+    "updated_utc": "2026-10-23T19:44:15.861671+00:00",
+    "wasm_sha256": "4530b7f65c519561952cd2e70044719650f32d99633d9d4c8a143f29e2af5e74",
+    "user_menu_verified": false,
+    "resolved": false,
+    "web_build_passed": true,
+    "v8_compile_passed": true,
+    "http_artifacts_verified": true,
+    "resource_urls_versioned": true,
+    "memory_api_logging_bounded": true,
+    "d3d9_mode_logging_bounded": true,
+    "read_only_guest_watch": "c8cf80:4,c8cf7c:4,c920d0:4",
+    "awaiting_browser_reload_and_menu": true,
+    "test_suites_run": false
+  },
+  "cloudflare_publication": {
+    "verified_utc": "2026-10-23T20:00:27.406054+00:00",
+    "url": "https://gta-sa-oc.enrimilioano09.workers.dev/",
+    "worker": "gta-sa-oc",
+    "worker_version": "c94da1d7-cb1a-4d44-ad5d-83455ef2fb1f",
+    "private_r2_bucket": "gta-sa-oc-runtime",
+    "source_wasm_sha256": "4530b7f65c519561952cd2e70044719650f32d99633d9d4c8a143f29e2af5e74",
+    "public_wasm_sha256": "5889d8ddf6efc047b12791dad6cc1f526447d35f5d67f5865a37e195601fe036",
+    "static_assets_verified": 20,
+    "runtime_objects_verified": 2,
+    "runtime_delivery": "Same-origin streamed responses from private R2",
+    "public_v8_compile_passed": true,
+    "public_delivery_hashes_verified": true,
+    "public_isolation_headers_verified": true,
+    "installed_game_uploaded": false,
+    "selected_launcher_media_included": true,
+    "personal_build_paths_removed": true,
+    "public_gameplay_verified": false,
+    "public_import_verified": false,
+    "native_resolution_issue_resolved": false,
+    "local_import_required": true,
+    "local_dll_hashes_must_match": true,
+    "opfs_separate_from_localhost": true,
+    "current_worker_version": "b21fe8f6-1302-400e-a203-819591463bba",
+    "current_worker_version_utc": "2026-10-23T20:53:49Z",
+    "launcher_credit_removed": true,
+    "pages_deployment": "2e4a07f7",
+    "https_redirect_verified": true,
+    "https_redirect_worker_test": "tools/tests/worker.test.mjs",
+    "https_redirect_tests_passed": 6,
+    "tools_js_tests_passed": 16,
+    "tools_python_tests_passed": 12,
+    "publication_check_passed": true
+  },
+  "custom_domain": {
+    "hostname": "gta.galavic.world",
+    "verified_utc": "2026-10-23T20:42:41Z",
+    "registrar_dns": "Namecheap",
+    "authoritative_dns": "Cloudflare",
+    "zone_id": "cfec2730fb45705cb99e6e5af8e8f0f0",
+    "zone_status": "active",
+    "zone_activated_utc": "2026-10-23T20:23:35Z",
+    "nameservers": [
+      "gracie.ns.cloudflare.com",
+      "yahir.ns.cloudflare.com"
+    ],
+    "served_by": "Worker gta-sa-oc custom domain",
+    "worker_custom_domain_enabled": true,
+    "pages_project": "gta-galavic",
+    "pages_url": "https://gta-galavic.pages.dev/",
+    "pages_custom_domain_status": "pending: CNAME record not set (duplicate, serves no traffic)",
+    "deployment": "2e4a07f7",
+    "https_status": 200,
+    "tls_issuer": "Let's Encrypt",
+    "tls_expires": "2027-01-21T13:34:12Z",
+    "http_to_https_redirect": 301,
+    "isolation_headers_verified": true,
+    "runtime_wasm_status": 200,
+    "runtime_data_status": 200,
+    "runtime_wasm_content_type": "application/wasm",
+    "runtime_data_content_type": "application/octet-stream",
+    "runtime_wasm_bytes": 266206438,
+    "runtime_data_bytes": 35073821,
+    "install_and_unknown_runtime_404": true,
+    "same_r2_bucket": true,
+    "wasm_sha256": "5889d8ddf6efc047b12791dad6cc1f526447d35f5d67f5865a37e195601fe036",
+    "apex_records_preserved": true,
+    "mx_records_preserved": true,
+    "spf_preserved": true,
+    "apex_origin_vercel_error": "402 DEPLOYMENT_DISABLED, reproduced directly against 216.198.79.1; pre-existing",
+    "gameplay_verified_on_custom_domain": false,
+    "import_required_on_custom_domain": true,
+    "blocker": "No gameplay/import verified on the new origin; OPFS is per-origin"
+  },
+  "cloudflare_dns_migration": {
+    "domain": "galavic.world",
+    "user_requested": true,
+    "apex_vercel_content_migration_deferred": true,
+    "zone_exists": true,
+    "zone_id": "cfec2730fb45705cb99e6e5af8e8f0f0",
+    "zone_plan": "Free Website",
+    "zone_status": "active",
+    "zone_activated_utc": "2026-10-23T20:23:35Z",
+    "initial_zone_create_http_status": 403,
+    "initial_zone_create_blocker": "Connected OAuth lacked account zone.create permission; the user created the zone in the dashboard",
+    "nameservers_assigned": true,
+    "nameservers": [
+      "gracie.ns.cloudflare.com",
+      "yahir.ns.cloudflare.com"
+    ],
+    "delegation_changed": true,
+    "delegation_verified_via": [
+      "1.1.1.1",
+      "8.8.8.8"
+    ],
+    "registrar_access_available": false,
+    "user_saved_nameservers_at_namecheap": true,
+    "apex_a_preserved": true,
+    "mx_preserved": true,
+    "spf_preserved": true,
+    "apex_origin_vercel_error": "402 DEPLOYMENT_DISABLED before and after migration",
+    "gta_served_by_worker_custom_domain": true,
+    "gta_https_verified": true,
+    "pending_cleanup": "Remove the pending gta.galavic.world custom domain from Pages project gta-galavic"
+  },
+  "public_dll_import_recovery": {
+    "date": "2026-10-23",
+    "observed_error": "Missing eax.dll after import on custom domain",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "public_wasm_sha256": "5889d8ddf6efc047b12791dad6cc1f526447d35f5d67f5865a37e195601fe036",
+    "worker_version": "74b671b5-2fe8-4298-b981-cf78b03c9db3",
+    "runtime_changed": false,
+    "launcher_checks_actual_auxiliary_hashes": true,
+    "selective_browser_dll_recovery": true,
+    "canonicalizes_dll_casing": true,
+    "node_tests_passed": 30,
+    "python_tests_passed": 6,
+    "public_assets_exact_bytes_mime_isolation_verified": [
+      {
+        "path": "games.json",
+        "status": 200,
+        "sha256": "d1f98ea332c43cf2cec962064675c61202e2ebbf73bc3b1e3a1cb881fb5dac62"
+      },
+      {
+        "path": "app.js",
+        "status": 200,
+        "sha256": "0c1360287cd85d129cf9c3f7219bc57adfd071d1bb374e1fed6f529fe903b3d4"
+      },
+      {
+        "path": "core.js",
+        "status": 200,
+        "sha256": "078753edbde13c3a1aa16514e0702f59da6a2a77c28dea75a0547fee63fb8805"
+      },
+      {
+        "path": "start.js",
+        "status": 200,
+        "sha256": "b70c69036f1e0ae2460cc0394a6e974e5f41d6f8fc6d6f4b21e4709050e57dff"
+      },
+      {
+        "path": "repair-import.mjs",
+        "status": 200,
+        "sha256": "497970bed2ef88baab779f0dd6c66f0b4a042cb58ecf9b37ce5d516422540827"
+      },
+      {
+        "path": "gtasa-singleplayer/index.html",
+        "status": 200,
+        "sha256": "6aa82d2cb88a6065827499c1e1a742d5dd092fb075c6df776153545f63d78d7e"
+      }
+    ],
+    "evidence": "build/cloudflare-release-20261023-dll-recovery-v2/http-verification.json",
+    "browser_gameplay_verified": false,
+    "blocker": "User must select compatible local DLLs; recovery and game boot with their files remain unverified in browser"
+  },
+  "automatic_folder_dll_import": {
+    "date": "2026-10-23",
+    "worker_version": "8eaa36fc-b735-4a68-a4e2-966a6e5b800b",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "public_wasm_sha256": "5889d8ddf6efc047b12791dad6cc1f526447d35f5d67f5865a37e195601fe036",
+    "runtime_changed": false,
+    "required_dlls_canonicalized_during_import": true,
+    "missing_dlls_reported_before_copy": true,
+    "dll_hashes_verified_before_stamp": true,
+    "reimport_recopies_corrupt_required_files": true,
+    "node_tests_passed": 20,
+    "http_checks": [
+      {
+        "path": "core.js",
+        "sha256": "d66f214dd0c8dc37989429ccdb6a94db8f910e2c8e691bda369b76d5081ca158",
+        "http_status": 200
+      },
+      {
+        "path": "app.js",
+        "sha256": "d90e981edb7418c05f5e5a96a5c753a71e86c5700c2b1ea3040c46e51ce5ddb4",
+        "http_status": 200
+      },
+      {
+        "path": "games.json",
+        "sha256": "d1f98ea332c43cf2cec962064675c61202e2ebbf73bc3b1e3a1cb881fb5dac62",
+        "http_status": 200
+      }
+    ],
+    "evidence": "build/cloudflare-release-20261023-auto-dll-import/http-verification.json",
+    "browser_gameplay_verified": false,
+    "blocker": "Real folder import and game boot remain unverified; compatible DLLs must exist in the selected folder"
+  },
+  "hosted_prepared_installation": {
+    "date": "2026-10-23",
+    "user_explicitly_requested_game_upload": true,
+    "worker_version": "8f22e343-0b9a-423a-8246-62a13ff72f7b",
+    "game_build": "a033b7fd3a69b951",
+    "game_files": 417,
+    "game_bytes": 5004941035,
+    "transfer_objects_head_verified": 461,
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "public_wasm_sha256": "5889d8ddf6efc047b12791dad6cc1f526447d35f5d67f5865a37e195601fe036",
+    "root_cause": "Local server uses prepared/rebased audio DLLs; selecting the original installation is not equivalent to importing the prepared tree",
+    "automatic_download_on_open": true,
+    "local_folder_selection_required": false,
+    "streamed_chunk_size_bytes": 67108864,
+    "resumes_completed_files": true,
+    "download_checksums_verified_before_stamp": true,
+    "profiles_uploaded": false,
+    "remote_full_file_hashes_verified": [
+      "eax.dll",
+      "ogg.dll",
+      "vorbis.dll",
+      "vorbisFile.dll",
+      "gta_sa.exe"
+    ],
+    "remote_full_chunk_hash_verified": true,
+    "node_tests_passed": 39,
+    "python_tests_passed": 7,
+    "evidence": [
+      "build/cloudflare-release-20261023-hosted-game/http-verification.json",
+      "build/cloudflare-release-20261023-hosted-game/chunk-verification.json"
+    ],
+    "browser_gameplay_verified": false,
+    "blocker": "Automated browser inventory is empty; full first-run browser preparation and subsequent gameplay remain unverified on the public origin",
+    "git_game_files_committed": false
+  },
+  "local_launcher_favicon": {
+    "url": "http://127.0.0.1:8771/",
+    "favicon_sha256": "400dc5c4b4f1c47e3142e94961cc214d4a2bf45685001f673ad5f9d62f340a28",
+    "dimensions": [
+      810,
+      810
+    ],
+    "http_status": 200,
+    "mime": "image/png",
+    "html_reference_verified": true,
+    "deployment_performed": false,
+    "date": "2026-10-23",
+    "asset": "build/launcher-assets/favicon.png",
+    "staged_asset": "variants/singleplayer/build/web-site/favicon.png",
+    "evidence": "build/launcher-favicon-20261023/http-verification.json",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "runtime_changed": false,
+    "publication_requires_user_instruction": true,
+    "browser_tab_visual_check": "not performed; browser automation inventory unavailable in this session"
+  },
+  "local_contributor_social_cards": {
+    "date": "2026-10-23",
+    "url": "http://127.0.0.1:8771/",
+    "http_checks": [
+      {
+        "path": "index.html",
+        "http_status": 200,
+        "sha256": "bcf24c10f32682578bd79fc197a641d04a0a380181ef615c4f7f66e134a1d25e"
+      },
+      {
+        "path": "contributors.js",
+        "http_status": 200,
+        "sha256": "737e373d98106911348238165908c911b886e72b4528221cce2c40e61b5abb17"
+      },
+      {
+        "path": "start.js",
+        "http_status": 200,
+        "sha256": "4f7dccac7cd5bc1a7a23c8bd8f1cf65f7d83e407b2d36e48174552e88e7e33bf"
+      },
+      {
+        "path": "menu.css",
+        "http_status": 200,
+        "sha256": "12d1160b3843e2619491af0fbbf1e55aaf0998212e7588b8bd8599d5795a9465"
+      }
+    ],
+    "javascript_syntax_checked": true,
+    "deployment_performed": false,
+    "visual_browser_check": "unavailable: browser inventory empty",
+    "pending_social_values": [
+      "machinebreak X, Discord group and user",
+      "Galavic X, Discord group and user"
+    ],
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "runtime_changed": false,
+    "evidence": "build/launcher-contributor-cards-20261023/http-verification.json",
+    "behavior": [
+      "contributor buttons open individual profile in a shared dialog",
+      "GitHub links configured for both contributors",
+      "missing social fields remain inactive",
+      "Discord username copy action ready for supplied usernames",
+      "existing Escape, backdrop, close button and keyboard focus handling reused"
+    ],
+    "publication_requires_user_instruction": true
+  },
+  "local_contributor_social_links": {
+    "date": "2026-10-23",
+    "http_checks": [
+      {
+        "path": "index.html",
+        "status": 200,
+        "sha256": "b579d8b276a8443c5621fdf78da573a94f4bf2b0a3e65a6baa9ade5fe9608416"
+      },
+      {
+        "path": "contributors.js",
+        "status": 200,
+        "sha256": "ea93c35653c42d5395b4241e2091e9705d262fa7cf0d7bd27cc534a6b80e383e"
+      },
+      {
+        "path": "menu.css",
+        "status": 200,
+        "sha256": "4f54e75e5dba89f0c39da788e781336c9c839cf22755dec684ec7c1fc5865386"
+      },
+      {
+        "path": "social-icons/x.svg",
+        "status": 200,
+        "sha256": "dd46f96b6f47fcd33683b79ddfaf3daca1d4f8aeba3c0f2bde1584c69cc699d4"
+      },
+      {
+        "path": "social-icons/github.svg",
+        "status": 200,
+        "sha256": "ccd84c89b1056345608fc3489357f8acc7397e49a3cdc2d418b6c8016911d47b"
+      },
+      {
+        "path": "social-icons/discord.svg",
+        "status": 200,
+        "sha256": "de4cc484cdc0e3a8f3a58a84b0c80c5ac8acefeebf730930545ff3b279b5d0a3"
+      },
+      {
+        "path": "social-icons/whatsapp.svg",
+        "status": 200,
+        "sha256": "1ab6db0cc2eb55d911f151b0aa339c55b6b225efcceddb8ff2050cab1410e347"
+      }
+    ],
+    "logos_original_bytes_preserved": true,
+    "javascript_syntax_checked": true,
+    "deployment_performed": false,
+    "visual_interactive_verification": "pending user review; browser automation unavailable",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "runtime_changed": false,
+    "evidence": "build/launcher-contributor-socials-20261023/http-verification.json",
+    "profiles": {
+      "Galavic": {
+        "x": "https://x.com/ga_lavic",
+        "github": "https://github.com/Galavic",
+        "discord_removed": true
+      },
+      "lauta": {
+        "previous_display_name": "machinebreak",
+        "x": "https://x.com/LautaTWT",
+        "github": "https://github.com/machinebreak",
+        "discord": "https://discord.gg/7hbqkDmKHA",
+        "whatsapp": "https://whatsapp.com/channel/0029VbDpnc1545uwf4F6ju0Z"
+      }
+    },
+    "pending_social_values": [],
+    "publication_requires_user_instruction": true
+  },
+  "local_launcher_background_rotation": {
+    "date": "2026-10-23",
+    "url": "http://127.0.0.1:8771/",
+    "http_checks": [
+      {
+        "path": "index.html",
+        "status": 200,
+        "sha256": "fb2a4fb96908595e8bb88fa7161a51c9c12e8a4e66fcc9e2d040f87d7b8453bb"
+      },
+      {
+        "path": "menu.css",
+        "status": 200,
+        "sha256": "21ffb0c982c59131cc31931e896733f1ea2b4860bc8fb88ccdbe7d9172f675d6"
+      },
+      {
+        "path": "start.js",
+        "status": 200,
+        "sha256": "959889037bb9a2332a20301d112c0ab7adfdddeac863ed922b9755a4b34448a2"
+      },
+      {
+        "path": "backgrounds.js",
+        "status": 200,
+        "sha256": "e689e2e9bf9709f7463db613058c3ce14d6ee2d3fcce73362128e75ca2604c7a"
+      },
+      {
+        "path": "background.png",
+        "status": 200,
+        "sha256": "120130e14ad09aa7c75746046179ff33b9c68325993f617997483b44ee04d7ef"
+      },
+      {
+        "path": "background-2.png",
+        "status": 200,
+        "sha256": "357cf3142da95ae4ae2adb532c5827ff09863da4b6b29fbcbe8feae02b4ef2f6"
+      }
+    ],
+    "slide_interval_ms": 8000,
+    "opacity_transition_ms": 1000,
+    "curve": "cubic-bezier(.77, 0, .175, 1)",
+    "new_cover_sha256": "357cf3142da95ae4ae2adb532c5827ff09863da4b6b29fbcbe8feae02b4ef2f6",
+    "image_bytes_preserved": true,
+    "javascript_syntax_checked": true,
+    "hidden_tab_pauses_rotation": true,
+    "pause_control": true,
+    "reduced_motion_initially_pauses": true,
+    "deployment_performed": false,
+    "visual_interactive_verification": "pending user review; browser automation unavailable",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "runtime_changed": false,
+    "evidence": "build/launcher-background-rotation-20261023/http-verification.json",
+    "assets": [
+      "build/launcher-assets/background.png",
+      "build/launcher-assets/background-2.png"
+    ],
+    "publication_requires_user_instruction": true
+  },
+  "local_background_stacking_fix": {
+    "date": "2026-10-23",
+    "css_sha256": "ca5cb496b92ecff333a9bb5912903ce43b9f479d07c528224f611b6f1e677dd2",
+    "http_status": 200,
+    "background_stack_level": 0,
+    "background_isolated": true,
+    "hero_stack_level": 1,
+    "footer_stack_level": 1,
+    "deployment_performed": false,
+    "visual_verification": "pending user reload; browser automation unavailable",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "runtime_changed": false,
+    "evidence": "build/launcher-background-stacking-20261023/http-verification.json",
+    "root_cause": "Incoming cover z-index 1 escaped the scene stacking context and covered hero/footer elements with automatic stack order",
+    "publication_requires_user_instruction": true
+  },
+  "local_launcher_third_background": {
+    "date": "2026-10-23",
+    "asset": "build/launcher-assets/background-3.png",
+    "sha256": "72ca33fc6ae821ad6ad91e06492e1fa8d7989421307a21a084b66c432ffb10f1",
+    "http_status": 200,
+    "image_bytes_preserved": true,
+    "rotation_covers": 3,
+    "deployment_performed": false,
+    "javascript_syntax_checked": true,
+    "visual_review": "pending user review",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "runtime_changed": false,
+    "publication_requires_user_instruction": true,
+    "evidence": "build/launcher-third-background-20261023/http-verification.json"
+  },
+  "local_mobile_logo_centering": {
+    "date": "2026-10-23",
+    "viewport_rule": "max-width: 800px",
+    "css_sha256": "1c5b2d30ef68c211539de5ace8e789ddb52db97669eccd86eb8a016c013b8a84",
+    "http_status": 200,
+    "deployment_performed": false,
+    "visual_verification": "pending user review",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "runtime_changed": false,
+    "evidence": "build/launcher-mobile-logo-20261023/http-verification.json",
+    "publication_requires_user_instruction": true
+  },
+  "local_launcher_background_music": {
+    "date": "2026-10-23",
+    "source_url": "https://www.youtube.com/watch?v=rbcnKcyI7o4",
+    "audio_asset": "build/launcher-assets/launcher-music.mp3",
+    "duration_seconds": 120.581224,
+    "audio_only": true,
+    "bytes": 3420269,
+    "sha256": "0e03bbc0f250396cc70b46b00d2b86dbe635b134032c9f9b7028a27959176560",
+    "http_checks": [
+      {
+        "path": "index.html",
+        "http_status": 200,
+        "sha256": "d584008bb650ebbaf492edfc2ab05af24f4239fc490516d9de44832bef579b33"
+      },
+      {
+        "path": "start.js",
+        "http_status": 200,
+        "sha256": "cb798caea296aa36192755bc6da74292b59fdda8824870a6c1c7b156d0f41063"
+      },
+      {
+        "path": "music.js",
+        "http_status": 200,
+        "sha256": "045fb842bd1415cf7f7219e653c5bd8b633851d5c39450ef0cc1bef6d70b33b8"
+      },
+      {
+        "path": "menu.css",
+        "http_status": 200,
+        "sha256": "ea76c6615f95de1ad2edff2672f194f43c128b36a12f928fc36ec19bff09093a"
+      },
+      {
+        "path": "launcher-music.mp3",
+        "http_status": 200,
+        "sha256": "0e03bbc0f250396cc70b46b00d2b86dbe635b134032c9f9b7028a27959176560"
+      }
+    ],
+    "ffmpeg_full_decode_passed": true,
+    "javascript_syntax_checked": true,
+    "loop_enabled": true,
+    "initial_volume": 0.3,
+    "mute_preference_persisted": true,
+    "autoplay_fallback": "first click/tap or Play music button",
+    "pauses_on_hidden_page": true,
+    "stops_on_navigation": true,
+    "deployment_performed": false,
+    "browser_audio_verification": "pending user playback/mute check; browser automation unavailable",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "runtime_changed": false,
+    "evidence": "build/launcher-music-20261023/http-verification.json",
+    "publication_requires_user_instruction": true
+  },
+  "local_launcher_fourth_background": {
+    "date": "2026-10-23",
+    "asset": "build/launcher-assets/background-4.png",
+    "sha256": "aaeb5150fa544bc234314afd0789e43dc49f7999cc85ffd06661a8a0913d0c84",
+    "http_status": 200,
+    "image_bytes_preserved": true,
+    "rotation_covers": 4,
+    "deployment_performed": false,
+    "javascript_syntax_checked": true,
+    "visual_review": "pending user review",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "runtime_changed": false,
+    "publication_requires_user_instruction": true,
+    "evidence": "build/launcher-fourth-background-20261023/http-verification.json"
+  },
+  "local_launcher_random_backgrounds": {
+    "date": "2026-10-23",
+    "http_status": 200,
+    "module_sha256": "404064ce1345976d1bdb362ee92ce1058ecc0928a8b968ef0bebb065dbf452f4",
+    "random_first_cover": true,
+    "shuffle_rounds": true,
+    "avoid_round_boundary_repeat": true,
+    "rotation_covers": 4,
+    "interval_ms": 8000,
+    "javascript_syntax_checked": true,
+    "deployment_performed": false,
+    "visual_review": "pending user review",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "runtime_changed": false,
+    "publication_requires_user_instruction": true,
+    "evidence": "build/launcher-random-backgrounds-20261023/http-verification.json"
+  },
+  "launcher_refresh_publication": {
+    "date": "2026-10-24",
+    "user_authorized_publication": true,
+    "url": "https://gta.galavic.world/",
+    "worker_version": "cc75e7f4-51c3-49a4-b887-cd752e15d55a",
+    "public_wasm_sha256": "5889d8ddf6efc047b12791dad6cc1f526447d35f5d67f5865a37e195601fe036",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "hosted_game_build": "a033b7fd3a69b951",
+    "runtime_and_hosted_game_unchanged": true,
+    "static_assets_verified": 33,
+    "changes": [
+      "favicon",
+      "contributor social cards with original brand logos",
+      "lauta display name and supplied social links",
+      "four random covers with no consecutive repeat",
+      "background stacking fix",
+      "centered mobile logo",
+      "looped local music with persistent mute control"
+    ],
+    "python_tests_passed": 6,
+    "node_tests_passed": 17,
+    "all_release_javascript_syntax_checked": true,
+    "mime_and_isolation_verified": true,
+    "evidence": [
+      "build/cloudflare-release-20261023-launcher-refresh/preflight-verification.json",
+      "build/cloudflare-release-20261023-launcher-refresh/http-verification.json"
+    ],
+    "browser_interactive_verified": false,
+    "blocker": "Public interactive/audio/mobile review remains pending; HTTP and source checks do not verify gameplay",
+    "mp3_range_request_behavior": "200 full file response; full MP3 bytes match",
+    "git_push_performed": false
+  },
+  "fast_hosted_preparation": {
+    "date": "2026-10-24",
+    "worker_version": "4e246825-35d4-4286-af76-051caf44b917",
+    "url": "https://gta.galavic.world/",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "public_wasm_sha256": "5889d8ddf6efc047b12791dad6cc1f526447d35f5d67f5865a37e195601fe036",
+    "game_build": "a033b7fd3a69b951",
+    "game_bytes": 5004941035,
+    "files": 417,
+    "range_blocks": 1586,
+    "block_bytes": 4194304,
+    "max_concurrent_downloads": 4,
+    "parallel_files": 2,
+    "parallel_ranges_per_file": 2,
+    "native_webcrypto_verification": true,
+    "large_archives_double_js_hash_removed_for_fast_path": true,
+    "progress_throttle_ms": 150,
+    "partial_block_checkpoint_interval_ms": 1000,
+    "checkpoint_each_completed_file": true,
+    "resume_verified_blocks": true,
+    "preserves_legacy_completed_file_manifests": true,
+    "native_code_or_wasm_changed": false,
+    "r2_game_objects_reuploaded": false,
+    "tests": {
+      "node_passed": 32,
+      "python_passed": 8
+    },
+    "desktop_hash_benchmark": {
+      "bytes": 33554432,
+      "doubleJsHashMs": 1163.9052,
+      "nativeHashMs": 37.026400000000194,
+      "hashOnlyRatio": 31.434468379318375
+    },
+    "http_range_sample": {
+      "ranges": 9,
+      "bytes": 33742848,
+      "seconds": 1.0484307999995508,
+      "mib_per_second": 30.693191672749204,
+      "scope": "Desktop curl/HTTP range check, not mobile browser or gameplay"
+    },
+    "evidence": [
+      "build/cloudflare-release-20261024-fast-import/http-range-verification.json",
+      "build/cloudflare-release-20261024-fast-import/preflight-verification.json",
+      "build/import-performance-20261024/hash-benchmark.json"
+    ],
+    "comparison_source": "https://github.com/hellorayhere/gta5-web-port",
+    "gta5_reference_behavior": "Host describes HTTP range reads, batch range endpoint and bounded caches for demand-driven asset access",
+    "browser_mobile_speedup_verified": false,
+    "browser_gameplay_verified": false,
+    "remaining_limitations": [
+      "First preparation still downloads the full 4.7 GiB installation",
+      "Demand-loaded runtime files require a separate filesystem/backend change",
+      "Public mobile browser import and playback still require interactive verification"
+    ],
+    "git_push_performed": false
+  },
+  "pc_streaming_optimization": {
+    "updated_utc": "2026-10-24T04:37:53.156953+00:00",
+    "state": "local_candidate_ready_for_browser_review",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "upstream_commit": "ff1547048f9924df73f9f99c9d0b7a839f361dc3",
+    "deployed": false,
+    "browser_gameplay_verified": false,
+    "normal_clock_preserved": true,
+    "qpc_scale_diagnostic_range": [
+      1,
+      8
+    ],
+    "callback_pool": {
+      "retained_per_host_thread": 32,
+      "nested_entries": 69032,
+      "allocations_without_pool": 69032,
+      "allocations_with_pool": 33032,
+      "reuses": 36000,
+      "checks_per_mode": 10066
+    },
+    "host_event_checks_passed": 977,
+    "cpu_checks": {
+      "startup": 403,
+      "read_path_cache": 68,
+      "performance_counter": 20,
+      "empty_seh_dispatch": 8,
+      "interpreter_counters": 7
+    },
+    "python_tests_passed": 10,
+    "dx_suite": {
+      "checks": 141201,
+      "remaining_failures": 23,
+      "before_wait_fix_failures": 29,
+      "notification_groups_now_pass": true,
+      "full_suite_passed": false
+    },
+    "evidence_directory": "build/optimization-20261023",
+    "pending": [
+      "Measure gameplay FPS and P95 frame time in matching moving/cutscene scenes; no connected browser is available.",
+      "Validate normal gameplay and synchronization; optional QPC scaling changes the guest clock."
+    ],
+    "audio": {
+      "deferred_at_user_request": true,
+      "user_confirms_original_pc_also_has_no_voices": true,
+      "source_audit_reproduced": true
+    },
+    "files": [
+      {
+        "name": "GTASASingleplayer.wasm",
+        "bytes": 240809792,
+        "sha256": "49374508f33b2b704d5756e6265f5b7f82461ead4149797a0a467327f20b3cf9"
+      },
+      {
+        "name": "GTASASingleplayer.js",
+        "bytes": 472074,
+        "sha256": "99b0f7e2fd22c5d05aa83ed8d4c49a774b390733466e284c9431fdceb2441397"
+      },
+      {
+        "name": "GTASASingleplayer.data",
+        "bytes": 35073821,
+        "sha256": "63b5a7056570aa52e13bd93c067dbe279874e8cbf97ff5c6c2b0cc72df68605d"
+      }
+    ],
+    "v8_compile_passed": true,
+    "functions_before": 213007,
+    "functions_after": 201224,
+    "maximum_locals_after": 98,
+    "local_http_identity_verified": true,
+    "complete_patch_reconstruction_verified": true,
+    "baseline_local_wasm_sha256": "4530b7f65c519561952cd2e70044719650f32d99633d9d4c8a143f29e2af5e74",
+    "baseline_local_wasm_bytes": 266206438,
+    "local_urls": {
+      "normal": "http://127.0.0.1:8771/gtasa-singleplayer/",
+      "upstream_clock_experiment": "http://127.0.0.1:8771/gtasa-singleplayer/?RECOMP_QPC_SCALE=2"
+    },
+    "clock_experiment_launcher_retired": true
+  },
+  "normal_clock_launcher_correction": {
+    "updated_utc": "2026-10-24T04:44:34.726005+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "wasm_sha256": "49374508f33b2b704d5756e6265f5b7f82461ead4149797a0a467327f20b3cf9",
+    "wasm_changed": false,
+    "user_reported_fps": 20,
+    "user_reported_simulation_acceleration": true,
+    "playable_launcher_qpc_scale_forced": 1,
+    "old_experiment_urls_ignored": true,
+    "observed_render_scale_before": 1.75,
+    "default_render_scale_now": 1,
+    "render_scale_override_preserved": true,
+    "light_d3d9_stats_enabled": true,
+    "python_tests_passed": 10,
+    "actual_prerun_options_tested": true,
+    "http_verified": true,
+    "browser_gameplay_verified": false,
+    "fps_improvement_verified": false,
+    "deployed": false,
+    "pending": [
+      "Reload the running game so the corrected preRun takes effect.",
+      "Verify normal simulation timing and compare PC FPS/P95 at render scale 1; no connected browser is available."
+    ],
+    "evidence": "build/optimization-20261023/normal-clock-launcher-check.json"
+  },
+  "gameplay_pacing_correction": {
+    "state": "local_candidate_ready_for_browser_review",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "user_report": {
+      "cinematics_fps": 60,
+      "gameplay_fps_range": [
+        20,
+        30
+      ],
+      "platform": "PC",
+      "automatically_verified": false
+    },
+    "reported_wasm_sha256": "49374508f33b2b704d5756e6265f5b7f82461ead4149797a0a467327f20b3cf9",
+    "verified_original_limit_fps": 30,
+    "candidate_limit_fps": 60,
+    "instruction_changes": {
+      "0053e94a": "CMP EAX,0x0",
+      "00619620": "MOV dword ptr [0x00c1704c],0x3c"
+    },
+    "clock_scale": 1,
+    "executable_modified": false,
+    "cpu_idle_prefix_cases": 5,
+    "cpu_frames_per_case": 30,
+    "cpu_frame_limit_gate_cases": 6,
+    "configuration_tests_passed": 5,
+    "evidence_path": "build/idle-pacing-20261023",
+    "browser_gameplay_verified": false,
+    "fps_gain_verified": false,
+    "deployed": false,
+    "pending": [
+      "Measure PC gameplay FPS and frame times after full reload",
+      "Confirm normal simulation, controls and cinematics at the new pacing"
+    ],
+    "previous_candidate_generated_header_stale": true,
+    "header_correction": "Sync generated x86.h with canonical complete runtime patch; rebuild affected translation units",
+    "python_tools_tests_passed": 15,
+    "strict_translation": {
+      "functions_ok": 59127,
+      "functions_total": 59809,
+      "entry_points": 168081,
+      "failures": 0,
+      "unmodelled": 0,
+      "undecoded_table_sites": 0
+    },
+    "generated_header_matches_canonical": true,
+    "build_steps": 412,
+    "adapter_selection_diagnostic": "One startup log; existing high-performance preference retained; actual adapter unverified",
+    "native_build_exit_code": 0,
+    "linked_wasm_sha256": "b0d981ab0e9a61d1d87ca5a8b9c8eb3babf48a824542b89f60578bb45e8ae921",
+    "linked_module_inspection": {
+      "functions": 212673,
+      "maximum_locals": 2929,
+      "excessive_locals": []
+    },
+    "adapter_diagnostic_node_cases": 3,
+    "staged_inline_javascript_syntax": "passed",
+    "cpu_startup_checks_passed": 21600,
+    "startup_test_wasm_sha256": "f14f175e6e3638538d3a8460bd8fd9966b5869915cba90005f895eb2e3677dab",
+    "wasm_prepare_exit_code": 0,
+    "v8_full_module_compile_passed": true,
+    "artifacts": {
+      "GTASASingleplayer.wasm": {
+        "sha256": "2d0bac24bc99f8135218adc5b98016927b8964035c21587c21de61865428b7c8",
+        "bytes": 235190585
+      },
+      "GTASASingleplayer.js": {
+        "sha256": "fa1ef389ab9453499689dc14cac8272233636ab5b1e707b8a09afd144275820e",
+        "bytes": 472074
+      },
+      "GTASASingleplayer.data": {
+        "sha256": "63b5a7056570aa52e13bd93c067dbe279874e8cbf97ff5c6c2b0cc72df68605d",
+        "bytes": 35073821
+      }
+    },
+    "local_http_verified": true,
+    "normal_clock_launcher_verified": true,
+    "generated_header_sha256": "59ff3f887261c4a6cb5dba593f0542f8ecbaeda4d171ff1a1ad9e47d531b8c19",
+    "runtime_patch_sha256": "787855a3febc15e4d59b472c5ff84b0624881a5072c204992a7ae53fe4b4a085",
+    "optimized_module_inspection": {
+      "functions": 189522,
+      "maximum_locals": 98,
+      "excessive_locals": []
+    },
+    "archived_linked_compression": "Two archived inputs compressed with NTFS; both SHA256 identities unchanged"
+  },
+  "crash_audio_render_20261024": {
+    "date": "2026-10-24",
+    "scope": "Local crash, audio controls and rendering defaults; browser retest pending",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "reported_session_wasm_sha256": "2d0bac24bc99f8135218adc5b98016927b8964035c21587c21de61865428b7c8",
+    "reported_observations": {
+      "world_fps": 17.5,
+      "frame_ms": 48.2,
+      "p95_ms": 80.3,
+      "gpu_ms": 7.8,
+      "audio_menu_fps": 0.5,
+      "low_pitch": "CJ and menu sounds during gameplay",
+      "adapter": "NVIDIA Ampere from session log"
+    },
+    "crash": {
+      "target": "005a0035",
+      "first_unsupported_instruction": "CMP AX,0x196 (66 3d 96 01)",
+      "session_log": "build/crash-audio-20261024/session-bootlog.txt",
+      "original_block": "build/crash-audio-20261024/crash-original-disassembly.txt",
+      "bounded_decode_after_fix": "passed; does not execute the gameplay path"
+    },
+    "changes": [
+      "Interpret word CMP, TEST AL immediate, x87 memory FCOM/FCOMP and FNSTSW AX; skip unreachable bytes after terminators to the next known branch destination.",
+      "Unchanged pan/frequency controls preserve playing state.",
+      "Reused channels clear prior-owner frequency overrides; same-owner stop/play keeps tuning.",
+      "Remove forced render scale 1; enable existing frame-local group cache, batched uploads and buffer renaming. QPC remains 1."
+    ],
+    "tests": [
+      {
+        "binary": "interp_tests",
+        "args": [],
+        "exit_code": 0,
+        "wasm_sha256": "6586ef85231c5c0d83cd04d5977e9bfe1582cd1460240b933f796b306e1f6ad2"
+      },
+      {
+        "binary": "audio_controls_tests",
+        "args": [],
+        "exit_code": 0,
+        "wasm_sha256": "81220c31fd6d0353d07b311615ffc601b7094b098ca3aca95acfc74b3d3c99b1"
+      },
+      {
+        "binary": "dx_tests",
+        "args": [
+          "--audio-channel-reset"
+        ],
+        "exit_code": 0,
+        "wasm_sha256": "d466777c374c2b8b7a3a6f86a2a7ff1d43e9961cf30568229fa870783f6cae04"
+      },
+      {
+        "binary": "game_boot_probe",
+        "args": [
+          "variants/singleplayer/prepared/gta_sa.exe",
+          "--decode",
+          "005a0035"
+        ],
+        "exit_code": 0,
+        "wasm_sha256": "5964c46e8c52189a4e0a5c648d95285af6e54f35711b4c600f32e999282df9bc"
+      }
+    ],
+    "interp_unit_checks": 716,
+    "audio_control_checks": 107,
+    "channel_reuse_checks": 3,
+    "serve_variant_tests": 7,
+    "full_dx_suite": {
+      "checks": 141201,
+      "failures": 23,
+      "scope": "Host 64-bit ABI expectations on wasm32 (17) and cursor learned (6); audio portions reported ok. No baseline comparison yet; not a passing full suite."
+    },
+    "build_state": "finished",
+    "runtime_patch_sha256": "e303dbf82259471fcdc55a50b539386249c282dd2acdce163e24b49b05a9471d",
+    "browser_gameplay_verified": false,
+    "fps_gain_verified": false,
+    "deployed": false,
+    "pending": [
+      "Browser retest: reported crash route, repeated Audio menu open/close, CJ/menu pitch, city frame times and quality.",
+      "Full DX suite retains 23 failures; not declared passing, baseline comparison pending.",
+      "Missing original-game dialogue remains deferred per user."
+    ],
+    "unicorn_differential": {
+      "pytest_cases": 126,
+      "random_integer_routines": 300,
+      "extended_integer_cases": 76,
+      "narrow_comparison_cases": 49,
+      "passed": true,
+      "log": "build/crash-audio-20261024/unicorn-tests.log",
+      "caveat": "Unicorn emits Windows handled-access-violation diagnostics under pytest faulthandler; process completes with all comparisons passing."
+    },
+    "game_literal_check": "passed",
+    "artifacts": {
+      "GTASASingleplayer.wasm": {
+        "sha256": "1321072f9b3acaca8658d25dfd34715f220e80b881598d6e94eae6a370a079cf",
+        "bytes": 235192022
+      },
+      "GTASASingleplayer.js": {
+        "sha256": "7462fd59c3e3a6b381267a6c37f9fee159815acc1fa1f58eacb17b00ade68983",
+        "bytes": 472074
+      },
+      "GTASASingleplayer.data": {
+        "sha256": "63b5a7056570aa52e13bd93c067dbe279874e8cbf97ff5c6c2b0cc72df68605d",
+        "bytes": 35073821
+      }
+    },
+    "wasm_prepare": {
+      "input_sha256": "9c31707bc182458d47e88b0bd54f3273ddb0714413f340c108a63167f7e31fb8",
+      "output_sha256": "1321072f9b3acaca8658d25dfd34715f220e80b881598d6e94eae6a370a079cf",
+      "before": {
+        "functions": 212673,
+        "maximum_locals": 2929,
+        "excessive_locals": []
+      },
+      "after": {
+        "functions": 189522,
+        "maximum_locals": 98,
+        "excessive_locals": []
+      },
+      "v8_compile_passed": true,
+      "exit_code": 0,
+      "seconds": 957.4713871479034
+    },
+    "local_http_verified": true,
+    "html_profile_verified": true,
+    "archive_compression": "Current linked input compressed with NTFS; SHA256 unchanged (build/crash-audio-20261024/linked-compression.json)",
+    "subsequent_browser_result": "User reported entry abort at 01560a22; decoder regression tracked separately in entry_crash_regression_20261024."
+  },
+  "entry_crash_regression_20261024": {
+    "date": "2026-10-24",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "reported_wasm_sha256": "1321072f9b3acaca8658d25dfd34715f220e80b881598d6e94eae6a370a079cf",
+    "reported_behavior": "Abort on entering a game; no city FPS measurement.",
+    "cause": "Regression in the previous decoder change: skipped instructions were not revisited when a later backward branch targeted them.",
+    "target": "01560a22",
+    "branch": "01560bae -> 01560a2a",
+    "verified_destination": "MOV EAX,[ESP+0x1c], a real boundary in the pinned PE; incorrectly classified as inside an instruction.",
+    "fix": "Bounded reachable-instruction worklist, ordered overlap validation and branch index resolution; preserve refusal for real instruction interiors and out-of-range branches.",
+    "tests": [
+      {
+        "binary": "interp_tests",
+        "args": [],
+        "exit_code": 0,
+        "wasm_sha256": "503db9cbb9485edcd3e48e7ae37983fa94a68e2509843cedb9a82a55d9ddcc10"
+      },
+      {
+        "binary": "audio_controls_tests",
+        "args": [],
+        "exit_code": 0,
+        "wasm_sha256": "f634f73af5711d9f7cdd9d4758a8fb998ee96c027f69d9c354827bf2c1d0ee41"
+      },
+      {
+        "binary": "dx_tests",
+        "args": [
+          "--audio-channel-reset"
+        ],
+        "exit_code": 0,
+        "wasm_sha256": "631137d0e1f2d1700929e630acc06c859bef45a8696a172b86482541d48883fc"
+      },
+      {
+        "binary": "game_boot_probe",
+        "args": [
+          "variants/singleplayer/prepared/gta_sa.exe",
+          "--decode",
+          "005a0035"
+        ],
+        "exit_code": 0,
+        "wasm_sha256": "2422aa0fe20977f47d6baedca7673a74d4ec3fe850d64e8dd0c2129b7cc4b1ca"
+      },
+      {
+        "binary": "game_boot_probe",
+        "args": [
+          "variants/singleplayer/prepared/gta_sa.exe",
+          "--decode",
+          "01560a22"
+        ],
+        "exit_code": 0,
+        "wasm_sha256": "2422aa0fe20977f47d6baedca7673a74d4ec3fe850d64e8dd0c2129b7cc4b1ca"
+      }
+    ],
+    "interpreter_checks_passed": 733,
+    "audio_control_checks_passed": 107,
+    "audio_channel_reuse_checks_passed": 3,
+    "new_regression_scope": "Execute zero/one/three backward-loop iterations through a skipped block; invalidate cached code after changing that block. Preserve true-overlap refusal and runaway budgets.",
+    "before_probe_wasm_sha256": "5964c46e8c52189a4e0a5c648d95285af6e54f35711b4c600f32e999282df9bc",
+    "evidence_path": "build/entry-crash-20261024",
+    "browser_gameplay_verified": false,
+    "fps_gain_verified": false,
+    "deployed": false,
+    "build_state": "preparing_browser",
+    "pending": [
+      "Finish full-module optimization/V8 validation and local HTTP staging.",
+      "Browser retest entering a game, old crash route, Audio menu, pitch and city performance."
+    ],
+    "render_profile_observed": {
+      "automatic_scale": 1.75,
+      "submits_per_frame": 1,
+      "buffer_renames": true,
+      "scope": "Observed only before abort; no city-performance or visual validation."
+    },
+    "runtime_patch_sha256": "aa59d3d1cffd341362e77670163b12ec3995c1732719470975b55daad26a055a",
+    "unicorn_differential": {
+      "pytest_cases_passed": 131,
+      "random_integer_routines": 300,
+      "extended_integer_cases": 76,
+      "narrow_comparison_cases": 49,
+      "reachable_control_flow_cases": 5,
+      "log": "build/entry-crash-20261024/unicorn-tests.log"
+    },
+    "interim": {
+      "state": "staged",
+      "wasm_sha256": "7c5008a80038f8e741f1001022137819871746673a4e14260709ee005f638d13",
+      "bytes": 260326761,
+      "v8_full_compile_passed": true,
+      "optimized": false,
+      "browser_gameplay_verified": false,
+      "deployed": false,
+      "local_http_verified": true,
+      "scope": "Validated unoptimized intermediate staged for entry-crash retest while Binaryen optimization continues; not a performance comparison."
+    }
   }
 }

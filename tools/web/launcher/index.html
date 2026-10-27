@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Grand Theft Auto: San Andreas</title>
+<link rel="icon" type="image/png" href="favicon.png?v=1">
+<link rel="stylesheet" href="menu.css">
+</head>
+<body>
+<div class="start" id="start">
+  <div class="scene" aria-hidden="true">
+    <div class="photo is-visible"></div>
+    <div class="photo photo-next"></div>
+
+  </div>
+
+  <header class="topbar">
+    <button class="save-help" id="save-help" type="button">Is my progress saved?</button>
+    <div class="launcher-controls">
+      <button class="background-toggle" id="background-toggle" type="button" aria-pressed="false" hidden>Pause backgrounds</button>
+      <button class="music-toggle" id="music-toggle" type="button" aria-pressed="false">Mute music</button>
+    </div>
+  </header>
+  <audio id="launcher-music" src="launcher-music.mp3" preload="metadata" loop></audio>
+
+  <main class="hero">
+    <section class="left">
+      <h1 class="game-logo">
+        <img src="gta-sa-logo.png" width="1965" height="1814" alt="Grand Theft Auto: San Andreas" fetchpriority="high">
+      </h1>
+
+      <nav class="menu" id="menu" aria-label="Main menu">
+        <button class="menu-item selected" type="button" data-action="play">
+          <span class="arrow" aria-hidden="true">▶</span>
+          <span id="play-label">Start game</span>
+        </button>
+        <button class="menu-item" type="button" data-action="library">
+          <span class="arrow" aria-hidden="true">▶</span>
+          <span>Files and saves</span>
+        </button>
+      </nav>
+
+      <div class="status-line" id="status-line" role="status" aria-live="polite">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="status-text">Checking files…</span>
+      </div>
+      <div class="start-progress" id="start-progress" hidden>
+        <div class="bar" id="start-bar"></div>
+      </div>
+
+    </section>
+  </main>
+
+  <aside class="contributors" aria-labelledby="contributors-title">
+    <a class="contributors-title" id="contributors-title" href="https://github.com/Galavic/Gta-SA-OC/graphs/contributors" target="_blank" rel="noopener noreferrer">GitHub contributors</a>
+    <ul>
+      <li><button class="contributor" type="button" data-contributor="lauta" aria-haspopup="dialog" aria-controls="contributor-card">
+        <img src="https://avatars.githubusercontent.com/u/265983493?v=4&amp;s=96" crossorigin="anonymous" referrerpolicy="no-referrer" width="40" height="40" alt="">
+        <span>lauta</span>
+      </button></li>
+      <li><button class="contributor" type="button" data-contributor="Galavic" aria-haspopup="dialog" aria-controls="contributor-card">
+        <img src="https://avatars.githubusercontent.com/u/203557097?v=4&amp;s=96" crossorigin="anonymous" referrerpolicy="no-referrer" width="40" height="40" alt="">
+        <span>Galavic</span>
+      </button></li>
+    </ul>
+  </aside>
+
+  <footer class="menu-help"><span><kbd>Enter</kbd> Select</span><span><kbd>Esc</kbd> Back</span></footer>
+</div>
+
+<div class="modal" id="contributor-card" hidden>
+  <section class="panel contributor-panel" role="dialog" aria-modal="true" aria-labelledby="contributor-name">
+    <button class="panel-close" type="button" data-close="contributor-card" aria-label="Close profile">&#215;</button>
+    <header class="contributor-profile">
+      <img id="contributor-avatar" width="96" height="96" alt="" crossorigin="anonymous" referrerpolicy="no-referrer">
+      <div>
+        <p class="profile-eyebrow">Project contributor</p>
+        <h2 id="contributor-name"></h2>
+      </div>
+    </header>
+    <div class="social-links" aria-label="Social profiles">
+      <a class="social-link" data-social="x" target="_blank" rel="noopener noreferrer">
+        <span class="social-symbol" aria-hidden="true"><img src="social-icons/x.svg" width="28" height="28" alt=""></span>
+        <span class="social-description"><strong>X</strong><span class="social-value"></span></span>
+        <span class="social-action" aria-hidden="true">&#8599;</span>
+      </a>
+      <a class="social-link" data-social="github" target="_blank" rel="noopener noreferrer">
+        <span class="social-symbol" aria-hidden="true"><img src="social-icons/github.svg" width="28" height="28" alt=""></span>
+        <span class="social-description"><strong>GitHub</strong><span class="social-value"></span></span>
+        <span class="social-action" aria-hidden="true">&#8599;</span>
+      </a>
+      <a class="social-link" data-social="discordGroup" target="_blank" rel="noopener noreferrer">
+        <span class="social-symbol" aria-hidden="true"><img src="social-icons/discord.svg" width="28" height="28" alt=""></span>
+        <span class="social-description"><strong>Discord group</strong><span class="social-value"></span></span>
+        <span class="social-action" aria-hidden="true">&#8599;</span>
+      </a>
+      <a class="social-link" data-social="whatsapp" target="_blank" rel="noopener noreferrer">
+        <span class="social-symbol" aria-hidden="true"><img src="social-icons/whatsapp.svg" width="28" height="28" alt=""></span>
+        <span class="social-description"><strong>WhatsApp</strong><span class="social-value"></span></span>
+        <span class="social-action" aria-hidden="true">&#8599;</span>
+      </a>
+    </div>
+  </section>
+</div>
+
+<div class="modal" id="library" hidden>
+  <section class="panel" role="dialog" aria-modal="true" aria-labelledby="library-title">
+    <button class="panel-close" type="button" data-close="library" aria-label="Close">✕</button>
+    <h2 id="library-title">Files and saves</h2>
+    <p class="lead">Manage your local game files, saved games, and storage used by the game in this browser.</p>
+
+    <div class="storage">
+      <span id="lib-storage">Checking storage…</span>
+      <button id="persist" type="button" hidden>Keep game data</button>
+      <span class="note" id="storage-note"></span>
+    </div>
+    <span class="sr-only" id="storage-text"></span>
+
+    <section class="games" id="games" aria-live="polite"></section>
+  </section>
+</div>
+
+<div class="modal" id="save-note" hidden>
+  <section class="panel" role="dialog" aria-modal="true" aria-labelledby="save-title">
+    <button class="panel-close" type="button" data-close="save-note" aria-label="Close">✕</button>
+    <h2 id="save-title">Your progress</h2>
+    <div class="save-copy">
+      <p>Saved games stay in this browser’s private storage on the computer you play on.
+         They are not uploaded to a server.</p>
+      <ul>
+        <li>Clearing this site’s browser data also deletes your saved games.</li>
+        <li>Use <strong>Export saves</strong> in the library to download a ZIP backup.</li>
+        <li>You can import that backup in another browser or restore it later.</li>
+      </ul>
+      <p>This is an unofficial technical project, not affiliated with Rockstar Games.</p>
+    </div>
+  </section>
+</div>
+
+<input type="file" id="folder-input" webkitdirectory hidden>
+<input type="file" id="zip-input" accept=".zip,application/zip" hidden>
+
+<template id="game-card">
+  <article class="game">
+    <h2></h2>
+    <div class="state"></div>
+    <div class="detail"></div>
+    <div class="progress" hidden>
+      <progress max="1" value="0"></progress>
+      <div class="detail progress-text"></div>
+    </div>
+    <div class="message" role="status" hidden></div>
+    <div class="buttons">
+      <button class="primary play">Play</button>
+      <button class="import-folder">Import folder…</button>
+      <button class="import-zip">Import ZIP…</button>
+      <button class="cancel" hidden>Cancel</button>
+      <button class="retry-status" hidden>Check again</button>
+      <a class="button store" target="_blank" rel="noopener" hidden>Get the game</a>
+    </div>
+    <details>
+      <summary>Manage</summary>
+      <div class="buttons">
+        <button class="export-saves">Export saves</button>
+        <button class="import-saves">Import saves…</button>
+        <button class="delete">Delete game data</button>
+      </div>
+    </details>
+  </article>
+</template>
+
+<script type="module" src="app.js"></script>
+<script type="module" src="start.js"></script>
+<script type="module" src="menu-sounds.js"></script>
+</body>
+</html>

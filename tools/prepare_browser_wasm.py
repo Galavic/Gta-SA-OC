@@ -1,0 +1,165 @@
+"""Optimise browser Wasm and validate the complete module with V8 before staging.
+
+Binaryen may merge or remove compiled functions. Keep the original linked input
+for comparison; structural checks and V8 compilation do not verify gameplay.
+"""
+import argparse
+import hashlib
+import json
+import mmap
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import time
+import tomllib
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def uleb(data, offset):
+    value = shift = 0
+    while True:
+        byte = data[offset]
+        offset += 1
+        value |= (byte & 127) << shift
+        if not byte & 128:
+            return value, offset
+        shift += 7
+        if shift > 63:
+            raise ValueError("Invalid Wasm LEB128")
+
+
+def inspect_and_strip(source, destination=None):
+    """Count locals, stripping custom debug sections without decoding instructions."""
+    high = []
+    maximum = functions = 0
+    output = destination.open("wb") if destination else None
+    try:
+        with source.open("rb") as stream, mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as data:
+            assert data[:8] == b"\0asm\1\0\0\0"
+            if output:
+                output.write(data[:8])
+            cursor = 8
+            while cursor < len(data):
+                start = cursor
+                section = data[cursor]
+                size, payload = uleb(data, cursor + 1)
+                end = payload + size
+                assert end <= len(data)
+                if section == 10:
+                    count, position = uleb(data, payload)
+                    functions = count
+                    for index in range(count):
+                        body_size, body = uleb(data, position)
+                        position = body + body_size
+                        groups, local = uleb(data, body)
+                        total = 0
+                        for _ in range(groups):
+                            number, local = uleb(data, local)
+                            total += number
+                            local += 1  # This build uses numeric/reference shorthand types.
+                        maximum = max(maximum, total)
+                        if total >= 50000:
+                            high.append(dict(defined_index=index, locals=total))
+                keep = True
+                if section == 0:
+                    length, name_start = uleb(data, payload)
+                    name = data[name_start:name_start + length]
+                    keep = not name.startswith(b".debug_")
+                if output and keep:
+                    for part in range(start, end, 1024 * 1024):
+                        output.write(data[part:min(part + 1024 * 1024, end)])
+                cursor = end
+    finally:
+        if output:
+            output.close()
+    return dict(functions=functions, maximum_locals=maximum, excessive_locals=high)
+
+
+def prepare(sdk, game_dir=ROOT, input_path=None):
+    started = time.time()
+    game_dir = Path(game_dir).resolve()
+    config = tomllib.loads((game_dir / "game.toml").read_text(encoding="utf-8"))["game"]
+    app_name, game_id = config["app_name"], config["id"]
+    directory = game_dir / "build/web/recomp"
+    source = directory / f"{app_name}.wasm"
+    input_path = Path(input_path).resolve() if input_path else source
+    original = directory / f"{app_name}.linked.wasm"
+    stripped = directory / f"{app_name}.stripped.wasm"
+    candidate = directory / f"{app_name}.browser.wasm"
+    status_file = game_dir / "build/browser-wasm-status.json"
+    status = dict(state="running", pid=os.getpid(), playable_verified=False)
+    def save():
+        status_file.write_text(json.dumps(status, indent=2), encoding="utf-8")
+    save()
+    try:
+        if input_path != original and not original.exists():
+            shutil.copy2(input_path, original)
+        with input_path.open("rb") as stream:
+            status["input_sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
+        status["before"] = inspect_and_strip(input_path, stripped)
+        save()
+        print("Before:", status["before"], flush=True)
+        # Limit parallel scratch graphs on this machine while keeping two cores busy.
+        env = dict(os.environ, BINARYEN_CORES="2")
+        # Run even when the module fits V8's local limit: the linked guest C
+        # may be unoptimised. Upstream verified a size reduction, not an FPS
+        # gain. Do not enable unsupported Wasm proposals with --all-features.
+        command = [str(sdk / "upstream/bin/wasm-opt.exe"), str(stripped),
+                   "-O2", "--strip-debug",
+                   "-o", str(candidate)]
+        status["optimization"] = "wasm-opt -O2 --strip-debug"
+        subprocess.run(command, env=env, check=True)
+        status["after"] = inspect_and_strip(candidate)
+        print("After:", status["after"], flush=True)
+        assert 0 < status["after"]["functions"] <= status["before"]["functions"]
+        assert not status["after"]["excessive_locals"], "Wasm still exceeds browser local limits"
+        node = next((sdk / "node").glob("*/node.exe"))
+        # Compiling the entire module checks browser-engine limits, beyond binary validity.
+        check = "const fs=require('fs'); WebAssembly.compile(fs.readFileSync(process.argv[1])).then(()=>console.log('V8 full module compilation passed')).catch(e=>{console.error(e);process.exit(1)});"
+        subprocess.run([str(node), "-e", check, str(candidate)], check=True)
+        status["v8_compile_passed"] = True
+        with candidate.open("rb") as stream:
+            status["output_sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
+        pending_source = source.with_suffix(".wasm.new")
+        shutil.copy2(candidate, pending_source)
+        pending_source.replace(source)
+        site = game_dir / "build/web-site" / game_id / f"{app_name}.wasm"
+        pending = site.with_suffix(".wasm.new")
+        shutil.copy2(candidate, pending)
+        pending.replace(site)
+        status.update(state="finished", exit_code=0, bytes=candidate.stat().st_size,
+                      seconds=time.time() - started)
+    except Exception as error:
+        status.update(state="failed", error=str(error), exit_code=1, seconds=time.time() - started)
+        raise
+    finally:
+        save()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--background", action="store_true")
+    parser.add_argument("--emsdk", type=Path, default=Path.home() / "GTASAWebToolchains/emsdk")
+    parser.add_argument("--game-dir", type=Path, default=ROOT,
+                        help="Game directory whose build/web/recomp to prepare (default: repository root)")
+    parser.add_argument("--input", type=Path, help="Explicit linked Wasm input for reproducible A/B preparation")
+    args = parser.parse_args()
+    if args.background:
+        game_dir = args.game_dir.resolve()
+        log_path = game_dir / "build/browser-wasm.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("w", encoding="utf-8") as log:
+            command = [sys.executable, str(Path(__file__).resolve()),
+                       "--emsdk", str(args.emsdk), "--game-dir", str(game_dir)]
+            if args.input:
+                command.extend(["--input", str(args.input.resolve())])
+            process = subprocess.Popen(command,
+                                       cwd=ROOT, stdin=subprocess.DEVNULL, stdout=log,
+                                       stderr=subprocess.STDOUT,
+                                       creationflags=subprocess.CREATE_NO_WINDOW)
+        print("Browser Wasm preparation PID", process.pid)
+    else:
+        prepare(args.emsdk, args.game_dir, args.input)

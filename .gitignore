@@ -8,6 +8,7 @@ prepared/
 __pycache__/
 .pytest_cache/
 .clyra/
+.wrangler/
 variants/
 *.pyc
 *.bak*
@@ -37,3 +38,8 @@ web/recreation/public/original-ui/
 web/recreation/public/original-audio/
 web/recreation/tools/txd-index.json
 web/recreation/checks/
+
+# Local Roblox recreation
+/roblox/
+*.rbxl
+*.rbxlx

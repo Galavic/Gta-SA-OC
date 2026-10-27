@@ -4,7 +4,6 @@
 - Document verified progress and outstanding blockers in docs/STATUS.md and
   docs/progress.json; preserve historical evidence with its executable identity.
 - Keep code and documentation in the user's Gta-SA-OC repository. Never publish
-  original game assets, generated game code, executable artifacts, private dumps,
   credentials or machine-specific personal paths.
 - Do not claim a complete conversion, 1:1 equivalence, playable status, a reliable
   conversion percentage or priority over other projects without supporting evidence.

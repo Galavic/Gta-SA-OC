@@ -26,6 +26,7 @@ async function boot({ stamp = "expected", empty = false } = {}) {
     location: { pathname: "/test/", search: "" },
     console: { log() {}, warn() {} },
     document: { title: "", body: element(), createElement: element,
+      addEventListener() {},
       getElementById(id) { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); } },
     navigator: { storage: { getDirectory: async () => dir },
       gpu: { requestAdapter: async () => ({ features: new Set(), limits: {}, requestDevice: async () => device }) } },
@@ -40,13 +41,13 @@ async function boot({ stamp = "expected", empty = false } = {}) {
 test("exe-only import never loads the runtime", async () => {
   const b = await boot({stamp: null});
   assert.equal(b.window.Module, undefined);
-  assert.match(b.elements.get("status").textContent, /import is incomplete/);
+  assert.match(b.elements.get("status").textContent, /could not be validated/);
 });
 test("wrong-image stamp and empty asset folders are refused", async () => {
   for (const options of [{stamp: "wrong"}, {empty: true}]) {
     const b = await boot(options);
     assert.equal(b.window.Module, undefined);
-    assert.match(b.elements.get("status").textContent, /import is incomplete/);
+    assert.match(b.elements.get("status").textContent, /could not be validated/);
   }
 });
 test("engine failure remains visible after empty progress messages", async () => {
