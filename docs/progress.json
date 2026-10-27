@@ -1,5 +1,113 @@
 {
-  "web_git_snapshot_20261027": {
+  "browser_frame_time_round": {
+    "updated_utc": "2026-10-23T00:00:00+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "target": "Raise browser gameplay frame rate toward 60 FPS, or establish with evidence what prevents it.",
+    "corrects": "browser_performance_triage_frame_limiter_round",
+    "correction": "That round concluded there was no frame cap to remove and that the ~41 ms frame was guest simulation. Both claims are wrong. The frame is bounded by elapsed time, not by work, and the wait is a 14 ms budget the game's own main loop enforces.",
+    "measurement_method": {
+      "harness": "A CDP harness that reaches gameplay by pressing Enter until the draw count exceeds 100, then polls window.recompLog every 3 s instead of reading it once at the end. Reading the bounded 200-line log at the end of a run that keeps playing loses the frame reports because the sound system floods it; earlier rounds lost samples this way.",
+      "comparability": "Runs are compared at matched draw counts in the same alley. The draw count drifts between runs, so a single fps number without its draw count is not evidence."
+    },
+    "evidence_the_frame_is_time_bounded": {
+      "clock_scale_experiment": {
+        "what": "RECOMP_QPC_SCALE multiplies the counter QueryPerformanceCounter hands the guest. A frame bounded by work does not move; a frame bounded by elapsed time shortens in proportion.",
+        "same_build_scale_1": {
+          "fps": 24.35,
+          "draws": 822,
+          "guest_insns_per_frame_millions": 9.02,
+          "insn_ns": 4.55
+        },
+        "same_build_scale_2": {
+          "fps": 37.8,
+          "draws": 719,
+          "guest_insns_per_frame_millions": 7.99,
+          "insn_ns": 3.31
+        },
+        "result": "FPS rises 55% while instructions per frame FALL. The work did not shrink; the wait disappeared. Clock reads drop from 202-257k/s to 88-93k/s."
+      },
+      "throughput_does_not_move_fps": [
+        {
+          "build": "no wasm-opt",
+          "insn_per_s_millions": 220,
+          "fps": 24.35
+        },
+        {
+          "build": "wasm-opt -O2",
+          "insn_per_s_millions": 282,
+          "fps": 24.2
+        },
+        {
+          "build": "no wasm-opt, other scene",
+          "insn_per_s_millions": 302,
+          "fps": 24.0
+        },
+        {
+          "build": "no wasm-opt, other scene",
+          "insn_per_s_millions": 312,
+          "fps": 24.0
+        }
+      ],
+      "throughput_result": "A 42% spread in emulator throughput across four builds produces 24.00-24.35 FPS. A faster emulator that yields no additional frame is waiting, not computing.",
+      "throughput_caveat": "The insn/s column is NOT stable on this machine: the same artifact has measured between 2.73 and 7.33 ns per guest instruction across runs, and one run of the pair did not reach gameplay at all. Those figures are indicative only and must not be used to compare builds. The argument rests on fps, which is stable at 24.0-24.4 across every measurement, and above all on the clock-scale experiment, which compares one build against itself and moves fps by 55%."
+    },
+    "the_wait_named": {
+      "main_loop": "FUN_0053e920, the game's frame loop. Its first instruction calls the clock reader and the code that follows is the wait at L_0053e930 in variants/singleplayer/build/recomp/gen/chunk_037.c.",
+      "shape": "CALL 0x00561a80 (t0 = QPC - [0x00b7cb38]); CALL 0x00561a40 (frequency = [0x00b7cb2c]); DIV; SUB [0x00b72ca8]; CMP EAX,0xe; JC 0x0053e930.",
+      "hot_site": "RECOMP_QPC_CALLERS, extended to report the caller of the clock reader rather than the reader itself, names 0053e935 with 27917122 reads against 19186 for the next site.",
+      "frequency_measured": 1000,
+      "meaning": "The loop spins until the counter has advanced 14 ms from the marker stored in [0x00b72ca8].",
+      "direct_measurement": "RECOMP_LIMITER_PROBE groups reads separated by less than 1 ms and times the groups. The wait occupies 14-21% of wall time in bursts of thousands of reads. This is a lower bound: the guest stops inside the bursts while the host presentation thread keeps working, so the real fraction of the frame is larger.",
+      "arithmetic": "27 ms of work + 14 ms of wait = 41 ms = 24.4 FPS. Removing the wait leaves 27 ms, i.e. 1/0.027 ~ 37 FPS, which is what RECOMP_QPC_SCALE=2 measured independently (37.80)."
+    },
+    "ceiling_once_the_wait_is_removed": {
+      "wasm_opt_plus_scale_8": {
+        "fps": 39.5,
+        "draws": 748
+      },
+      "scale_64": {
+        "fps": 24.15,
+        "draws": "466-627",
+        "note": "Too aggressive: scaling the clock 64x also breaks the guest's own streaming and timing, the draw count collapses, and the frame rate falls back. Scale 8 is the useful maximum, so ~39.5 FPS is the emulator's ceiling on this scene."
+      },
+      "conclusion": "60 FPS is NOT reached. With the wait gone the limit becomes the emulator at ~39.5 FPS on this scene, and a scene needing 41 ms of work would still sit at 24 FPS.",
+      "budget_for_60_fps": {
+        "now": {
+          "frame_ms": 25.3
+        },
+        "needed": {
+          "frame_ms": 16.7
+        },
+        "reading": "60 FPS requires about 1.5x less work per frame than the emulator does today. This is derived from fps, the only stable measurement here; the per-instruction cost figures are not stable enough to budget from. The flag-liveness analysis has demonstrated nothing in two attempts and wasm-opt only reduces size, so this is not a small remaining margin."
+      }
+    },
+    "not_shipped_and_why": {
+      "qpc_scale": "The 14 ms budget is the game's own pacing: it is the delta the game imposes between frames. Removing it changes physics, animation and traffic pacing, so it is a gameplay decision and not an optimisation. RECOMP_QPC_SCALE exists only as a diagnostic and is inert unless set.",
+      "distortion": "RECOMP_QPC_SCALE distorts everything the guest times, so it cannot be used to judge whether the game behaves correctly, only to measure the ceiling.",
+      "implication_for_other_work": "While the frame is bounded by this wait, no optimisation can show up as FPS. That invalidates how performance changes have been compared in this project so far: a change can be genuinely faster and still measure the same frame rate, which is exactly what every build in this round did."
+    },
+    "kept": {
+      "wasm_opt_size_only": "prepare_browser_wasm.py now always runs wasm-opt -O2 on the linked module, but for SIZE, not speed. The link rule compiles the recompiled C with -pthread -g and no -O, so without this pass the browser receives unoptimised code; -O2 takes the module from 254.2 MB to 229.7 MB (-9.6%) with no recompilation, and the result compiles in V8 and plays. A controlled A/B on the SAME generated code with the browser cache disabled measures 2.73 ns per instruction without it and 2.82 ns with it, i.e. no difference within noise.",
+      "retracted_wasm_opt_speed_claim": "This round initially recorded wasm-opt -O2 as giving ~22% more guest instructions per second, from 4.55 ns before to 3.40-3.70 ns after. That claim is RETRACTED. The 4.55 ns figure belonged to a different generation of the translator, not to the same binary, so the comparison was confounded. The measured effect on the same binary is none.",
+      "assert_corrected": "The preparation asserted that the optimised module had exactly the same function count as the input. That held only because -O2 never ran; with it running, wasm-opt inlines and drops functions, and the count legitimately fell from 212830 to 190806 while maximum locals fell from 2929 to 108. The assertion now requires a non-empty module no larger than its input, which still catches being handed the wrong file without rejecting every optimised module.",
+      "all_features_removed": "wasm-opt --all-features produced a module that V8 rejects with 'unknown import kind 0x7f' even though wasm-opt's own validator accepted it. The flag was removed; the V8 compile the script already performs is what proves the output is valid.",
+      "cache_disabled_in_harness": "The measurement harness now disables the browser cache over CDP. Without that, the fixed module URL meant a cached copy could silently make a run describe the previous artifact; one run measured 4.33 ns per instruction that way against 2.82 ns once the cache was off.",
+      "diagnostics": "RECOMP_QPC_SCALE, RECOMP_LIMITER_PROBE and the extended RECOMP_QPC_CALLERS are off unless their environment variables are set; the off path is one static bool per call site."
+    },
+    "reverted": {
+      "watch_instrumentation": "Moving recomp_watch's slow path out of line (recomp_watch_slow in memory.cpp) stopped the game from reaching gameplay. The control experiment was decisive: with that change reverted and the translator unchanged, gameplay returned at 24.35 FPS. It was worth about one operation per instruction and is not worth the risk; it is fully reverted in runtime/x86.h and runtime/memory.cpp.",
+      "flag_liveness": "The flag-liveness analysis is now self-verifying per image: a forwards must-defined check runs over every function before anything is emitted, and a single unproven read puts that whole image back on the conservative path. On the main image it reports 504 unproven reads and is therefore NOT used, so the shipped code contains no unproven flag removal; the four auxiliary images pass the check and use it. The analysis has never demonstrated a speed-up and its sound form measured worse per instruction (4.55 vs 3.50 ns) because its walls propagate through the graph, including return edges."
+    },
+    "outstanding_blockers": [
+      "60 FPS is not reached: the emulator ceiling on this scene is ~39.5 FPS once the game's 14 ms wait is removed.",
+      "Whether to remove or shorten the game's own 14 ms frame budget is an open gameplay decision, not an engineering one; it changes simulation pacing.",
+      "Fixed-function vertex blending is still unimplemented for streams that rely on it.",
+      "tools/recomp/tests is only partially runnable here (missing fixtures, numpy, and a kit-relative build/recomp/gen/table.c); native d3d9_ffp_tests cannot run.",
+      "Unverified: missions, vehicles, audio actually heard, save/load, stability beyond ~35 min, and city-wide draw coverage.",
+      "The build is still not bit-reproducible."
+    ]
+  },
+"web_git_snapshot_20261027": {
     "checked_utc": "2026-10-27T06:19:25.072272+00:00",
     "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
     "python_tests_passed": 112,

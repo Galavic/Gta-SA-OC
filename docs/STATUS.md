@@ -3247,3 +3247,166 @@ Regla off-image-CALL-noreturn el 2026-10-14 (
 ever_returns cubre CALL directo fuera de imagen/shims/intrinsecos, con guarda sin-bytes para tests; regresion nueva; el trap NO limpia filas vivas, solo poda colas). Dangling 12-9 (fuera las 3 filas de CALLs fuera de imagen y tambien 00d3eee0/00d5404c/00e3b569 por dinamica de pruebas; 3 huerfanos nuevos auditados a forget, 97 total). 329 suites.
 
 Estado 2026-10-14: 0 fallidas, 9 dangling: 00d52a60-00d52a85, 00d53b90-01eaf735, 00d55360-00d553bd (x2), 012907c0-16ed3fc0, 01297d80-01297dd8, mas 3 huerfanos en forget. Siguiente: medir la pasada en curso (PID 19392).
+
+## Evidencia adicional conservada de origin/main
+
+Las secciones siguientes conservan los reportes de los commits remotos.
+Sus medidas pertenecen a sus artefactos; no sustituyen las validaciones locales
+mas recientes ni verifican el parche actual. El snapshot completo local del
+runtime se conserva; esta fusion no aplica parches historicos sobre el checkout.
+
+## Rendimiento: el fotograma lo limita una espera de 14 ms del propio juego (2026-10-23)
+
+Esta sección **corrige la siguiente**, que concluía que "no hay limitador que retirar" y que
+los ~41 ms por fotograma eran simulación. Esa conclusión es falsa, y la sección anterior se
+conserva como evidencia de lo que se midió entonces y de por qué se creyó.
+
+Medido en el navegador con el mismo `wasm` sin optimizar, servido en
+`http://127.0.0.1:8771/gtasa-singleplayer/`, con el medidor que sondea
+`window.recompLog` en vivo (leerlo al final de la ejecución pierde los informes: el búfer
+guarda 200 líneas y el audio lo inunda).
+
+### El fotograma está acotado por tiempo, no por CPU
+
+Dos experimentos independientes, cada uno suficiente por separado.
+
+**Uno: escalar el reloj que ve el invitado.** `RECOMP_QPC_SCALE` multiplica el contador que
+`QueryPerformanceCounter` entrega al juego. Si el fotograma estuviera acotado por trabajo,
+esto no cambiaría el fps; si está acotado por tiempo, el invitado alcanza su plazo antes y
+el fps sube en la misma proporción.
+
+| Ejecución, mismo build | fps | draws | insn/fotograma |
+|---|---|---|---|
+| `RECOMP_QPC_SCALE` sin definir | 24,35 | 822 | 9,02 M |
+| `RECOMP_QPC_SCALE=2` | **37,80** | 719 | 7,99 M |
+
++55 % de fps, y **menos** instrucciones ejecutadas por fotograma: el trabajo no ha
+disminuido, lo que ha desaparecido es la espera. Las lecturas de reloj caen de
+202-257 k/s a 88-93 k/s.
+
+**Dos: la velocidad del emulador no cambia el fps.**
+
+| Build | insn/s | fps |
+|---|---|---|
+| sin `wasm-opt` | 220 M | 24,35 |
+| `wasm-opt -O2` | 282 M | 24,20 |
+| sin `wasm-opt`, otra escena | 302 M | 24,00 |
+| sin `wasm-opt`, otra escena | 312 M | 24,00 |
+
+Un 42 % de diferencia de rendimiento entre el más lento y el más rápido, y el fps se mueve
+entre 24,00 y 24,35. Un emulador más rápido que no produce ni un fotograma más está
+esperando algo, no calculando.
+
+Aviso sobre la columna `insn/s`: en esta máquina es **inestable entre ejecuciones**. El mismo
+artefacto ha medido entre 2,73 y 7,33 ns por instrucción según la ejecución, así que esas
+cifras son indicativas y no sirven para comparar builds. El argumento descansa en el fps, que
+sí es estable (24,0-24,4 en todas las mediciones), y sobre todo en el experimento del reloj,
+que es una comparación del mismo build contra sí mismo y mueve el fps un 55 %.
+
+### La espera tiene nombre y cuenta
+
+El bucle principal del juego es `FUN_0053e920`. Su primera instrucción es una llamada al
+lector de tiempo y lo siguiente es esta espera (`chunk_037.c`, `L_0053e930`):
+
+```
+L_0053e930:  CALL 0x00561a80        ; t0 = QPC - [0x00b7cb38]
+             MOV ESI,EAX
+             CALL 0x00561a40        ; EAX = [0x00b7cb2c]
+             MOV ECX,EAX
+             XOR EDX,EDX
+             MOV EAX,ESI
+             DIV ECX                ; e = t0 / frecuencia
+             SUB EAX,[0x00b72ca8]   ; e -= marcador del fotograma anterior
+             CMP EAX,0xe            ; ¿menos de 14?
+             JC 0x0053e930          ; entonces vuelve a leer el reloj
+```
+
+`RECOMP_QPC_CALLERS` identifica el sitio: **`0053e935`, 27.917.122 lecturas**, frente a
+19.186 del siguiente. Con `[0x00b7cb2c] = 1000` (medido), la espera son **14 ms**: el bucle
+gira hasta que el reloj ha avanzado 14 ms desde el inicio del fotograma.
+
+`RECOMP_LIMITER_PROBE` mide la ráfaga directamente, sin inferirla: agrupa lecturas separadas
+por menos de 1 ms y mide su duración. La espera ocupa **14-21 % del tiempo de pared**, en
+ráfagas de miles de lecturas. Es un límite inferior: el invitado se detiene dentro de esas
+ráfagas, pero el hilo de presentación del host sigue trabajando, así que la fracción real del
+fotograma es mayor.
+
+La aritmética cierra: 27 ms de trabajo + 14 ms de espera = 41 ms = 24,4 fps. Y quitando la
+espera quedan los 27 ms de trabajo, es decir 1/0,027 ≈ 37 fps — que es exactamente lo que
+midió `RECOMP_QPC_SCALE=2` (37,80). Dos estimaciones independientes que coinciden.
+
+El modelo también explica lo que parecía contradecirlo: con muchas *draws* el fps baja de
+24,4. A 1.077 draws se midió 22,0 fps, y a 805-870 draws 24,4. Si el fotograma costara 27 ms
+de trabajo fijos, 1.077 draws no podrían bajarlo. Lo que ocurre es que el trabajo crece con
+las *draws* y, cuando supera el presupuesto de 25 fps, deja de ser la espera lo que manda:
+`fps = min(25, 1/trabajo)`. Ambas ramas de ese mínimo están medidas.
+
+### Qué no significa esto
+
+- **No es un 60 fps alcanzado.** Con la espera fuera, el techo pasa a ser el emulador: ~37
+  fps en esta escena. Una escena que necesite 41 ms de trabajo sigue en 24 fps.
+- **No se ha enviado.** La espera es el ritmo del propio juego: 14 ms es el delta de tiempo
+  que el juego se impone entre fotogramas. Quitarlo cambia el paso de la simulación
+  (física, animación, tráfico) y es una decisión de jugabilidad, no una optimización. Por eso
+  `RECOMP_QPC_SCALE` existe solo como diagnóstico y no está activo por defecto.
+- `RECOMP_QPC_SCALE` distorsiona además todo lo que el invitado temporiza, así que **no
+  sirve para medir si el juego es correcto**, solo para medir el techo.
+
+### Decisión tomada: se mantiene el ritmo del juego
+
+La espera de 14 ms **se deja como está**. Es el ritmo que el juego se impone y el juego es
+dependiente del framerate (física, animación y tráfico escalan con el tiempo de fotograma), así
+que quitarla cambiaría el comportamiento. `RECOMP_QPC_SCALE` queda como diagnóstico inerte.
+
+Lo que esto significa para el estado del port, y es un cambio de lectura importante: **el
+port no es lento**. El emulador sostiene ~39,5 fps en esta escena y el juego pide 25; el techo
+de 24 fps que se venía midiendo es el diseño del juego, no una carencia de la conversión. La
+cabeza de margen disponible es de aproximadamente 1,6× sobre lo que el juego consume.
+
+### La corrección que importa para el resto del trabajo
+
+Mientras el fotograma esté acotado por esta espera, **ninguna optimización puede
+manifestarse como fps**. Eso invalida la forma en que se han estado comparando los cambios de
+rendimiento en este proyecto. Las optimizaciones del traductor siguen siendo reales, pero su
+efecto solo se podrá medir después de decidir qué se hace con la espera.
+
+### `wasm-opt -O2`: reducción de tamaño, sin mejora de velocidad demostrada
+
+Se creyó durante esta ronda que `wasm-opt -O2` daba un 22 % más de instrucciones por segundo,
+comparando 4,55 ns antes contra 3,40-3,70 ns después. **Esa afirmación se retira.** Una
+comparación controlada sobre el **mismo** código generado, con la caché del navegador
+desactivada, da lo contrario:
+
+| Mismo enlace, mismo código generado | insn_ns | fps |
+|---|---|---|
+| sin `wasm-opt` | 2,73 | 24,35 |
+| `wasm-opt -O2` | 2,82 | 24,40 |
+
+No hay diferencia dentro del ruido, y la cifra anterior de 4,55 ns pertenecía a una
+generación distinta del traductor, no al mismo binario. Lo que sí es cierto y se mantiene:
+`wasm-opt -O2` reduce el módulo de **254,2 MB a 229,7 MB (-9,6 %)** sin recompilar, y el
+módulo resultante compila en V8 y juega. Se mantiene por tamaño, no por velocidad.
+
+Dos correcciones de `tools/prepare_browser_wasm.py` que hicieron falta para poder usarlo:
+
+- La comprobación exigía que el recuento de funciones no cambiara. Eso solo se cumplía
+  porque `-O2` nunca llegaba a ejecutarse; al ejecutarse, `wasm-opt` aplica *inlining* y el
+  recuento baja de 212.830 a 190.806 (y los locales máximos de 2.929 a 108). Ahora se exige
+  un módulo no vacío y no mayor que la entrada.
+- `--all-features` producía un módulo que **V8 rechaza** (`unknown import kind 0x7f`) aunque
+  el validador de `wasm-opt` lo aceptara. Se retiró la bandera; la compilación en V8 que ya
+  hacía el script es la que lo demuestra.
+
+### Presupuesto real para 60 fps
+
+Con el limitador fuera y `wasm-opt` aplicado, el emulador sostiene **39,50 fps** en esta
+escena. De ahí sale el número que hacía falta, y sale del fps, que es la medida fiable aquí:
+
+| | Ahora | Para 60 fps |
+|---|---|---|
+| Presupuesto por fotograma | 25,3 ms | 16,7 ms |
+
+Es decir: **60 fps exige 1,5× menos trabajo por fotograma de lo que cuesta hoy**, no un
+ajuste. La vivacidad de banderas no ha demostrado nada en dos intentos y `wasm-opt` solo
+reduce tamaño. Lo que queda no es un margen pequeño, y por eso no se anuncia como alcanzado.
+
