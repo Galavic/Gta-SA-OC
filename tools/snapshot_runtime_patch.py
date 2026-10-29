@@ -27,7 +27,7 @@ def pinned_base():
 base = pinned_base()
 patch = subprocess.check_output(["git", "diff", "--binary", "HEAD", "--"], cwd=KIT)
 untracked = subprocess.check_output(["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=KIT)
-allowed = {".cpp", ".h", ".py", ".md", ".cmake", ".txt"}
+allowed = {".cpp", ".h", ".py", ".js", ".md", ".cmake", ".txt"}
 for name in untracked.decode().split("\0"):
     if not name:
         continue

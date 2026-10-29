@@ -2838,7 +2838,7 @@ index 7771a52..d158978 100644
          {"DirectShow graph playback", test_dshow_graph_playback},
          {"palette versions", test_palette_versions},
 diff --git a/host/CMakeLists.txt b/host/CMakeLists.txt
-index 58e79fd..7ef02d7 100644
+index 58e79fd..85e4377 100644
 --- a/host/CMakeLists.txt
 +++ b/host/CMakeLists.txt
 @@ -266,7 +266,13 @@ if(TARGET recomp_gen)
@@ -2856,7 +2856,15 @@ index 58e79fd..7ef02d7 100644
        file(COPY ${POP_BUILD_ROOT}/recomp/symbols.json DESTINATION ${web_resources})
      endif()
      if(EXISTS ${RECOMP_GAME_DIR}/mods/core)
-@@ -349,3 +355,16 @@ add_test(NAME headless_tests COMMAND headless_tests ${CMAKE_CURRENT_BINARY_DIR}/
+@@ -283,6 +289,7 @@ if(TARGET recomp_gen)
+       -sSTACK_SIZE=8388608 -sDEFAULT_PTHREAD_STACK_SIZE=16777216
+       -sENVIRONMENT=web,worker -sEXIT_RUNTIME=0 -sINVOKE_RUN=0
+       -sEXPORTED_RUNTIME_METHODS=ENV,callMain,FS
++      --js-library ${HOST}/sdl/library_demand_files.js
+       --preload-file ${web_resources}@/app/resources)
+   elseif(APPLE)
+     pop_mac_bundle(recomp_app)
+@@ -349,3 +356,16 @@ add_test(NAME headless_tests COMMAND headless_tests ${CMAKE_CURRENT_BINARY_DIR}/
    WORKING_DIRECTORY ${POP_ROOT})
  set_tests_properties(headless_tests PROPERTIES LABELS nogame)
  endif()
@@ -3796,10 +3804,21 @@ index 9211514..fd4b7ff 100644
  // A resize is a latest-value mailbox independent of presenter acknowledgement.
  // The next input event rebuilds layout geometry at this size, including when
 diff --git a/host/sdl/main.cpp b/host/sdl/main.cpp
-index d983f15..515d12f 100644
+index d983f15..5c33d71 100644
 --- a/host/sdl/main.cpp
 +++ b/host/sdl/main.cpp
-@@ -265,13 +265,24 @@ PointRect game_rect_points() {
+@@ -54,6 +54,10 @@
+ #include "../gpu/d3d9_backend.h"
+ #include <emscripten/emscripten.h>
+ #include <emscripten/wasmfs.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <sys/stat.h>
++#include <unistd.h>
+ #include <thread>
+ #endif
+ #include <SDL3/SDL_vulkan.h>
+@@ -265,13 +269,24 @@ PointRect game_rect_points() {
  // below and applied from pump(), which runs on a thread that holds the baton.
  // ---------------------------------------------------------------------------
  struct PendingInput {
@@ -3825,7 +3844,7 @@ index d983f15..515d12f 100644
      uint16_t key = 0;
      uint32_t character = 0;
      uint32_t flags = 0;
-@@ -467,8 +478,7 @@ void apply_motion(int32_t x, int32_t y, double drawable_dx, double drawable_dy)
+@@ -467,8 +482,7 @@ void apply_motion(int32_t x, int32_t y, double drawable_dx, double drawable_dy)
      const double now = (double(os_monotonic_ns()) / 1e9);
      if (trace && now - last_trace >= 0.1) {
          last_trace = now;
@@ -3835,7 +3854,7 @@ index d983f15..515d12f 100644
          fprintf(stderr,
                  "[pointer-game] drawable %d,%d hit %d at %d,%d delivered %d guest %d,%d bounds "
                  "%d,%d,%d,%d\n",
-@@ -554,6 +564,14 @@ void system_strip_insets(double *top, double *bottom) {
+@@ -554,6 +568,14 @@ void system_strip_insets(double *top, double *bottom) {
  }
  
  void handle_mouse_move(const SDL_MouseMotionEvent &motion) {
@@ -3850,7 +3869,7 @@ index d983f15..515d12f 100644
      // A real pointer move (not one the touch path or the binding itself
      // synthesized, which both arrive as SDL_TOUCH_MOUSEID): feed the mapped
      // binding's Cursor stick mode. A touch's own placement reaches it through
-@@ -589,15 +607,22 @@ void handle_mouse_move(const SDL_MouseMotionEvent &motion) {
+@@ -589,15 +611,22 @@ void handle_mouse_move(const SDL_MouseMotionEvent &motion) {
          queue_or_apply(e);
  }
  
@@ -3876,7 +3895,7 @@ index d983f15..515d12f 100644
      if (hit.kind == HitResult::HIT_NONE) {
          if (down)
              return;
-@@ -621,7 +646,7 @@ void apply_button(int button, bool down, int32_t x, int32_t y, bool inside, bool
+@@ -621,7 +650,7 @@ void apply_button(int button, bool down, int32_t x, int32_t y, bool inside, bool
                  down ? "down" : "up", x, y, int(consumed), int(host_pointer_captured()));
      if (consumed)
          return;
@@ -3885,7 +3904,7 @@ index d983f15..515d12f 100644
          host_gate_begin_drag(&hit);
      g_cursor_x = x;
      g_cursor_y = y;
-@@ -645,12 +670,17 @@ void apply_button(int button, bool down, int32_t x, int32_t y, bool inside, bool
+@@ -645,12 +674,17 @@ void apply_button(int button, bool down, int32_t x, int32_t y, bool inside, bool
  void handle_button(const SDL_MouseButtonEvent &event, int button, bool down) {
      PendingInput e;
      e.kind = PendingInput::BUTTON;
@@ -3903,7 +3922,7 @@ index d983f15..515d12f 100644
      view_point_to_drawable(event.x, event.y, &e.x, &e.y, &e.drawable_w, &e.drawable_h);
      queue_or_apply(e);
  }
-@@ -658,11 +688,17 @@ void handle_button(const SDL_MouseButtonEvent &event, int button, bool down) {
+@@ -658,11 +692,17 @@ void handle_button(const SDL_MouseButtonEvent &event, int button, bool down) {
  // The key paths live in input_gate.cpp, which owns the decision, the delivery
  // and the two kinds of key state they need. What is left here is the SDL
  // event decoding.
@@ -3924,7 +3943,7 @@ index d983f15..515d12f 100644
      if (hit.kind == HitResult::HIT_NONE)
          return;
      x = hit.gx;
-@@ -748,11 +784,20 @@ void apply_input(const PendingInput &e) {
+@@ -748,11 +788,20 @@ void apply_input(const PendingInput &e) {
      case PendingInput::MOTION:
          apply_motion(e.x, e.y, e.dx, e.dy);
          break;
@@ -3947,7 +3966,7 @@ index d983f15..515d12f 100644
          break;
      case PendingInput::KEY:
          apply_key(e.key, e.down, e.character, e.flags);
-@@ -1077,6 +1122,7 @@ void handle_event(const SDL_Event &event) {
+@@ -1077,6 +1126,7 @@ void handle_event(const SDL_Event &event) {
          if (event.wheel.windowID == ours) {
              PendingInput e;
              e.kind = PendingInput::WHEEL;
@@ -3955,6 +3974,92 @@ index d983f15..515d12f 100644
              const double steps =
                  event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.y : event.wheel.y;
              e.dz = (int32_t)lround(steps * 120.0);
+@@ -1594,10 +1644,85 @@ void web_frame() {
+ 
+ // The game's thread: the game's files are read from here, never from the
+ // main thread, which may not wait for the file system.
++bool web_mount_streaming() {
++    const char *mount = getenv("RECOMP_STREAMING_MOUNT");
++    if (!mount || !*mount)
++        return true;
++    const char *base = getenv("RECOMP_STREAMING_BASE");
++    if (!base || !*base)
++        return false;
++    FILE *list = fopen(mount, "rb");
++    if (!list)
++        return false;
++    backend_t backend = wasmfs_create_fetch_backend(base, 4 * 1024 * 1024);
++    if (!backend || wasmfs_create_directory("/stream-game", 0755, backend) != 0) {
++        fclose(list);
++        return false;
++    }
++    std::string localRoot = g_web_exe.substr(0, g_web_exe.find_last_of('/'));
++    char line[4096];
++    size_t files = 0;
++    bool ok = true;
++    while (fgets(line, sizeof line, list)) {
++        size_t n = strlen(line);
++        if (n < 4 || line[n - 1] != '\n' || line[1] != '\t' || (line[0] != 'L' && line[0] != 'R')) {
++            ok = false;
++            break;
++        }
++        line[n - 1] = 0;
++        std::string relative = line + 2;
++        // Descriptor paths are validated in JS as well. Reject malformed local
++        // metadata before creating anything in the virtual mount.
++        if (relative.empty() || relative[0] == '/' || relative.find('\\') != std::string::npos ||
++            relative.find(':') != std::string::npos || relative.find("..") != std::string::npos) {
++            ok = false;
++            break;
++        }
++        std::string path = "/stream-game/" + relative;
++        for (size_t slash = path.find('/', 1); slash != std::string::npos; slash = path.find('/', slash + 1)) {
++            if (mkdir(path.substr(0, slash).c_str(), 0755) != 0 && errno != EEXIST) {
++                ok = false;
++                break;
++            }
++        }
++        if (!ok)
++            break;
++        if (line[0] == 'L') {
++            if (symlink((localRoot + "/" + relative).c_str(), path.c_str()) != 0) {
++                ok = false;
++                break;
++            }
++        } else {
++            // O_CREAT registers the name only. Reads and stat are handled by
++            // the proxy worker, using the inventory's original file size.
++            int fd = open(path.c_str(), O_CREAT | O_RDONLY, 0444);
++            if (fd < 0) {
++                ok = false;
++                break;
++            }
++            close(fd);
++        }
++        files++;
++    }
++    if (ferror(list) || files == 0)
++        ok = false;
++    fclose(list);
++    if (ok) {
++        g_web_exe = "/stream-game/" + g_web_exe.substr(g_web_exe.find_last_of('/') + 1);
++        fprintf(stderr, "[host] demand filesystem: %zu files registered; archives fetched on read\n", files);
++    }
++    return ok;
++}
++
+ void web_guest() {
+     backend_t opfs = wasmfs_create_opfs_backend();
+     if (!opfs || wasmfs_create_directory("/opfs", 0777, opfs) != 0)
+         fprintf(stderr, RECOMP_APP_NAME ": the browser's private file system is unavailable\n");
++    if (!web_mount_streaming()) {
++        fprintf(stderr, RECOMP_APP_NAME ": demand filesystem could not be mounted; refusing incomplete installation\n");
++        g_web_guest_done.store(true);
++        return;
++    }
+     std::string dir = g_web_exe.substr(0, g_web_exe.find_last_of('/'));
+     if (!dir.empty() && os_chdir(dir.c_str()) != 0)
+         fprintf(stderr, "[host] could not enter %s\n", dir.c_str());
 diff --git a/host/tests/host_tests.cpp b/host/tests/host_tests.cpp
 index 8bc24e5..8389757 100644
 --- a/host/tests/host_tests.cpp
@@ -11896,10 +12001,10 @@ index f64d0a9..984187d 100644
      const root = await dirFor(game.id + "/game");
      const outcome = await importGame(game, source, opfsStore(root), {
 diff --git a/web/player/index.html b/web/player/index.html
-index 66254e1..22a4297 100644
+index 66254e1..999420e 100644
 --- a/web/player/index.html
 +++ b/web/player/index.html
-@@ -12,19 +12,34 @@
+@@ -12,19 +12,42 @@
  <style>
    html, body { margin: 0; height: 100%; background: #000; color: #ddd; font: 14px system-ui, sans-serif; overflow: hidden; }
    #canvas { display: block; width: 100vw; height: 100vh; outline: none; }
@@ -11929,16 +12034,25 @@ index 66254e1..22a4297 100644
 +const bootLog = document.getElementById("boot-log");
 +let failed = false;
 +let runtimeReady = false;
++let playerPresence = null;
++let presenceRenderedFrame = false;
++function notePlayerFrame(text) {
++  if (!presenceRenderedFrame && String(text).includes("d3d9 webgpu: frame ")) {
++    presenceRenderedFrame = true;
++    playerPresence?.markRunning();
++  }
++}
  function status(text, back) {
 +  if (failed && !back) return;
    statusEl.textContent = text;
    if (back) {
      const a = document.createElement("a");
-@@ -36,6 +51,26 @@ function status(text, back) {
+@@ -36,6 +59,28 @@ function status(text, back) {
  }
  const log = [];
  window.recompLog = log; // for tests
 +function record(text) {
++  notePlayerFrame(text);
 +  log.push(String(text));
 +  if (log.length > 200) log.shift();
 +  bootLog.textContent = log.join("\n");
@@ -11950,6 +12064,7 @@ index 66254e1..22a4297 100644
 +function fail(text) {
 +  if (failed) { record(text); return; }
 +  failed = true;
++  playerPresence?.stop();
 +  releaseKeyboard();
 +  if (document.pointerLockElement === canvas) document.exitPointerLock();
 +  checkpoint(text);
@@ -11961,8 +12076,11 @@ index 66254e1..22a4297 100644
  
  async function gameId() {
    const parts = location.pathname.split("/").filter(Boolean);
-@@ -56,10 +91,19 @@ async function start() {
+@@ -54,12 +99,35 @@ async function start() {
+ 
+   // The game must have been imported by the launcher first.
    let dir = await navigator.storage.getDirectory();
++  let streaming = null;
    try {
      for (const p of [id, "game"]) dir = await dir.getDirectoryHandle(p);
 -    await dir.getFileHandle(game.executable);
@@ -11970,21 +12088,34 @@ index 66254e1..22a4297 100644
 -    throw new Error(`${game.title} has not been imported yet.`);
 +    const exeFile = await (await dir.getFileHandle(game.executable)).getFile();
 +    if (!exeFile.size) throw new Error("Empty executable");
++    if (game.hosted?.demandFiles) {
++      const { streamingInstallation, watchDemandFiles } = await import("../demand-files.mjs");
++      streaming = await streamingInstallation(game, dir);
++      if (streaming) watchDemandFiles(game, stats => { window.recompStreamingStats = stats; });
++    }
++    if (!streaming) {
 +    const stamp = await (await (await dir.getFileHandle(".stamp")).getFile()).text();
 +    if (stamp.trim() !== game.sha256) throw new Error("Incomplete or wrong-version import");
 +    for (const name of game.requiredDirs || []) {
 +      const folder = await dir.getDirectoryHandle(name);
 +      if ((await folder.entries().next()).done) throw new Error(`Empty folder: ${name}`);
 +    }
++    }
 +  } catch (cause) {
 +    const detail = cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause);
 +    throw new Error(`${game.title}: the game import could not be validated (${detail}). Check the local import in the launcher before starting.`);
    }
 +  checkpoint("Game files imported; requesting WebGPU device");
++  import("../player-presence.mjs").then(({ startPlayerPresence }) => {
++    if (!failed) {
++      playerPresence = startPlayerPresence();
++      if (presenceRenderedFrame) playerPresence.markRunning();
++    }
++  }).catch(() => {});
  
    const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
    if (!adapter) throw new Error("WebGPU gave no adapter.");
-@@ -75,18 +119,20 @@ async function start() {
+@@ -75,40 +143,139 @@ async function start() {
                     "maxInterStageShaderVariables"])
      if (k in adapter.limits) requiredLimits[k] = adapter.limits[k];
    const device = await adapter.requestDevice({ requiredFeatures, requiredLimits });
@@ -12010,7 +12141,11 @@ index 66254e1..22a4297 100644
      preRun: [() => {
        const m = Module;
        m.ENV.RECOMP_PROFILE_DIR = `/opfs/${id}/profile`;
-@@ -94,21 +140,114 @@ async function start() {
++      if (streaming) {
++        m.ENV.RECOMP_STREAMING_MOUNT = `/opfs/${id}/game/.streaming-mount`;
++        m.ENV.RECOMP_STREAMING_BASE = `${location.origin}/gta-stream/${encodeURIComponent(id)}/${game.hosted.build}`;
++      }
+       const extra = new URLSearchParams(location.search);
        for (const [k, v] of extra) if (k.startsWith("RECOMP_")) m.ENV[k] = v;
      }],
      onRuntimeInitialized() {
@@ -13506,6 +13641,58 @@ index 0000000..7565b7b
 +    printf("d3d9 fixed function: %u checks, %u failures\n", checks, failures);
 +    return failures ? 1 : 0;
 +}
+diff --git a/host/sdl/library_demand_files.js b/host/sdl/library_demand_files.js
+new file mode 100644
+index 0000000..92d2f7e
+--- /dev/null
++++ b/host/sdl/library_demand_files.js
+@@ -0,0 +1,46 @@
++// WasmFS fetch files backed by the project's verified, bounded archive cache.
++// Runs on FetchBackend's proxy worker; never blocks the browser UI thread.
++addToLibrary({
++  _wasmfs_create_fetch_backend_js__deps: ["$wasmFS$backends", "_wasmfs_fetch_get_file_url"],
++  _wasmfs_create_fetch_backend_js: function(backend) {
++    var reader;
++    async function entry(file) {
++      var url = new URL(UTF8ToString(__wasmfs_fetch_get_file_url(file)), self.location.origin);
++      var parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
++      if (parts[0] !== 'gta-stream' || parts.length < 4) throw new Error('Invalid streaming mount URL');
++      if (!reader) reader = (async () => {
++        var api = await import(new URL('/demand-files.mjs', self.location.origin).href);
++        var root = await navigator.storage.getDirectory();
++        root = await root.getDirectoryHandle(parts[1]);
++        root = await root.getDirectoryHandle('game');
++        var game = JSON.parse(await (await (await root.getFileHandle('.streaming-game.json')).getFile()).text());
++        var installed = await api.streamingInstallation(game, root);
++        if (!installed || installed.inventory.build !== parts[2]) throw new Error('Streaming mount identity mismatch');
++        var cache;
++        try { cache = await api.browserBlockCache(); } catch (_) { cache = null; }
++        return api.createDemandReader(game, installed.inventory, { cache: cache });
++      })();
++      return { reader: await reader, path: parts.slice(3).join('/') };
++    }
++    wasmFS$backends[backend] = {
++      allocFile: async function() {},
++      freeFile: async function() {},
++      write: async function() { return -30; }, // EROFS
++      read: async function(file, buffer, length, offset) {
++        try {
++          var info = await entry(file);
++          return await info.reader.readInto(info.path, function() {
++            return HEAPU8.subarray(buffer, buffer + length);
++          }, offset, length);
++        } catch (error) {
++          console.error('Game archive read failed:', error);
++          return -5; // EIO: never give the guest fabricated zero-filled data.
++        }
++      },
++      getSize: async function(file) {
++        try { var info = await entry(file); return info.reader.size(info.path); }
++        catch (error) { console.error('Game archive stat failed:', error); return -5; }
++      },
++    };
++  },
++});
 diff --git a/host/tests/audio_controls_tests.cpp b/host/tests/audio_controls_tests.cpp
 new file mode 100644
 index 0000000..fb3d2fe

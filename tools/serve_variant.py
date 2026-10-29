@@ -11,6 +11,7 @@ import hashlib
 import tomllib
 import sys
 import os
+import re
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -52,6 +53,9 @@ def stage_launcher(site=SITE, prepared=PREPARED, assets=ROOT / "build/launcher-a
     for name in ("app.js", "core.js", "worker.js"):
         shutil.copy2(ROOT / "vendor/recomp-kit/web/launcher" / name, site / name)
     shutil.copy2(ROOT / "tools/web/hosted-import.mjs", site / "hosted-import.mjs")
+    shutil.copy2(ROOT / "tools/web/demand-files.mjs", site / "demand-files.mjs")
+    shutil.copy2(ROOT / "tools/web/player-presence.mjs", site / "player-presence.mjs")
+    shutil.copytree(ROOT / "tools/web/live", site / "jugadores", dirs_exist_ok=True)
     worker = site / "worker.js"
     worker.write_text(worker.read_text(encoding="utf-8").replace(
         "    controller = new AbortController();",
@@ -60,11 +64,19 @@ def stage_launcher(site=SITE, prepared=PREPARED, assets=ROOT / "build/launcher-a
         '      const { importHostedGame } = await import("./hosted-import.mjs");\n'
         '      try {\n'
         '        return await importHostedGame(game, await dirFor(game.id + "/game"), {\n'
-        '          signal: controller.signal, freeBytes: await freeBytes(),\n'
+        '          signal: controller.signal, freeBytes: await freeBytes(), bootstrapOnly: !!game.hosted.demandFiles,\n'
         '          onProgress: p => postMessage({ progress: p }),\n'
         '        });\n'
         '      } finally { controller = null; }\n'
-        '    }', 1), encoding="utf-8")
+        '    }', 1).replace(
+        '    const status = await gameStatus(game, opfsStore(root));',
+        '    let status;\n'
+        '    if (game.hosted?.demandFiles) {\n'
+        '      const { streamingInstallation } = await import("./demand-files.mjs");\n'
+        '      const installed = await streamingInstallation(game, root);\n'
+        '      if (installed) { const { inventory, ...summary } = installed; status = summary; }\n'
+        '    }\n'
+        '    status ??= await gameStatus(game, opfsStore(root));', 1), encoding="utf-8")
     for name in ("index.html", "start.js", "menu.css", "menu-sounds.js", "contributors.js", "backgrounds.js", "music.js"):
         shutil.copy2(ROOT / "tools/web/launcher" / name, site / name)
     shutil.copytree(ROOT / "tools/web/launcher/social-icons", site / "social-icons", dirs_exist_ok=True)
@@ -339,6 +351,45 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path).path
+        hosted = getattr(self.server, "hosted_inventory", None)
+        if path == "/game-assets.json" and hosted:
+            self.send_bytes(json.dumps(hosted).encode(), "application/json")
+            return
+        if path.startswith("/game/"):
+            relative = unquote(path)
+            prefix = f"/game/{hosted['build']}/" if hosted else ""
+            item = self.server.hosted_objects.get(relative[len(prefix):]) if prefix and relative.startswith(prefix) else None
+            if not item:
+                self.send_error(404)
+                return
+            source, object_offset, size = item
+            match = re.fullmatch(r"bytes=(\d+)-(\d+)", self.headers.get("Range", ""))
+            if not match or not 0 <= int(match[1]) <= int(match[2]) < size:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+            start, end = int(match[1]), int(match[2])
+            self.send_response(206)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(end - start + 1))
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.end_headers()
+            try:
+                with source.open("rb") as stream:
+                    stream.seek(object_offset + start)
+                    remaining = end - start + 1
+                    while remaining:
+                        chunk = stream.read(min(remaining, 1 << 20))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
+                self.server.hosted_download_bytes += end - start + 1 - remaining
+                self.server.hosted_read_requests += 1
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
         if path == "/seed-manifest":
             self.send_bytes(json.dumps(self.server.manifest).encode(), "application/json")
             return
@@ -394,12 +445,41 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
 
 
+def configure_hosted(server, inventory):
+    """Serve existing chunk objects as bounded slices of the prepared originals."""
+    objects = {}
+    if not re.fullmatch(r"[a-f0-9]{16}", inventory["build"]):
+        raise ValueError("Invalid hosted build")
+    for entry in inventory["entries"]:
+        if entry["path"] not in server.import_files:
+            raise ValueError("Hosted file is outside the prepared inventory")
+        source = PREPARED / entry["path"]
+        if source.stat().st_size != entry["size"]:
+            raise ValueError("Prepared file size differs from hosted inventory")
+        offset = 0
+        for obj in entry.get("chunks", [entry]):
+            if obj["path"] in objects or obj["size"] < 0:
+                raise ValueError("Duplicate or invalid hosted object")
+            objects[obj["path"]] = (source, offset, obj["size"])
+            offset += obj["size"]
+        if offset != entry["size"]:
+            raise ValueError("Hosted chunks do not cover file")
+    server.hosted_inventory, server.hosted_objects = inventory, objects
+    server.hosted_download_bytes = server.hosted_read_requests = 0
+
+
 def main():
+    global SITE, LOG, SEQ
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8771)
     parser.add_argument("--only", default="",
                         help="Comma-separated path prefixes to expose (subset import for iteration)")
+    parser.add_argument("--site", type=Path, help="Separate candidate site with its runtime and games.json")
+    parser.add_argument("--demand-manifest", type=Path, help="Enable demand-file testing against a hosted range inventory")
     args = parser.parse_args()
+    if args.site:
+        SITE = args.site.resolve()
+        LOG, SEQ = SITE.parent / "bootlog.txt", SITE.parent / "bootlog.seq"
     manifest = import_manifest()
     if args.only:
         prefixes = [p for p in args.only.split(",") if p]
@@ -408,8 +488,23 @@ def main():
                              if f["path"] == "gta_sa.exe"
                              or any(f["path"].startswith(p) for p in prefixes)]
         print(f"Subset: {len(manifest['files'])}/{before} files", flush=True)
-    stage_launcher()
-    stage_player()
+    stage_launcher(SITE)
+    stage_player(SITE)
+    hosted = None
+    if args.demand_manifest:
+        hosted = json.loads(args.demand_manifest.read_text(encoding="utf-8"))
+        games = json.loads((SITE / "games.json").read_text(encoding="utf-8"))
+        game = next(game for game in games if game["id"] == hosted["id"])
+        if game["sha256"] != hosted["executableSha256"]:
+            raise ValueError("Hosted inventory executable differs from runtime")
+        player = SITE / GAME_ID
+        if ("Game archive read failed:" not in (player / "GTASASingleplayer.js").read_text(encoding="utf-8") or
+                b"demand filesystem:" not in (player / "GTASASingleplayer.wasm").read_bytes()):
+            raise ValueError("Candidate runtime lacks demand-file support; rebuild first")
+        aux = json.loads((SITE / "auxiliary-files.json").read_text(encoding="utf-8"))
+        game["requiredFiles"] = aux["files"]
+        game["hosted"] = {"manifest": "/game-assets.json", "build": hosted["build"], "fastRanges": True, "demandFiles": True}
+        (SITE / "games.json").write_text(json.dumps(games, indent=2), encoding="utf-8")
     LOG.parent.mkdir(parents=True, exist_ok=True)
     LOG.write_bytes(b"")
     SEQ.write_bytes(b"")
@@ -417,6 +512,8 @@ def main():
     with ThreadingHTTPServer(("127.0.0.1", args.port), Handler) as server:
         server.manifest = manifest
         server.import_files = {f["path"] for f in manifest["files"]}
+        if hosted:
+            configure_hosted(server, hosted)
         total = sum(f["size"] for f in manifest["files"])
         print(f"Local import: {len(manifest['files'])} files, {total} bytes", flush=True)
         print(f"http://127.0.0.1:{args.port}/seed.html", flush=True)

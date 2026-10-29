@@ -3,6 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { importHostedGame } from "../hosted-import.mjs";
+import { streamingInstallation, createDemandReader, legacyBlockReader } from "../demand-files.mjs";
 
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 class MemoryDirectory {
@@ -64,6 +65,57 @@ function fixture({ corrupt = false, fail = false, ignoreRange = false } = {}) {
   };
   return { game, inventory, fetchFile, requests, archive, counters: () => ({ peak, bodies }) };
 }
+
+test("demand bootstrap downloads only executable/DLLs and never stamps a full installation", async () => {
+  const f = fixture(), root = new MemoryDirectory();
+  f.game.hosted.demandFiles = true;
+  const result = await importHostedGame(f.game, root, { fetchFile: f.fetchFile, bootstrapOnly: true });
+  assert.equal(result.result, "done");
+  assert.deepEqual(f.requests.sort(), ["game.exe", "sound.dll"]);
+  assert.equal(root.files.has(".stamp"), false);
+  assert.equal(root.files.has("data/archive.bin"), false);
+  const mount = root.files.get(".streaming-mount").toString();
+  assert.match(mount, /L\tgame.exe\n/);
+  assert.match(mount, /R\tdata\/archive.bin\n/);
+  const ready = await streamingInstallation(f.game, root);
+  assert.equal(ready.state, "ready");
+  root.files.set("sound.dll", Buffer.from("corrupt"));
+  await assert.rejects(streamingInstallation(f.game, root), /checksum mismatch/);
+});
+
+test("old runtimes and changed builds refuse a streaming bootstrap", async () => {
+  const f = fixture(), root = new MemoryDirectory();
+  await importHostedGame(f.game, root, { fetchFile: f.fetchFile, bootstrapOnly: true });
+  await assert.rejects(streamingInstallation(f.game, root), /another runtime/);
+  f.game.hosted.demandFiles = true;
+  f.game.hosted.build = "ffffffffffffffff";
+  await assert.rejects(streamingInstallation(f.game, root), /another runtime/);
+});
+
+test("demand reads reuse verified partial imports without trusting unrecorded or corrupt bytes", async () => {
+  for (const corrupt of [false, true]) {
+    const f = fixture(), root = new MemoryDirectory();
+    const archive = f.inventory.entries.find(entry => entry.path === "data/archive.bin");
+    root.files.set("data/archive.bin", corrupt ? Buffer.alloc(f.archive.length) : f.archive);
+    root.files.set(".hosted-blocks.json", Buffer.from(JSON.stringify({ build: f.game.hosted.build,
+      files: { "data/archive.bin": { sha256: archive.sha256, blocks: [0] } } })));
+    const reader = createDemandReader(f.game, f.inventory, { fetchFile: f.fetchFile,
+      readLegacyBlock: await legacyBlockReader(f.game, root) });
+    const out = new Uint8Array(2);
+    await reader.readInto("data/archive.bin", out, 0, 2);
+    assert.equal(Buffer.from(out).toString(), f.archive.subarray(0, 2).toString());
+    assert.equal(reader.stats.legacyHits, corrupt ? 0 : 1);
+    assert.equal(f.requests.length, corrupt ? 1 : 0);
+    await reader.readInto("data/archive.bin", out, f.archive.length - 2, 2);
+    assert.equal(f.requests.at(-1), "second");
+  }
+});
+
+test("partial imports from another build are ignored", async () => {
+  const f = fixture(), root = new MemoryDirectory();
+  root.files.set(".hosted-blocks.json", Buffer.from(JSON.stringify({ build: "ffffffffffffffff", files: {} })));
+  assert.equal(await legacyBlockReader(f.game, root), null);
+});
 
 test("verified ranges download concurrently, preserve other files and skip completed imports", async () => {
   const f = fixture(), root = new MemoryDirectory();

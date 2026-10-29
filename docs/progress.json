@@ -1,5 +1,405 @@
 {
-  "browser_frame_time_round": {
+  "live_player_panel_20261028": {
+    "checked_utc": "2026-10-28T22:56:59.310665+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "runtime_sha256": "c03abc8257ffd19e08fe016d6fa0cc7133636fe3c4c68512b32c91530bf06b19",
+    "url": "https://gta.galavic.world/jugadores/",
+    "published": true,
+    "worker_version": "8c6f6be7-9d71-4ff5-8647-a580310bcedf",
+    "backend": "SQLite-backed Durable Object, hibernatable WebSockets, ephemeral session attachments and alarms.",
+    "scope": "Public anonymous player-tab presence, including startup/menu; not unique people or verified active missions.",
+    "tracked_fields": [
+      "server-generated temporary session ID",
+      "connection time",
+      "last heartbeat",
+      "renderer-started status",
+      "tab visibility"
+    ],
+    "heartbeat_seconds": 25,
+    "expiry_seconds": 90,
+    "alarm_interval_seconds": 30,
+    "local_expiry_observed_ms": 123159,
+    "python_tests_passed": 114,
+    "javascript_tests_passed": 67,
+    "local_integration": {
+      "base": "https://127.0.0.1:8794",
+      "events": [
+        "Actual client tracker connected; viewers did not increase the count",
+        "Running and visibility changes reached watcher over WebSocket",
+        "Page hide, resume and stop clean up sessions",
+        "An open socket without heartbeats expired through the real Durable Object alarm"
+      ],
+      "passed": true,
+      "expiry_ms": 123159
+    },
+    "public_integration": {
+      "base": "https://gta.galavic.world",
+      "events": [
+        "Actual client tracker connected; viewers did not increase the count",
+        "Running and visibility changes reached watcher over WebSocket",
+        "Page hide, resume and stop clean up sessions"
+      ],
+      "passed": true
+    },
+    "actual_browser_player": {
+      "passed": true,
+      "renderer_seen": true,
+      "tracker_created": true,
+      "observed_total": 1,
+      "observed_running": 1,
+      "scope": "Actual Chrome player, existing OPFS/cache on workers.dev; observer snapshot fetched from gta.galavic.world. No input or guest mission verification."
+    },
+    "browser_panel": "Headless Chrome on public HTTPS; desktop and mobile captures show two synthetic validation sessions, loading/running states, viewer excluded.",
+    "release_assets_verified": 39,
+    "runtime_gzip_roundtrip_verified": true,
+    "game_range_4mib_verified": true,
+    "sessions_cleaned_up": true,
+    "evidence": [
+      "build/demand-files/presence-local.json",
+      "build/demand-files/presence-production.json",
+      "build/demand-files/panel-browser-verification.json",
+      "build/demand-files/presence-real-game.json",
+      "build/demand-files/presence-release-verification.json"
+    ],
+    "limitations": [
+      "Existing player pages start reporting after reload.",
+      "Each tab counts separately; unauthenticated presence can be simulated.",
+      "Frozen background tabs can expire and reconnect.",
+      "No new mission gameplay, FPS or long-session stability claim."
+    ],
+    "runtime_recompiled": false,
+    "pinned_runtime_preserved": true
+  },
+  "custom_domain_cutover_verified_20261028": {
+    "checked_utc": "2026-10-28T22:29:29.087629+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "runtime_sha256": "c03abc8257ffd19e08fe016d6fa0cc7133636fe3c4c68512b32c91530bf06b19",
+    "stage": "Domain migration complete; destination zone active and both custom domains verified over HTTPS.",
+    "zone_status": "active",
+    "activated_on": "2026-10-28T22:25:19.181535Z",
+    "nameservers": [
+      "leonidas.ns.cloudflare.com",
+      "peaches.ns.cloudflare.com"
+    ],
+    "registrar_change_verified": true,
+    "google_dns_nameservers_verified": true,
+    "gta_url": "https://gta.galavic.world/",
+    "portfolio_url": "https://galavic.world/",
+    "gta_worker_version": "6ee32817-1083-458c-92a0-4de46a256216",
+    "portfolio_worker_version": "74328c79-37f7-453c-a34e-225bd6563c61",
+    "gta_static_assets_sha256_verified": 35,
+    "gta_runtime_transport_verified": [
+      {
+        "name": "GTASASingleplayer.wasm",
+        "gzip_bytes": 34262608,
+        "decoded_bytes": 260362121,
+        "gzip_sha256_verified": true,
+        "decoded_sha256_verified": true
+      },
+      {
+        "name": "GTASASingleplayer.data",
+        "gzip_bytes": 2115349,
+        "decoded_bytes": 35073821,
+        "gzip_sha256_verified": true,
+        "decoded_sha256_verified": true
+      }
+    ],
+    "gta_game_range_verified": {
+      "object": "__chunks/4c149549694090ad9e6da8230f77ed858388a72b079122f92da8deecb58cca15/0000",
+      "bytes": 4194304,
+      "sha256_verified": true
+    },
+    "portfolio_files_sha256_verified": 123,
+    "tls_verified": [
+      {
+        "host": "galavic.world",
+        "trusted_hostname_verified": true,
+        "expires": "Jan 24 15:57:40 2027 GMT",
+        "version": "TLSv1.3"
+      },
+      {
+        "host": "gta.galavic.world",
+        "trusted_hostname_verified": true,
+        "expires": "Jan 21 20:56:57 2027 GMT",
+        "version": "TLSv1.3"
+      }
+    ],
+    "http_to_https": {
+      "galavic.world": 301,
+      "gta.galavic.world": 301
+    },
+    "always_use_https": "on",
+    "mail_mx_verified": {
+      "expected_records": 5,
+      "actual_records": 5,
+      "match": true
+    },
+    "spf_dmarc_preserved_in_destination": true,
+    "transport_evidence": [
+      "build/domain-migration-20261028/gta-custom-domain-verification.json",
+      "build/domain-migration-20261028/portfolio-custom-domain-verification.json"
+    ],
+    "transport_note": "Original release verifier checks run via curl HTTPS adapter because plain urllib receives Cloudflare 1010; TLS validation retained.",
+    "browser_gameplay_on_custom_domain_verified": false,
+    "browser_gameplay_scope": "Prior same-runtime session on the new account workers.dev URL verified menu, cinematic, CJ/HUD/BMX and short movement; this cutover verifies HTTPS transport and identity, not another gameplay session.",
+    "domain_cutover_complete": true,
+    "old_deployments_deleted": false
+  },
+  "custom_domain_ready_for_delegation_20261028": {
+    "checked_utc": "2026-10-28T22:04:22.113497+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "runtime_sha256": "c03abc8257ffd19e08fe016d6fa0cc7133636fe3c4c68512b32c91530bf06b19",
+    "stage": "Both websites prepared on destination account; awaiting registrar nameserver change.",
+    "portfolio_source_commit": "69384913960a6dd06486ff7030ca15f7b50aece8",
+    "portfolio_build_change": "Local Next.js output: export; source repository not pushed.",
+    "portfolio_worker": "portafolio-galavic",
+    "portfolio_version": "74328c79-37f7-453c-a34e-225bd6563c61",
+    "portfolio_preview_url": "https://portafolio-galavic.gta-sa-oc-web.workers.dev/",
+    "portfolio_hosting": "Workers Static Assets without a Worker script; previous Pages deployment retained.",
+    "portfolio_files_verified": 123,
+    "portfolio_bytes": 4392510,
+    "previous_home_server_text_matches": true,
+    "previous_home_css_js_files_byte_identical": 11,
+    "portfolio_browser_interactions_verified": false,
+    "custom_domains_prepared": {
+      "galavic.world": "portafolio-galavic",
+      "gta.galavic.world": "gta-sa-oc"
+    },
+    "destination_dns_records": 9,
+    "non_apex_dns_preserved": true,
+    "intentional_dns_change": "Destination apex CNAME to previous Pages replaced by managed Worker record for the copied portfolio. Mail, SPF and DMARC retained.",
+    "source_dns_unchanged_rechecked": true,
+    "old_apex_https_status_after_preparation": 200,
+    "source_dnssec": "disabled",
+    "current_nameservers": [
+      "gracie.ns.cloudflare.com",
+      "yahir.ns.cloudflare.com"
+    ],
+    "required_nameservers": [
+      "leonidas.ns.cloudflare.com",
+      "peaches.ns.cloudflare.com"
+    ],
+    "destination_zone_status": "pending",
+    "registrar_delegation_changed": false,
+    "blocker": "No registrar session/API access available. User must update Namecheap Custom DNS; then validate zone activation, both custom domains and TLS.",
+    "evidence_directory": "build/domain-migration-20261028/",
+    "domain_cutover_complete": false
+  },
+  "custom_domain_dns_copied_20261028": {
+    "checked_utc": "2026-10-28T20:08:50.120867+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "runtime_sha256": "c03abc8257ffd19e08fe016d6fa0cc7133636fe3c4c68512b32c91530bf06b19",
+    "stage": "Current source DNS exported, destination records copied and compared; delegation unchanged pending preservation of the apex Pages website.",
+    "source_dns_access": true,
+    "source_dnssec": "disabled",
+    "source_zone_settings_access": "403 / code 9109",
+    "source_rulesets_access": "403 / code 10000",
+    "source_records": 9,
+    "destination_records": 9,
+    "copied_records": 8,
+    "worker_managed_records": 1,
+    "operational_fields_match": true,
+    "compared_fields": [
+      "type",
+      "name",
+      "content",
+      "priority",
+      "ttl",
+      "proxied"
+    ],
+    "source_export": "build/domain-migration-20261028/source-zone-export.txt",
+    "comparison": "build/domain-migration-20261028/dns-comparison.json",
+    "apex_website": {
+      "type": "Cloudflare Pages",
+      "project": "portafolio-galavic",
+      "account": "previous",
+      "custom_domain_status": "active",
+      "deployment_id": "2c27293d-8cd6-4c5e-a906-3b33054b782c",
+      "source": "Direct upload; local source not found in available Projects directories."
+    },
+    "blocker": "Pages documentation requires the apex zone and Pages project in the same account. Need the portfolio source/build or repository to prepare its migration before changing authoritative nameservers.",
+    "destination_nameservers": [
+      "leonidas.ns.cloudflare.com",
+      "peaches.ns.cloudflare.com"
+    ],
+    "authoritative_nameservers_unchanged": true,
+    "registrar_access_available": false,
+    "custom_domain_cutover_complete": false,
+    "documentation": "https://developers.cloudflare.com/pages/configuration/custom-domains/"
+  },
+  "custom_domain_migration_20261028": {
+    "checked_utc": "2026-10-28T20:04:38.490981+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "runtime_sha256": "c03abc8257ffd19e08fe016d6fa0cc7133636fe3c4c68512b32c91530bf06b19",
+    "stage": "Destination zone created and Worker custom domain attached; authoritative delegation unchanged; DNS import blocked on current source export.",
+    "destination_zone_id": "1dc11c0d9d21765e9c161c19e9c5cb54",
+    "destination_zone_status": "pending",
+    "destination_nameservers": [
+      "leonidas.ns.cloudflare.com",
+      "peaches.ns.cloudflare.com"
+    ],
+    "current_nameservers": [
+      "gracie.ns.cloudflare.com",
+      "yahir.ns.cloudflare.com"
+    ],
+    "custom_domain": "gta.galavic.world",
+    "custom_domain_attached": true,
+    "worker": "gta-sa-oc",
+    "worker_domain_id": "cee463f4a8f2f84822d6a76032bfb90a0b3d3033",
+    "source_zone_read": true,
+    "source_dns_read": "HTTP 403, code 10000, Authentication error",
+    "source_settings_read": "HTTP 403, code 9109, Unauthorized to access requested resource",
+    "source_dnssec_read": "HTTP 403, code 10000",
+    "dns_records_copied": false,
+    "registrar_delegation_changed": false,
+    "blocker": "Current source DNS export needed to preserve all records. Existing Wrangler OAuth lacks source DNS/settings permissions; no browser surface or registrar access available.",
+    "historical_backup_check": "The 2026-10-23 dns-before.json is a public DNS probe, not an authoritative DNS record export; not used as a complete backup.",
+    "evidence": "build/domain-migration-20261028/",
+    "active_new_worker_url": "https://gta-sa-oc.gta-sa-oc-web.workers.dev/",
+    "custom_domain_https_verified_on_destination": false
+  },
+  "cloudflare_demand_deployment_20261028": {
+    "checked_utc": "2026-10-28T19:55:14.352181+00:00",
+    "url": "https://gta-sa-oc.gta-sa-oc-web.workers.dev/",
+    "worker_version": "6ee32817-1083-458c-92a0-4de46a256216",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "runtime_sha256": "c03abc8257ffd19e08fe016d6fa0cc7133636fe3c4c68512b32c91530bf06b19",
+    "game_build": "a033b7fd3a69b951",
+    "published": true,
+    "demand_files": true,
+    "uploaded_objects": 465,
+    "uploaded_bytes": 5336754934,
+    "runtime_gzip_transfer_bytes": 36377957,
+    "bootstrap_bytes": 15735296,
+    "menu_stats": {
+      "networkBytes": 36055243,
+      "memoryHits": 384,
+      "diskHits": 0,
+      "legacyHits": 0,
+      "requests": 45,
+      "failures": 0,
+      "activeDownloads": 0
+    },
+    "transport_assets_verified": 35,
+    "transport_runtime": [
+      {
+        "name": "GTASASingleplayer.wasm",
+        "content_encoding": "gzip",
+        "compressed_bytes": 34262608,
+        "decoded_bytes": 260362121,
+        "decoded_sha256_verified": true,
+        "mime": "application/wasm"
+      },
+      {
+        "name": "GTASASingleplayer.data",
+        "content_encoding": "gzip",
+        "compressed_bytes": 2115349,
+        "decoded_bytes": 35073821,
+        "decoded_sha256_verified": true,
+        "mime": "application/octet-stream"
+      }
+    ],
+    "game_range_verified": {
+      "bytes": 4194304,
+      "object": "__chunks/4c149549694090ad9e6da8230f77ed858388a72b079122f92da8deecb58cca15/0000",
+      "sha256_verified": true
+    },
+    "evidence": "build/demand-files/public-browser-transport.json",
+    "menu_evidence": [
+      "build/demand-files/public-menu.json",
+      "build/demand-files/public-menu.png"
+    ],
+    "browser": "Chrome headless, WebGPU NVIDIA Ampere, new browser profile; public HTTPS origin.",
+    "cli_probe": "Plain Python urllib requests received Cloudflare 403 / error 1010. Public transport verification instead used actual Chrome requests with normal browser encoding negotiation; decoded hashes, compressed Content-Length and MIME were verified. No security settings changed.",
+    "python_tests_passed": 114,
+    "javascript_tests_passed": 61,
+    "limits": [
+      "Menu, city cinematic and short movement in the initial alley verified; full missions and long sessions are not verified.",
+      "No FPS gain or full game equivalence claimed.",
+      "Old domain belongs to the previous account and was not moved.",
+      "No optimized -O2 artifact was produced. Published runtime is the separately identified unoptimized candidate."
+    ],
+    "public_gameplay_verified_scope": [
+      "City cinematic rendered",
+      "CJ, HUD, BMX and traffic rendered in initial alley",
+      "W held for two seconds; world displacement visible in before/after screenshots"
+    ],
+    "public_gameplay_stats": {
+      "networkBytes": 654543442,
+      "memoryHits": 14086,
+      "diskHits": 273,
+      "legacyHits": 0,
+      "requests": 342,
+      "failures": 0,
+      "activeDownloads": 0
+    },
+    "public_gameplay_evidence": [
+      "build/demand-files/public-cinematic.png",
+      "build/demand-files/public-before-walk.png",
+      "build/demand-files/public-walk.png",
+      "build/demand-files/public-walk.json"
+    ]
+  },
+  "cloudflare_account_migration_20261028": {
+    "checked_utc": "2026-10-28T19:40:25.483343+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "published": false,
+    "destination_account_access": "Account API token active; account listing and Workers scripts listing succeeded. Credential not stored in project files.",
+    "blockers": [
+      "Destination R2 API returned 403 / code 10042: enable R2 through the Cloudflare Dashboard.",
+      "Destination Workers subdomain API returned 404 / code 10007: workers.dev subdomain not initialized.",
+      "Existing public deployment returned Cloudflare error 1027 before this migration; no new deployment performed."
+    ],
+    "billing_changes": false,
+    "optimized_artifact": "Previous optimization process is no longer running and produced no optimized.wasm; no optimized runtime claimed.",
+    "latest_checks": {
+      "python_tests_passed": 114,
+      "javascript_tests_passed": 61,
+      "scope": "Source tests from the preceding local demand-file implementation; not destination browser gameplay."
+    }
+  },
+  "web_demand_files_20261028": {
+    "checked_utc": "2026-10-28T19:16:32.138531+00:00",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "stage": "Local demand-file prototype verified; optimized/public candidate in preparation.",
+    "runtime_sha256": "1b83ea74702f8c66b45c9cba0b0b97e77c3c5bc2f0be618f2c24b2a2533400e5",
+    "runtime_bytes": 260362121,
+    "runtime_data_bytes": 35073821,
+    "bootstrap_bytes": 15735296,
+    "hosted_installation_bytes": 5004941035,
+    "menu_assets_bytes": 36055243,
+    "menu_scope": "Clean origin, before cache eviction; not a WAN timing measurement. Engine Wasm/data bytes are separate.",
+    "gameplay_repeat_stats": {
+      "networkBytes": 684259854,
+      "memoryHits": 14341,
+      "diskHits": 417,
+      "requests": 349,
+      "failures": 0,
+      "activeDownloads": 0
+    },
+    "browser_evidence": "build/demand-files/local-verification.json",
+    "verified": [
+      "Original menu rendered",
+      "City cinematic rendered",
+      "CJ, HUD and BMX rendered in initial alley",
+      "W input moved CJ; before/after screenshots preserved"
+    ],
+    "python_tests_passed": 114,
+    "javascript_tests_passed": 58,
+    "cache_memory_bytes": 33554432,
+    "cache_disk_max_entries": 256,
+    "max_network_requests": 4,
+    "range_block_bytes": 4194304,
+    "first_session_issue": "Renderer stopped answering after a GPU completion timeout and a diagnostic scan that copied all cached response bodies. Causality not established.",
+    "limits": [
+      "No FPS gain proven; no matched comparison.",
+      "Local HTTP and warm-cache repeat do not measure WAN latency.",
+      "Full missions, long sessions and city-wide coverage not verified.",
+      "Unoptimized runtime identity shown here; optimized/public candidate requires separate validation."
+    ],
+    "published": false
+  },
+"browser_frame_time_round": {
     "updated_utc": "2026-10-23T00:00:00+00:00",
     "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
     "target": "Raise browser gameplay frame rate toward 60 FPS, or establish with evidence what prevents it.",

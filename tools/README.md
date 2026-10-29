@@ -47,6 +47,10 @@ comandos singleplayer y su propio `game.toml`. No mezcles imagenes o hashes.
 Estas herramientas pueden depender de entradas privadas o de una version concreta.
 Una auditoria historica no demuestra gameplay ni rendimiento de la compilacion actual.
 
+La ruta opcional de [descarga bajo demanda](../docs/DEMAND_FILES.md) separa la
+preparacion inicial de las lecturas de archivos durante la partida. Requiere
+recompilar el runtime y activar explicitamente el candidato compatible.
+
 ## Pruebas y publicacion
 
 ```powershell

@@ -1,4 +1,5 @@
 /** Serve the launcher and stream versioned runtime artifacts from private R2. */
+export { PlayerPresence } from './presence.mjs';
 const GAME = 'GTASASingleplayer';
 const files = new Map([[`${GAME}.wasm`, 'application/wasm'], [`${GAME}.data`, 'application/octet-stream']]);
 const security = {
@@ -7,10 +8,11 @@ const security = {
   'Cross-Origin-Resource-Policy': 'same-origin',
   'X-Content-Type-Options': 'nosniff',
 };
-function secured(response) {
+function secured(response, precompressed = false) {
   const headers = new Headers(response.headers);
   for (const [key, value] of Object.entries(security)) headers.set(key, value);
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers,
+    encodeBody: precompressed ? 'manual' : 'automatic' });
 }
 export default {
   async fetch(request, env) {
@@ -20,6 +22,15 @@ export default {
     if (url.protocol === 'http:') {
       url.protocol = 'https:';
       return secured(new Response(null, { status: 301, headers: { Location: url.href } }));
+    }
+    if (url.pathname === '/api/presence' || url.pathname.startsWith('/api/presence/')) {
+      if (request.method !== 'GET') return secured(new Response('Method not allowed', { status: 405 }));
+      if (request.headers.has('Origin') && request.headers.get('Origin') !== url.origin)
+        return secured(new Response('Forbidden', { status: 403 }));
+      if (!env.LIVE_PLAYERS) return secured(new Response('Presence unavailable', { status: 503 }));
+      const response = await env.LIVE_PLAYERS.get(env.LIVE_PLAYERS.idFromName('gtasa-live-v1')).fetch(request);
+      // A WebSocket upgrade must retain its platform-owned socket.
+      return response.status === 101 ? response : secured(response);
     }
     if (request.method !== 'GET' && request.method !== 'HEAD')
       return secured(new Response('Method not allowed', { status: 405, headers: { Allow: 'GET, HEAD' } }));
@@ -69,11 +80,20 @@ export default {
       const parts = url.pathname.split('/');
       if (parts.length !== 4 || parts[2] !== env.RUNTIME_BUILD || !files.has(parts[3]))
         return secured(new Response('Not found', { status: 404 }));
+      // Cloudflare can normalize the header sent to Workers. Negotiate against
+      // the client's original value when the platform supplies it.
+      const accepted = request.cf?.clientAcceptEncoding ?? request.headers.get('Accept-Encoding') ?? '';
+      const acceptsGzip = accepted.split(',').some(part => {
+        const [encoding, ...parameters] = part.trim().toLowerCase().split(';');
+        const q = parameters.find(value => value.trim().startsWith('q='));
+        return encoding === 'gzip' && (!q || Number(q.trim().slice(2)) > 0);
+      });
+      let gzip = env.RUNTIME_GZIP === '1' && acceptsGzip;
       const key = `${env.RUNTIME_BUILD}/${parts[3]}`;
       // Keep the R2 body as a stream: never buffer the large Wasm inside a Worker.
-      const object = request.method === 'HEAD'
-        ? await env.GTA_RUNTIME.head(key)
-        : await env.GTA_RUNTIME.get(key);
+      const read = name => request.method === 'HEAD' ? env.GTA_RUNTIME.head(name) : env.GTA_RUNTIME.get(name);
+      let object = await read(key + (gzip ? '.gz' : ''));
+      if (!object && gzip) { gzip = false; object = await read(key); }
       if (!object) return secured(new Response('Runtime unavailable', { status: 503 }));
       const headers = new Headers({
         'Content-Type': files.get(parts[3]),
@@ -81,9 +101,11 @@ export default {
         'Cache-Control': 'public, max-age=31536000, immutable',
         'ETag': object.httpEtag,
       });
+      headers.set('Vary', 'Accept-Encoding');
+      if (gzip) headers.set('Content-Encoding', 'gzip');
       if (request.headers.get('If-None-Match') === object.httpEtag)
-        return secured(new Response(null, { status: 304, headers }));
-      return secured(new Response(request.method === 'HEAD' ? null : object.body, { headers }));
+        return secured(new Response(null, { status: 304, headers }), gzip);
+      return secured(new Response(request.method === 'HEAD' ? null : object.body, { headers }), gzip);
     }
     if (url.pathname === '/install' || url.pathname.startsWith('/install/') ||
         url.pathname === '/seed-manifest' || url.pathname === '/log')

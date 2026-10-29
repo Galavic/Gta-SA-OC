@@ -1,6 +1,56 @@
 # Cloudflare hosting
 
-## Current fast preparation
+## Live player panel (2026-10-28)
+
+[Player presence](https://gta.galavic.world/jugadores/) is deployed in Worker
+`8c6f6be7-9d71-4ff5-8647-a580310bcedf`. The `LIVE_PLAYERS` Durable Object uses
+SQLite, WebSocket hibernation and ephemeral session attachments. It counts
+player tabs, including startup/menu; panel observers are excluded. See
+[Live players](../docs/LIVE_PLAYERS.md) for semantics, timeouts and deployment.
+The runtime identity and R2 game objects remain unchanged. Source tests, actual
+WebSocket integration, desktop/mobile rendering and automatic reporting from
+an actual Chrome player startup passed; exact evidence is in [status](../docs/STATUS.md).
+
+The optional demand-file pipeline is documented in
+[Demand files](../docs/DEMAND_FILES.md). It bootstraps executable/DLL identity and
+serves verified archive blocks when the runtime reads them. A compatible rebuilt
+runtime is required; preparing a candidate does not change the active deployment.
+New release manifests also include reproducible gzip variants of Wasm and data.
+Upload all runtime objects listed in the manifest before deploying its Worker.
+
+## Custom domain migration complete (2026-10-28)
+
+The current GTA endpoint is [gta.galavic.world](https://gta.galavic.world/), on
+the new account. The zone activated at 2026-10-28T22:25:19.181535Z after the user
+changed the registrar delegation to leonidas/peaches. The GTA deployment below
+is unchanged; its 35 static files, both gzip runtime streams and a real 4 MiB
+range were checked again through the custom domain, including hashes and headers.
+
+The apex [galavic.world](https://galavic.world/) serves the copied portfolio as
+Workers Static Assets in the new account; all 123 published files were checked.
+Both hostnames have trusted TLS and redirect HTTP to HTTPS. Five MX records,
+SPF and DMARC are retained. Historical deployments remain available. See
+[status](../docs/STATUS.md) for exact identities, evidence and gameplay limits.
+
+## Demand deployment prepared before domain cutover (2026-10-28)
+
+[Open the launcher](https://gta-sa-oc.gta-sa-oc-web.workers.dev/), Worker version
+`6ee32817-1083-458c-92a0-4de46a256216`, uses a separate account and private R2
+bucket. All 465 game/runtime objects were uploaded to that account before
+activation. The previous custom domain remains on the previous account.
+
+Demand mode starts with the engine and 15,735,296 bytes of executable/DLLs;
+archive blocks are fetched when read. Wasm/data are served as 36,377,957 bytes
+of gzip, decoding to 295,435,942 bytes. A fresh Chrome profile rendered the
+original menu with 36,055,243 additional game-block bytes and no reader failures.
+Public Chrome checks verified 35 static files, decoded runtime hashes and a
+real 4 MiB range. The same public session also reached CJ, HUD and BMX in the initial alley;
+short W input produced visible movement with 654,543,442 game-block bytes and
+zero reader failures. Full missions, long-session stability and an FPS improvement
+are not established by those checks. See [status](../docs/STATUS.md) for identities
+and the separate local gameplay evidence. The sections below retain prior releases.
+
+## Previous account: fast preparation (2026-10-24)
 
 Worker `4e246825-35d4-4286-af76-051caf44b917` (2026-10-24) adds 4 MiB ranged
 reads over the same R2 objects. The hosted importer uses four bounded downloads,

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Jugadores en vivo · GTA SA</title>
+  <link rel="icon" href="/favicon.png">
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <main>
+    <header><a class="back" href="/">← GTA San Andreas</a><span id="connection" role="status">Conectando…</span></header>
+    <div class="heading"><p class="eyebrow">PRESENCIA EN VIVO</p><h1>Jugadores conectados</h1>
+      <p class="description">Sesiones con el reproductor abierto, incluido el menú del juego.</p></div>
+    <section class="metrics" aria-label="Resumen de sesiones">
+      <div><span>Sesiones conectadas</span><strong id="total">—</strong></div>
+      <div><span>Juego abierto</span><strong id="running">—</strong></div>
+      <div><span>Cargando el motor</span><strong id="loading">—</strong></div>
+    </section>
+    <section class="sessions" aria-labelledby="sessions-title">
+      <div class="section-heading"><h2 id="sessions-title">Ahora mismo</h2><span id="updated">Esperando conexión</span></div>
+      <p id="empty" role="status">Conectando con el servidor de presencia…</p>
+      <div class="table-scroll"><table hidden id="table"><thead><tr><th scope="col">Sesión</th><th scope="col">Estado</th><th scope="col">Pestaña</th><th scope="col">Tiempo conectado</th></tr></thead><tbody id="rows"></tbody></table></div>
+    </section>
+    <footer><p>Identificadores anónimos y temporales por pestaña. Una persona puede abrir varias sesiones.</p>
+      <p>Las desconexiones sin aviso se retiran en unos 90–120 segundos. Mantén este panel abierto para recibir los cambios.</p></footer>
+  </main>
+  <script type="module" src="panel.mjs"></script>
+</body>
+</html>

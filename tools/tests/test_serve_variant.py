@@ -9,7 +9,7 @@ import tempfile
 import threading
 import unittest
 from urllib.error import HTTPError
-from urllib.request import urlopen
+from urllib.request import urlopen, Request
 from http.server import ThreadingHTTPServer
 
 spec = importlib.util.spec_from_file_location("serve_variant", Path(__file__).parents[1] / "serve_variant.py")
@@ -44,6 +44,39 @@ class ImportTests(unittest.TestCase):
         (self.prepared / "data/main.dat").unlink()
         with self.assertRaisesRegex(ValueError, "empty or missing"):
             serve.import_manifest(self.prepared, self.site)
+
+    def test_demand_ranges_use_original_offsets_and_refuse_unlisted_or_invalid_reads(self):
+        old, old_site = serve.PREPARED, serve.SITE
+        serve.PREPARED, serve.SITE = self.prepared, self.site
+        server = ThreadingHTTPServer(("127.0.0.1", 0), serve.Handler)
+        try:
+            server.import_files = {"data/main.dat"}
+            payload = (self.prepared / "data/main.dat").read_bytes()
+            serve.configure_hosted(server, {"build": "0123456789abcdef", "entries": [{
+                "path": "data/main.dat", "size": len(payload), "chunks": [
+                    {"path": "parts/one", "size": 4}, {"path": "parts/two", "size": len(payload) - 4},
+                ],
+            }]})
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_port}"
+            with urlopen(Request(base + "/game/0123456789abcdef/parts/two", headers={"Range": "bytes=1-4"})) as response:
+                self.assertEqual(response.status, 206)
+                self.assertEqual(response.read(), payload[5:9])
+                self.assertEqual(response.headers["Content-Range"], f"bytes 1-4/{len(payload) - 4}")
+            for path, byte_range, expected in [
+                ("parts/two", "bytes=999-1000", 416), ("parts/two", "bytes=0-", 416),
+                ("missing", "bytes=0-1", 404), ("../game.exe", "bytes=0-1", 404),
+            ]:
+                with self.assertRaises(HTTPError) as error:
+                    urlopen(Request(base + "/game/0123456789abcdef/" + path, headers={"Range": byte_range}))
+                self.assertEqual(error.exception.code, expected)
+        finally:
+            server.shutdown()
+            server.server_close()
+            if 'thread' in locals():
+                thread.join()
+            serve.PREPARED, serve.SITE = old, old_site
 
     def test_player_staging_ignores_native_test_javascript(self):
         dest = self.site / serve.GAME_ID
@@ -111,12 +144,12 @@ class ImportTests(unittest.TestCase):
         # inherited environment must both retain normal time. Other explicit
         # runtime overrides remain available for controlled profiling.
         body = re.search(r'preRun: \[\(\) => \{([\s\S]*?)\n    \}\],', html).group(1)
-        script = ('const run = new Function("Module", "location", "id", "record", process.argv[1]);'
+        script = ('const run = new Function("Module", "location", "id", "record", "streaming", "game", process.argv[1]);'
                   'const outputs = ["", "?RECOMP_QPC_SCALE=2&RECOMP_READ_PATH_CACHE=0",'
                   '"?RECOMP_QPC_SCALE=8&RECOMP_QPC_SCALE=2&RECOMP_D3D9_SCALE=2&RECOMP_D3D9_STATS=0",'
                   '"?RECOMP_D3D9_FRAME_GROUP_CACHE=0&RECOMP_D3D9_BATCH_UPLOADS=0&RECOMP_D3D9_RENAME_BUFFERS=0"].map(search => {'
                   'const Module={ENV:{RECOMP_QPC_SCALE:"8",RECOMP_D3D9_SCALE:"1"}};'
-                  'const logs=[];run(Module,{search},"test",line=>logs.push(line));'
+                  'const logs=[];run(Module,{search},"test",line=>logs.push(line),false,{});'
                   'return {...Module.ENV,logs};});'
                   'console.log(JSON.stringify(outputs));')
         outputs = json.loads(subprocess.check_output(["node", "-e", script, body], text=True))

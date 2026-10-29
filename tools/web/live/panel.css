@@ -1,0 +1,33 @@
+:root { color-scheme: dark; font-family: Arial, sans-serif; color: #e9ede7; background: #10120f; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 1160px; margin: auto; padding: 32px 40px 56px; }
+header, .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+a { color: inherit; text-decoration: none; }
+a:hover { text-decoration: underline; }
+a:focus-visible { outline: 2px solid #b7de8b; outline-offset: 6px; }
+.back { font-size: 15px; }
+#connection { color: #b2b9ad; font-size: 13px; }
+#connection[data-state="live"] { color: #b7de8b; }
+#connection[data-state="live"]::before { content: "●"; margin-right: 8px; }
+.heading { margin-top: 76px; }
+.eyebrow { color: #b7de8b; letter-spacing: .13em; font: 12px monospace; }
+h1 { font-size: clamp(32px, 5vw, 54px); letter-spacing: -.04em; line-height: 1.12; margin: 16px 0; }
+.description { color: #aab1a6; line-height: 1.6; }
+.metrics { display: grid; grid-template-columns: repeat(3, 1fr); margin: 48px 0; border-top: 1px solid #363e31; border-bottom: 1px solid #363e31; }
+.metrics > div { padding: 28px 24px 28px 0; }
+.metrics span { display: block; font-size: 13px; color: #aab1a6; }
+.metrics strong { display: block; font-size: 56px; font-weight: 500; margin-top: 12px; font-variant-numeric: tabular-nums; }
+h2 { margin: 0; font-size: 19px; font-weight: 500; }
+#updated { color: #aab1a6; font-size: 12px; }
+#empty { padding: 48px 0; color: #aab1a6; }
+.table-scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; margin-top: 24px; text-align: left; font-size: 14px; white-space: nowrap; }
+th { color: #aab1a6; font-size: 12px; font-weight: 400; padding: 14px 20px 14px 0; }
+td { border-top: 1px solid #293024; padding: 20px 20px 20px 0; }
+td:first-child { font-family: monospace; color: #c8dcaf; }
+td:last-child { font-variant-numeric: tabular-nums; }
+footer { border-top: 1px solid #293024; margin-top: 48px; padding-top: 18px; color: #90998a; font-size: 12px; line-height: 1.7; }
+footer p { margin: 4px 0; }
+[hidden] { display: none !important; }
+@media (max-width: 600px) { main { padding: 24px 20px; } .heading { margin-top: 48px; } .metrics { gap: 12px; margin: 32px 0; } .metrics > div { padding-right: 0; } .metrics strong { font-size: 40px; } .metrics span { font-size: 11px; min-height: 28px; } .section-heading { align-items: start; flex-direction: column; gap: 8px; } }

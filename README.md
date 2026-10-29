@@ -1,6 +1,8 @@
 # GTA SA OC
 
-**[Open the web launcher](https://gta.galavic.world/)** - the hosted prepared game files download automatically on first use (about 5 GB).
+**[Open the web launcher](https://gta.galavic.world/)** - downloads the engine and startup files first, then verified game blocks as they are needed.
+
+[Jugadores en vivo](https://gta.galavic.world/jugadores/) ? sesiones anonimas del reproductor, incluido su menu.
 
 Port experimental de **GTA San Andreas para navegador**, basado en el motor
 original de PC y WebAssembly/WebGPU. Proyecto no oficial de la comunidad.

@@ -1,6 +1,7 @@
 """Assemble an allowlisted Cloudflare release; never upload a local build tree."""
 import argparse
 import hashlib
+import gzip
 import json
 from pathlib import Path
 import re
@@ -14,7 +15,15 @@ def digest(path):
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
-def prepare(output, target="workers", game_manifest=None):
+
+def gzip_artifact(source, destination):
+    """Reproducible precompression, without embedding local names or timestamps."""
+    with source.open("rb") as src, destination.open("wb") as dest:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=dest, compresslevel=6, mtime=0) as encoded:
+            shutil.copyfileobj(src, encoded, 1 << 20)
+
+def prepare(output, target="workers", game_manifest=None, demand_files=False, site=SITE):
+    site = Path(site).resolve()
     output = output.resolve()
     if not output.is_relative_to(ROOT / "build"):
         raise ValueError("Release directory must be inside the ignored build directory")
@@ -24,7 +33,7 @@ def prepare(output, target="workers", game_manifest=None):
     runtime = output / "runtime"
     assets.mkdir(parents=True)
     runtime.mkdir()
-    player = SITE / "gtasa-singleplayer"
+    player = site / "gtasa-singleplayer"
     # Compiler __FILE__ strings and package labels can embed the build machine.
     # Replace only that printable prefix, preserving Wasm section/data lengths.
     personal = re.compile(rb"C:[/\\]+Users[/\\]+[^/\\\s\"'\x00]+[/\\]+")
@@ -35,17 +44,18 @@ def prepare(output, target="workers", game_manifest=None):
     source_build_id = digest(player / f"{APP}.wasm")
     build_id = digest(runtime / f"{APP}.wasm")
     selected = ["index.html", "menu.css", "start.js", "menu-sounds.js", "contributors.js", "backgrounds.js", "music.js", "app.js", "core.js", "worker.js",
-                "games.json", "gta-sa-logo.png", "background.png", "auxiliary-files.json", "hosted-import.mjs",
+                "games.json", "gta-sa-logo.png", "background.png", "auxiliary-files.json", "hosted-import.mjs", "demand-files.mjs",
+                "player-presence.mjs", "jugadores/index.html", "jugadores/panel.mjs", "jugadores/panel.css",
                 "original-menu/menu.ttf", "original-menu-audio/highlight.wav", "original-menu-audio/select.wav",
                 f"gtasa-singleplayer/{APP}.js"]
-    if (SITE / "favicon.png").is_file():
+    if (site / "favicon.png").is_file():
         selected.append("favicon.png")
-    if (SITE / "launcher-music.mp3").is_file():
+    if (site / "launcher-music.mp3").is_file():
         selected.append("launcher-music.mp3")
     selected.extend(f"social-icons/{name}.svg" for name in ("x", "github", "discord", "whatsapp"))
-    selected.extend(p.name for p in sorted(SITE.glob("background-[0-9]*.png")))
+    selected.extend(p.name for p in sorted(site.glob("background-[0-9]*.png")))
     for name in selected:
-        source = SITE / name
+        source = site / name
         dest = assets / name
         dest.parent.mkdir(parents=True, exist_ok=True)
         if dest.suffix == ".js":
@@ -74,12 +84,22 @@ def prepare(output, target="workers", game_manifest=None):
         game["hosted"] = {"manifest": "/game-assets.json", "build": hosted["build"]}
         if hosted.get("rangeBlockSize") == 4 * 1024 * 1024:
             game["hosted"]["fastRanges"] = True
+        if demand_files:
+            if not game["hosted"].get("fastRanges"):
+                raise ValueError("Demand files require a verified range inventory")
+            runtime_js = (player / f"{APP}.js").read_text(encoding="utf-8")
+            if "Game archive read failed:" not in runtime_js or b"demand filesystem:" not in (runtime / f"{APP}.wasm").read_bytes():
+                raise ValueError("This runtime has no verified demand filesystem support; rebuild it first")
+            game["hosted"]["demandFiles"] = True
+    elif demand_files:
+        raise ValueError("Demand files require a hosted game inventory")
     (assets / "games.json").write_text(json.dumps(games, indent=2), encoding="utf-8")
     html = (player / "index.html").read_text(encoding="utf-8").replace(source_build_id, build_id)
     # Remove local trace transport altogether; public visitors do not POST logs.
     begin = html.index("const _beaconQ")
     end = html.index("function checkpoint", begin)
     html = html[:begin] + '''function record(text) {
+  notePlayerFrame(text);
   log.push(String(text));
   if (log.length > 200) log.shift();
   bootLog.textContent = log.join("\\n");
@@ -111,17 +131,25 @@ def prepare(output, target="workers", game_manifest=None):
         source = player / name
         artifact = runtime / name
         manifests.append({"name": name, "key": f"{build_id}/{name}", "bytes": artifact.stat().st_size, "sha256": digest(artifact)})
+        compressed = runtime / (name + ".gz")
+        gzip_artifact(artifact, compressed)
+        manifests.append({"name": compressed.name, "key": f"{build_id}/{compressed.name}",
+                          "bytes": compressed.stat().st_size, "sha256": digest(compressed), "contentEncoding": "gzip"})
     config = {
         "$schema": "https://unpkg.com/wrangler/config-schema.json",
         "name": "gta-sa-oc", "main": str(ROOT / "cloudflare/worker.mjs"),
         "compatibility_date": "2026-10-23", "workers_dev": True,
         "assets": {"directory": "./assets", "binding": "ASSETS", "run_worker_first": True, "not_found_handling": "404-page"},
         "r2_buckets": [{"binding": "GTA_RUNTIME", "bucket_name": "gta-sa-oc-runtime"}],
-        "vars": {"RUNTIME_BUILD": build_id},
+        "vars": {"RUNTIME_BUILD": build_id, "RUNTIME_GZIP": "1"},
+        "durable_objects": {"bindings": [{"name": "LIVE_PLAYERS", "class_name": "PlayerPresence"}]},
+        "migrations": [{"tag": "presence-v1", "new_sqlite_classes": ["PlayerPresence"]}],
     }
     if hosted:
         config["vars"]["GAME_BUILD"] = hosted["build"]
     if target == "pages":
+        config.pop("migrations")
+        config["durable_objects"]["bindings"][0]["script_name"] = "gta-sa-oc"
         config.pop("main")
         config.pop("assets")
         config.pop("workers_dev")
@@ -143,9 +171,12 @@ def prepare(output, target="workers", game_manifest=None):
               "gameInstallationUploaded": bool(hosted), "selectedLauncherMediaIncluded": True, "sourceWasmSha256": source_build_id, "localLogTransport": False, "publicGameplayVerified": False,
               "gameImportRequired": not bool(hosted), "gameDllsMustMatchAuxiliaryMetadata": True,
               "hostedGameBuild": hosted["build"] if hosted else None,
-              "automaticGameDownload": bool(hosted)}
+              "automaticGameDownload": bool(hosted), "demandFiles": demand_files,
+              "runtimeTransferGzipBytes": sum(item["bytes"] for item in manifests if item.get("contentEncoding") == "gzip"),
+              "runtimeDecodedBytes": sum(item["bytes"] for item in manifests if not item.get("contentEncoding"))}
     (output / "release-manifest.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
-    print(json.dumps({"static_files": len(asset_manifest), "runtime_bytes": sum(x['bytes'] for x in manifests), "wasm_sha256": build_id}))
+    print(json.dumps({"static_files": len(asset_manifest), "runtime_upload_bytes": sum(x['bytes'] for x in manifests),
+                      "runtime_transfer_gzip_bytes": report["runtimeTransferGzipBytes"], "wasm_sha256": build_id}))
     return output
 
 if __name__ == "__main__":
@@ -153,5 +184,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--target", choices=("workers", "pages"), default="workers")
     parser.add_argument("--game-manifest", type=Path, help="Prepared hosted installation inventory")
+    parser.add_argument("--demand-files", action="store_true", help="Bootstrap executable/DLLs, fetch archives on runtime reads")
+    parser.add_argument("--site", type=Path, default=SITE, help="Validated candidate site; defaults to the normal local site")
     args = parser.parse_args()
-    prepare(args.output, args.target, args.game_manifest)
+    prepare(args.output, args.target, args.game_manifest, args.demand_files, args.site)

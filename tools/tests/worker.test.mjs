@@ -59,6 +59,51 @@ test('answers HEAD for a runtime object without a body', async () => {
   assert.equal(await response.text(), '');
 });
 
+test('runtime gzip negotiates the precompressed object and retains Wasm MIME and isolation', async () => {
+  const keys = [];
+  const env = makeEnv({ RUNTIME_GZIP: '1' });
+  env.GTA_RUNTIME.get = async key => { keys.push(key); return { size: 4, httpEtag: '"gz"', body: 'gzip' }; };
+  const response = await worker.fetch(request(`/runtime/${BUILD}/GTASASingleplayer.wasm`, {
+    headers: { 'Accept-Encoding': 'br, gzip' },
+  }), env);
+  assert.equal(keys[0], `${BUILD}/GTASASingleplayer.wasm.gz`);
+  assert.equal(response.headers.get('Content-Encoding'), 'gzip');
+  assert.equal(response.headers.get('Vary'), 'Accept-Encoding');
+  assert.equal(response.headers.get('Content-Type'), 'application/wasm');
+  assert.equal(response.headers.get('Cross-Origin-Embedder-Policy'), COEP);
+});
+
+test('gzip q=0 uses identity, and a missing gzip object falls back to the original', async () => {
+  for (const encoding of ['gzip;q=0', 'br', 'identity']) {
+    const keys = [], env = makeEnv({ RUNTIME_GZIP: '1' });
+    env.GTA_RUNTIME.get = async key => { keys.push(key); return { size: 4, httpEtag: '"plain"', body: 'wasm' }; };
+    const response = await worker.fetch(request(`/runtime/${BUILD}/GTASASingleplayer.wasm`, {
+      headers: { 'Accept-Encoding': encoding },
+    }), env);
+    assert.deepEqual(keys, [`${BUILD}/GTASASingleplayer.wasm`]);
+    assert.equal(response.headers.get('Content-Encoding'), null);
+  }
+  const keys = [], env = makeEnv({ RUNTIME_GZIP: '1' });
+  env.GTA_RUNTIME.get = async key => { keys.push(key); return key.endsWith('.gz') ? null : { size: 4, httpEtag: '"plain"', body: 'wasm' }; };
+  const response = await worker.fetch(request(`/runtime/${BUILD}/GTASASingleplayer.wasm`, {
+    headers: { 'Accept-Encoding': 'gzip' },
+  }), env);
+  assert.deepEqual(keys, [`${BUILD}/GTASASingleplayer.wasm.gz`, `${BUILD}/GTASASingleplayer.wasm`]);
+  assert.equal(await response.text(), 'wasm');
+});
+
+test('negotiation respects the client header when Cloudflare normalizes Accept-Encoding', async () => {
+  const keys = [], env = makeEnv({ RUNTIME_GZIP: '1' });
+  env.GTA_RUNTIME.get = async key => { keys.push(key); return { size: 4, httpEtag: '"plain"', body: 'wasm' }; };
+  for (const clientAcceptEncoding of ['identity', 'gzip;q=0', '']) {
+    const req = request(`/runtime/${BUILD}/GTASASingleplayer.wasm`, { headers: { 'Accept-Encoding': 'br, gzip' } });
+    Object.defineProperty(req, 'cf', { value: { clientAcceptEncoding } });
+    const response = await worker.fetch(req, env);
+    assert.equal(response.headers.get('Content-Encoding'), null);
+  }
+  assert.equal(keys.every(key => !key.endsWith('.gz')), true);
+});
+
 test('rejects unknown builds, unknown runtime names and local endpoints', async () => {
   for (const path of [
     '/runtime/other/GTASASingleplayer.wasm',

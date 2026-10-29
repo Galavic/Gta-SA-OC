@@ -1,5 +1,270 @@
 # Estado actual
 
+## Panel de jugadores publicado (2026-10-28)
+
+https://gta.galavic.world/jugadores/ muestra presencia anonima en vivo y tiene
+un enlace desde el launcher. Worker `8c6f6be7-9d71-4ff5-8647-a580310bcedf`.
+Se distinguen carga del motor, renderer iniciado, visibilidad y tiempo de
+conexion. Cuenta pestanas del reproductor, incluido arranque/menu; no personas
+unicas ni una mision activa. Las paginas ya abiertas informan al recargarse.
+
+Un Durable Object SQLite comparte las sesiones mediante WebSockets con API de
+hibernacion. El servidor asigna identificadores temporales; no se guardan
+nombres, IP, pais ni huellas. Los observadores no aumentan el contador. Los
+heartbeats son cada 25 s; tras 90 s sin respuesta se excluye una sesion de los
+snapshots. Una alarma prevista cada 30 s cierra sockets caducados; el
+planificador puede retrasarla. La prueba local real observa cierre a los
+123.159 ms, aproximadamente dos minutos. La salida normal elimina la sesion
+sin esperar ese plazo. El cliente reintenta conexiones y maneja pagehide/pageshow.
+
+Pasan 114 pruebas Python y 67 JavaScript. La integracion con workerd/Durable
+Object local y la de HTTPS publico usan el tracker real del cliente y comprueban
+entrada, estado, visibilidad, salida y restauracion. La prueba local confirma
+la expiracion mediante cierre de un socket sin heartbeats, no solo un contador.
+El TLS local autofirmado se acepta solo en la sonda de loopback; las pruebas
+publicas conservan la validacion normal. Chrome muestra el panel conectado en
+escritorio y movil con dos sesiones sinteticas de validacion; se retiran al
+terminar. Evidencia: `panel-browser-verification.json`, `panel-desktop.png`
+y `panel-mobile.png` bajo `build/demand-files/`.
+
+Otra prueba abre el reproductor real en Chrome/WebGPU con su OPFS/cache previos
+en workers.dev. El primer informe real de frames registra automaticamente
+una sesion con renderer iniciado, observada desde gta.galavic.world; al cerrar
+el navegador vuelve a cero. La captura muestra el logo de arranque. Evidencia:
+`presence-real-game.{json,png}`. Esto verifica la instrumentacion del arranque,
+no una nueva sesion de misiones o gameplay en ciudad.
+
+Desde el dominio final se verifican 39 assets por hash, dos flujos gzip del
+runtime por hash comprimido/decodificado y un rango real de juego de 4 MiB.
+Se reutiliza el runtime `c03abc8257ffd19e08fe016d6fa0cc7133636fe3c4c68512b32c91530bf06b19`,
+ejecutable fuente `a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Solo cambia el HTML del reproductor; no se recompila Wasm. El hook se conserva
+en el parche completo (681.431 bytes), manteniendo el pin y la licencia.
+No se declara una mejora de FPS. Guia: `docs/LIVE_PLAYERS.md`.
+
+## Dominio migrado y verificado en la cuenta nueva (2026-10-28)
+
+El usuario actualiza Namecheap. RDAP del registro y Google DNS muestran
+leonidas.ns.cloudflare.com y peaches.ns.cloudflare.com. Cloudflare activa la
+zona nueva el 2026-10-28T22:25:19.181535Z. El estado anterior pendiente queda
+resuelto; las comprobaciones iniciales tambien conservaron evidencia de caches
+que aun mostraban gracie/yahir.
+
+https://gta.galavic.world/ sirve ahora el Worker nuevo gta-sa-oc, version
+`6ee32817-1083-458c-92a0-4de46a256216`, con runtime
+`c03abc8257ffd19e08fe016d6fa0cc7133636fe3c4c68512b32c91530bf06b19` y ejecutable
+fuente `a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Se comprueban desde el dominio los 35 assets por SHA256, MIME/COOP/COEP,
+HEAD sin compresion, los dos flujos gzip con hashes comprimidos y decodificados,
+y un rango de juego real de 4 MiB con 206, Content-Range y hash correctos.
+Se usa el verificador de release con adaptador curl y validacion TLS normal;
+la sonda urllib sigue recibiendo Cloudflare 1010. No se cambian protecciones
+para permitir esa sonda.
+
+https://galavic.world/ sirve el portafolio en Worker Static Assets, version
+`74328c79-37f7-453c-a34e-225bd6563c61`. Sus 123 archivos coinciden por SHA256
+con el build preparado. Ambos hostnames pasan validacion de certificado y
+nombre con TLS 1.3. Se activa Always Use HTTPS en la zona nueva y se verifican
+301 desde HTTP a HTTPS en ambos dominios. Google DNS devuelve los cinco MX
+originales con prioridades y destinos correctos; SPF/DMARC tambien se conservaron
+en el inventario DNS de destino. No se borran los despliegues de la cuenta vieja.
+
+Evidencia: `build/domain-migration-20261028/gta-custom-domain-verification.json`,
+`portfolio-custom-domain-verification.json`, `custom-domain-tls-verification.json`
+y `mail-dns-verification.json`. La sesion de juego documentada en workers.dev
+usa el mismo runtime. Este corte verifica transporte e identidad desde los
+dominios finales; no agrega una sesion de gameplay, una mejora de FPS ni prueba
+de estabilidad prolongada. La migracion del dominio queda completada.
+
+## Ambos sitios preparados; falta cambiar nameservers en Namecheap (2026-10-28)
+
+Se localiza el repositorio del portafolio y se compila el commit
+`69384913960a6dd06486ff7030ca15f7b50aece8`, que coincide con la identidad registrada
+en el despliegue Pages anterior. Solo se configura localmente `output: export`;
+no se publican cambios en el repositorio fuente. Se leyeron las instrucciones
+Next.js del proyecto y la guia de exportacion instalada antes de cambiarlo.
+
+Se publica la salida estatica en la cuenta de destino como Worker
+`portafolio-galavic`, version `74328c79-37f7-453c-a34e-225bd6563c61`, sin script de
+Worker. URL previa al corte: https://portafolio-galavic.gta-sa-oc-web.workers.dev/ .
+Se verifican por HTTP los 123 archivos publicados, 4.392.510 bytes, con sus SHA256.
+El texto de portada servido coincide con el sitio previo; los 11 recursos CSS/JS
+referenciados por la portada tambien coinciden byte a byte con Pages. Esto no
+verifica interacciones en navegador. Se conserva el Pages anterior y no se
+elimina su vinculacion ni su deployment.
+
+La API vincula galavic.world al Worker del portafolio dentro de la zona nueva.
+Se sustituye en esa zona el CNAME del apex hacia Pages por el registro gestionado
+del Worker nuevo, para servir la copia sin depender del Pages de otra cuenta.
+Los otros registros, incluidos los cinco MX, SPF, DMARC y el enlace del GTA,
+se conservan. La zona nueva mantiene nueve registros. Se vuelve a leer la zona
+de origen antes del cambio y sigue coincidiendo con el respaldo. La portada
+actual de galavic.world sigue respondiendo HTTPS 200 tras la preparacion.
+
+La delegacion aun usa gracie/yahir; la zona nueva sigue pending. Falta que el
+usuario cambie Namecheap > galavic.world > Nameservers > Custom DNS a:
+`leonidas.ns.cloudflare.com` y `peaches.ns.cloudflare.com`. No hay sesion ni API
+del registrador disponibles para hacerlo desde aqui. Tras ese paso hay que
+comprobar activacion, TLS y contenido de galavic.world y gta.galavic.world.
+No se declara completado el cambio del dominio. Evidencia bajo
+`build/domain-migration-20261028/`, incluidos manifiesto, comprobaciones HTTP y
+comparacion CSS/JS con el sitio anterior. La identidad del runtime GTA se mantiene
+`c03abc8257ffd19e08fe016d6fa0cc7133636fe3c4c68512b32c91530bf06b19`, ejecutable
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+
+## DNS actuales copiados; pendiente conservar el portafolio Pages (2026-10-28)
+
+El nuevo acceso DNS permite exportar los nueve registros actuales de la cuenta
+anterior. Se conserva el JSON completo y una exportacion BIND bajo
+`build/domain-migration-20261028/`. Se crean ocho registros en la cuenta nueva;
+el noveno, gta.galavic.world, ya lo gestiona la vinculacion del Worker nuevo.
+La comparacion confirma nueve registros equivalentes por tipo, nombre, destino,
+prioridad, TTL y proxy. Se conservan los cinco MX, SPF y DMARC. DNSSEC figura
+disabled en la cuenta de origen. Los ajustes de zona siguen sin permiso de
+lectura (403 / 9109), igual que rulesets (403 / 10000). No se publican tokens.
+
+La exportacion actual demuestra que el apex ya no apunta a Vercel: ahora usa
+portafolio-galavic.pages.dev. La API Pages confirma que el proyecto
+portafolio-galavic sigue en la cuenta anterior, con galavic.world activo y
+deployment `2c27293d-8cd6-4c5e-a906-3b33054b782c`. Es una subida directa sin
+repositorio conectado. La documentacion oficial de Pages exige que proyecto y
+zona del dominio raiz esten en la misma cuenta. Copiar el CNAME por si solo no
+verifica que ese sitio sobreviva al cambio de cuenta. Hace falta preparar
+su migracion y obtener los archivos/build o repositorio del portafolio. No se
+encuentra ese proyecto entre los directorios locales disponibles en Projects;
+se solicita su ubicacion al usuario.
+
+La delegacion publica permanece en gracie/yahir y no se modifica Namecheap.
+La zona nueva tiene asignados leonidas/peaches. No se considera completada
+la migracion del dominio ni se indica aun hacer el cambio de nameservers.
+El endpoint Workers de la cuenta nueva mantiene la verificacion anterior con
+runtime `c03abc8257ffd19e08fe016d6fa0cc7133636fe3c4c68512b32c91530bf06b19`
+y ejecutable `a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Fuente de la restriccion del apex:
+https://developers.cloudflare.com/pages/configuration/custom-domains/ .
+
+## Migracion del dominio autorizada y preparada (2026-10-28; falta exportar DNS)
+
+El usuario autoriza trasladar la zona galavic.world a la cuenta nueva. Se crea
+la zona `1dc11c0d9d21765e9c161c19e9c5cb54`, pendiente de delegacion, con nameservers
+`leonidas.ns.cloudflare.com` y `peaches.ns.cloudflare.com`. Se vincula
+`gta.galavic.world` al Worker nuevo `gta-sa-oc`; la API confirma la vinculacion
+`cee463f4a8f2f84822d6a76032bfb90a0b3d3033`. Esto no verifica DNS/TLS publico.
+La delegacion publica sigue en gracie/yahir; no se modifica Namecheap.
+
+La sesion Wrangler de la cuenta anterior permite consultar la zona, pero leer
+DNS y DNSSEC devuelve 403 / 10000, y ajustes de zona, 403 / 9109. No se pueden
+copiar todos los registros ni comprobar ajustes con esos permisos. El archivo
+historico dns-before.json es una sonda publica, no una exportacion completa;
+no sirve para reconstruir con certeza los registros actuales. No se importan
+registros deducidos. Falta una exportacion actual desde DNS > Records > Import
+and Export de la cuenta anterior. Tampoco hay navegador conectado ni acceso al
+registrador en esta sesion. El siguiente paso es importar y comparar esa copia
+antes de cambiar los nameservers. Evidencia local: `build/domain-migration-20261028/`.
+
+El Worker nuevo sigue disponible en gta-sa-oc.gta-sa-oc-web.workers.dev con
+runtime `c03abc8257ffd19e08fe016d6fa0cc7133636fe3c4c68512b32c91530bf06b19`
+y ejecutable fuente `a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+No se declara completada la migracion del dominio.
+
+## Archivos bajo demanda publicados en otra cuenta (2026-10-28)
+
+Nueva URL: https://gta-sa-oc.gta-sa-oc-web.workers.dev/ . Worker
+`6ee32817-1083-458c-92a0-4de46a256216`. R2 y workers.dev ya estan activos;
+los bloqueos de la comprobacion anterior quedan resueltos. Se copian 465 objetos,
+5.336.754.934 bytes, con registro de subida separado del de la cuenta anterior.
+El dominio anterior no se modifica. No se guarda el token en el proyecto.
+
+Runtime publico SHA256
+`c03abc8257ffd19e08fe016d6fa0cc7133636fe3c4c68512b32c91530bf06b19`:
+es el candidato sin -O2, saneado de rutas personales. Ejecutable fuente
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Juego `a033b7fd3a69b951`. El motor Wasm/data suma 295.435.942 bytes decodificados,
+servidos como 36.377.957 bytes gzip. El bootstrap ejecutable/DLL suma
+15.735.296 bytes; los archivos restantes se leen en bloques verificados.
+
+Chrome con WebGPU NVIDIA Ampere y perfil nuevo carga el menu original desde
+HTTPS. En ese punto el lector registra 36.055.243 bytes de bloques del juego,
+45 peticiones y cero fallos; son adicionales al motor/bootstrap/launcher.
+Los 35 archivos estaticos coinciden con sus hashes. Las dos respuestas del
+motor tienen MIME correcto, gzip, longitud comprimida y SHA256 decodificado
+correctos. Un rango real de 4 MiB devuelve 206, Content-Range y hash correctos.
+COOP/COEP tambien se verifican. Evidencia conservada en
+`build/demand-files/public-browser-transport.json` y `public-menu.{json,png}`.
+
+La sonda HTTP de Python recibe 403 / Cloudflare 1010; se comprueba el transporte
+con peticiones reales de Chrome sin cambiar ajustes de seguridad. La prueba
+publica verifica hashes decodificados y longitudes comprimidas; la comprobacion
+del flujo gzip sin decodificar se conserva como prueba local de workerd/R2.
+Las pruebas de fuente suman 114 Python y 61 JavaScript.
+
+La misma sesion publica continua a la cinematica de la ciudad y al callejon
+inicial con CJ, HUD, BMX y trafico. W durante dos segundos produce desplazamiento
+visible entre `public-before-walk.png` y `public-walk.png`. El lector registra
+654.543.442 bytes de bloques, 342 peticiones, 273 aciertos de disco y cero fallos
+al tomar esta evidencia. El motor/bootstrap son adicionales. Esto verifica una
+sesion corta por Internet sin esperar la instalacion completa; no mide una
+mejora de FPS ni prueba misiones completas o estabilidad prolongada. Las
+incidencias de audio siguen presentes. Se conserva `public-walk.json` con logs
+y estadisticas junto a las capturas. No se declara verificacion completa del juego.
+
+## Migracion a otra cuenta de Cloudflare (2026-10-28; pendiente)
+
+Se verifica acceso a la cuenta de destino con un token de cuenta activo y se
+pueden listar sus Workers. La API de R2 devuelve 403, codigo 10042: primero hay
+que activar R2 desde el panel. La API de subdominio Workers devuelve 404, codigo
+10007: todavia no se ha inicializado workers.dev. No se guarda la credencial en
+archivos del proyecto ni se realizan cambios de facturacion o despliegues.
+La web existente devolvia error Cloudflare 1027 antes de esta migracion.
+
+Las ultimas pruebas locales de la implementacion suman 114 Python y 61
+JavaScript. No verifican el despliegue de destino. El proceso previo de -O2 ya
+no esta activo y no produjo optimized.wasm; se conserva la evidencia anterior
+del runtime sin -O2. No se declara un runtime optimizado ni una publicacion nueva.
+
+## Archivos web bajo demanda (2026-10-28; candidato local probado)
+
+El launcher anterior esperaba la instalacion completa de 5.004.941.035 bytes.
+La nueva ruta descarga primero 15.735.296 bytes de ejecutable/DLL y conserva
+un descriptor parcial separado del sello de instalacion completa. El runtime
+monta 417 archivos con WasmFS; cada lectura descarga solo los bloques necesarios
+con sus offsets originales. Se verifican HTTP 206, longitud, Content-Range y
+SHA256. La cache en memoria se limita a 32 MiB; la persistente, a 256 entradas
+verificadas de hasta 4 MiB. Se permiten cuatro peticiones simultaneas. No se
+rellenan archivos pendientes con ceros ni se descarga todo en segundo plano.
+
+Se compila el runtime y V8 valida el modulo completo. Candidato sin -O2:
+260.362.121 bytes, SHA256
+`1b83ea74702f8c66b45c9cba0b0b97e77c3c5bc2f0be618f2c24b2a2533400e5`.
+El paquete data suma 35.073.821 bytes. Estas descargas del motor son adicionales
+a las de archivos del juego. Ejecutable fuente:
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Emscripten 6.0.12; se conserva el pin del runtime y su licencia MIT.
+
+Chrome/WebGPU NVIDIA Ampere muestra el menu original con 36.055.243 bytes de
+bloques en cache antes de cualquier desalojo, ademas del bootstrap y del motor.
+En una sesion repetida con cache se observa la cinematica en la ciudad y luego
+CJ con HUD/BMX en el callejon inicial. W produce desplazamiento visible. El
+lector registra 684.259.854 bytes de red en esa sesion, 349 peticiones, 417
+aciertos de disco y cero fallos al tomar la evidencia. No es un arranque frio
+ni una medicion de Internet. No se declara una mejora de FPS.
+
+La primera prueba larga deja de responder tras un timeout de GPU y una medicion
+que copiaba todos los cuerpos de la cache; no se establece causalidad. La
+repeticion usa tamanos del inventario y alcanza movimiento en ciudad. No prueba
+estabilidad de sesiones largas, misiones completas ni toda la ciudad. Los logs
+muestran incidencias de audio; no se declara resuelta su fidelidad. Se conservan
+las capturas y los logs de ambas sesiones bajo `build/demand-files/`.
+
+Pasan 114 pruebas Python y 58 JavaScript. Una prueba Wasm independiente en Chrome
+verifica el montaje real de un archivo remoto y un enlace local: stat=16 bytes,
+lectura remota de cinco bytes `789ab`, lectura local `exe`. La identidad del
+harness y del artefacto se conserva en `build/demand-files/local-verification.json`.
+La version final del lector paraleliza solo los bloques de una lectura solicitada;
+pruebas sinteticas verifican limites y que no escriba en memoria del invitado tras
+retornar un error. El candidato optimizado y la publicacion siguen en preparacion.
+Guia: [descarga bajo demanda](DEMAND_FILES.md). No se ha cambiado aun el despliegue.
+
 ## Revision del snapshot web para Git (2026-10-27)
 
 Se agrupan los cambios locales del port web: launcher, importacion alojada,

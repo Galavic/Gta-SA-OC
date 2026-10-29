@@ -2,7 +2,7 @@
 // WebCrypto, written at its original offset, and checkpointed for later retries.
 const MANIFEST = ".manifest.json", PARTIAL = ".hosted-blocks.json", STAMP = ".stamp";
 const HASH = /^[a-f0-9]{64}$/;
-const safePath = path => typeof path === "string" && !/[\\:\0]/.test(path) &&
+const safePath = path => typeof path === "string" && !/[\\:\x00-\x1f\x7f]/.test(path) &&
   path.split("/").every(part => part && part !== "." && part !== "..");
 
 async function fileFor(root, path, create = false) {
@@ -27,7 +27,7 @@ async function sha256(bytes) {
   return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
     .map(value => value.toString(16).padStart(2, "0")).join("");
 }
-function blocksFor(entry, blockSize) {
+export function blocksFor(entry, blockSize) {
   let fileOffset = 0;
   const blocks = [];
   for (const object of entry.chunks || [entry]) {
@@ -46,11 +46,7 @@ function blocksFor(entry, blockSize) {
   return blocks;
 }
 
-export async function importHostedGame(game, root, { fetchFile = fetch, signal, freeBytes,
-  onProgress = () => {}, parallelFiles = 2, parallelBlocks = 2 } = {}) {
-  const response = await fetchFile(game.hosted.manifest, { cache: "no-store", signal });
-  if (!response.ok) throw new Error(`Game inventory: HTTP ${response.status}`);
-  const inventory = await response.json();
+export function validateHostedInventory(game, inventory) {
   if (inventory.id !== game.id || inventory.executableSha256 !== game.sha256 ||
       inventory.build !== game.hosted.build || !/^[a-f0-9]{16}$/.test(inventory.build) ||
       inventory.rangeBlockSize !== 4 * 1024 * 1024 || !Array.isArray(inventory.entries))
@@ -61,12 +57,23 @@ export async function importHostedGame(game, root, { fetchFile = fetch, signal, 
         !HASH.test(entry.sha256) || !Number.isSafeInteger(entry.size) || entry.size < 0)
       throw new Error("Invalid hosted file inventory");
     seen.add(entry.path);
-    return { ...entry, blocks: blocksFor(entry, inventory.rangeBlockSize) };
+  return { ...entry, blocks: blocksFor(entry, inventory.rangeBlockSize) };
   });
   if (!entries.some(e => e.path === game.executable && e.sha256 === game.sha256) ||
       (game.requiredDirs || []).some(dir => !entries.some(e => e.path.startsWith(dir + "/"))) ||
       (game.requiredFiles || []).some(file => !entries.some(e => e.path === file.name && e.sha256 === file.sha256)))
     throw new Error("Hosted game is incomplete or its DLLs do not match");
+  return entries;
+}
+
+export async function importHostedGame(game, root, { fetchFile = fetch, signal, freeBytes,
+  onProgress = () => {}, parallelFiles = 2, parallelBlocks = 2, bootstrapOnly = false } = {}) {
+  const response = await fetchFile(game.hosted.manifest, { cache: "no-store", signal });
+  if (!response.ok) throw new Error(`Game inventory: HTTP ${response.status}`);
+  const inventory = await response.json();
+  const allEntries = validateHostedInventory(game, inventory);
+  const identities = new Set([game.executable, ...(game.requiredFiles || []).map(file => file.name)]);
+  const entries = bootstrapOnly ? allEntries.filter(entry => identities.has(entry.path)) : allEntries;
 
   const manifest = await readJSON(root, MANIFEST, { files: {} });
   let partial = await readJSON(root, PARTIAL, null);
@@ -210,7 +217,32 @@ export async function importHostedGame(game, root, { fetchFile = fetch, signal, 
     if (await sha256(await (await (await fileFor(root, name)).getFile()).arrayBuffer()) !== expected)
       return { result: "incomplete", missing: [name] };
   }
-  await writeText(root, STAMP, game.sha256 + "\n");
+  if (bootstrapOnly) {
+    // A bootstrap never receives the full-installation stamp. Older runtimes
+    // must refuse it rather than read holes as valid archive data.
+    const bootstrap = new Set(entries.map(entry => entry.path));
+    const mountLines = [];
+    for (const entry of allEntries) {
+      // Fully imported archives stay local; partial files are never exposed.
+      const saved = manifest.files[entry.path];
+      let local = bootstrap.has(entry.path);
+      if (!local && saved?.size === entry.size && saved.sha256 === entry.sha256) {
+        try { local = (await (await fileFor(root, entry.path)).getFile()).size === entry.size; }
+        catch (error) { if (error.name !== "NotFoundError") throw error; }
+      }
+      mountLines.push(`${local ? "L" : "R"}\t${entry.path}\n`);
+    }
+    const mounts = mountLines.join("");
+    await writeText(root, ".streaming-inventory.json", JSON.stringify(inventory));
+    await writeText(root, ".streaming-game.json", JSON.stringify(game));
+    await writeText(root, ".streaming-mount", mounts);
+    await writeText(root, ".streaming.json", JSON.stringify({ version: 1, build: inventory.build,
+      executableSha256: game.sha256, manifest: game.hosted.manifest }));
+  } else {
+    try { await root.removeEntry(".streaming.json"); }
+    catch (error) { if (error.name !== "NotFoundError") throw error; }
+    await writeText(root, STAMP, game.sha256 + "\n");
+  }
   report(true);
   return { result: "done", copied, skipped };
 }
