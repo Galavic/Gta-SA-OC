@@ -35,12 +35,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .photo-next { background-image: none; }
 /* Keep both fading covers inside a single layer below all launcher controls. */
 .scene { z-index: 0; isolation: isolate; pointer-events: none; overflow: hidden; }
-.hero { position: relative; z-index: 1; height: 100dvh; padding: 7vh 6vw 13vh; }
+.hero { position: relative; z-index: 1; height: 100dvh; padding: 7vh 6vw max(9vh, 64px); }
 .left { display: flex; flex-direction: column; align-items: flex-start; height: 100%; }
-.game-logo { margin: 0; line-height: 0; }
+/* The logo takes the height the menu, status and community leave it. */
+.game-logo { flex: 1 1 0; min-height: 0; margin: 0 0 16px; line-height: 0; }
 .game-logo img {
-  display: block; width: clamp(220px, 28vw, 430px); height: auto;
-  max-height: 46dvh; max-width: 76vw; object-fit: contain; object-position: left top;
+  display: block; width: auto; height: 100%;
+  max-width: min(clamp(220px, 28vw, 430px), 76vw); max-height: 46dvh;
+  object-fit: contain; object-position: left top;
 }
 .menu { display: flex; flex-direction: column; gap: 14px; width: min(430px, 100%); margin-top: auto; }
 .menu-item {
@@ -65,7 +67,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   box-shadow: inset 0 0 0 2px #f7f7f4, 0 1px 0 #5a5a58;
 }
 .status-line {
-  margin-top: 22px; width: min(430px, 100%); padding: 13px 15px; color: #e6e6e6;
+  margin-top: 14px; width: min(430px, 100%); padding: 13px 15px; color: #e6e6e6;
   background: #262626; border: 2px solid #414141;
   box-shadow: 0 0 0 2px #181818, inset 0 1px 0 #535353, 0 5px 12px #0004;
   font-size: var(--launcher-text); font-weight: bold; line-height: 1.35; overflow-wrap: anywhere;
@@ -100,30 +102,66 @@ button { font: inherit; color: inherit; cursor: pointer; }
   display: flex; flex-direction: column; align-items: flex-end; gap: 16px;
   max-width: min(650px, calc(100vw - 36px));
 }
-/* A panel like the contributors' one. Its text is Spanish with accents, "@"
-   and ":)", which the San Andreas menu font maps to other glyphs. */
+/* Under the menu, over the city, so the covers' characters stay in view. A
+   panel like the status line; Arial because the San Andreas menu font maps
+   accents, "@" and ":)" to other glyphs. */
 .community {
-  display: flex; align-items: flex-end; gap: 16px; padding: 12px 14px;
+  display: grid; grid-template-columns: minmax(0, 1fr) 140px;
+  grid-template-areas: "dcap tcap" "dbtn tbtn";
+  align-items: end; gap: 8px 10px;
+  width: min(430px, 100%); margin-top: 14px; padding: 12px;
   background: #262626; border: 2px solid #414141;
-  box-shadow: 0 0 0 2px #181818, inset 0 1px 0 #535353;
+  box-shadow: 0 0 0 2px #181818, inset 0 1px 0 #535353, 0 5px 12px #0004;
   font-family: Arial, Helvetica, sans-serif; font-weight: 700;
 }
-.community-item { display: flex; flex-direction: column; align-items: center; gap: 8px; width: 172px; }
-.community-caption { margin: 0; font-size: 14px; line-height: 1.35; text-align: center; color: var(--dim); }
-/* Square tiles in the launcher's button style, each in its own brand colour. */
-.community-tile {
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
-  width: 150px; aspect-ratio: 1; padding: 12px; color: #fff; text-align: center;
-  text-decoration: none; font-size: 16px; line-height: 1.2;
-  border: 2px solid; box-shadow: 0 0 0 2px #181818, inset 0 1px 0 rgba(255, 255, 255, .3);
-  transition: transform 120ms cubic-bezier(.23, 1, .32, 1), filter 120ms ease;
+.discord-caption { grid-area: dcap; }
+.twitter-caption { grid-area: tcap; text-align: center; }
+.community-caption { margin: 0; font-size: 13px; line-height: 1.4; color: #e6e6e6; }
+.community-keep { white-space: nowrap; }
+.community-count {
+  display: inline-block; padding: 0 6px; border-radius: 4px;
+  background: #5865f2; color: #fff; white-space: nowrap;
 }
-.community-tile img { display: block; width: 48px; height: 48px; object-fit: contain; }
-.community-tile.discord { background: #5865f2; border-color: #4752c4; }
-.community-tile.twitter { background: #000; border-color: #5a5a5a; }
-.community-tile:hover { filter: brightness(1.12); }
-.community-tile:active:not(:focus-visible) { transform: scale(.97); }
-.community-tile:focus-visible { outline: 2px solid #fff; outline-offset: 4px; }
+/* Pressable like the menu buttons, each in its own brand colour. */
+.community-tile {
+  position: relative; overflow: hidden; display: flex; align-items: center; gap: 12px;
+  min-height: 72px; padding: 10px 14px; border: 2px solid; border-radius: 7px;
+  color: #fff; text-decoration: none; font-size: 15px; line-height: 1.2;
+  transition: transform 120ms cubic-bezier(.23, 1, .32, 1), box-shadow 120ms, filter 120ms;
+}
+.community-tile img { display: block; flex: none; object-fit: contain; }
+.community-tile.discord {
+  grid-area: dbtn;
+  background: linear-gradient(135deg, #727dff, #5865f2 45%, #4450d6);
+  border-color: #949cff;
+  box-shadow: inset 0 1px 0 #fff6, 0 4px 0 #2d3594, 0 0 22px #5865f28c;
+}
+.community-tile.discord img { width: 40px; height: 30px; }
+/* A light sweeping across the Discord button every few seconds. */
+.community-tile.discord::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(105deg, transparent 38%, #ffffff5c 50%, transparent 62%);
+  transform: translateX(-110%);
+  animation: community-shine 5s cubic-bezier(.4, 0, .2, 1) 1.2s infinite;
+}
+@keyframes community-shine {
+  0% { transform: translateX(-110%); }
+  30%, 100% { transform: translateX(110%); }
+}
+.community-tile.twitter {
+  grid-area: tbtn; flex-direction: column; justify-content: center; gap: 6px; padding: 8px;
+  background: linear-gradient(#262626, #000); border-color: #5a5a5a;
+  box-shadow: inset 0 1px 0 #ffffff2e, 0 4px 0 #0c0c0c;
+}
+.community-tile.twitter img { width: 24px; height: 24px; }
+@media (hover: hover) and (pointer: fine) {
+  .community-tile:hover { transform: translateY(-2px); filter: brightness(1.08); }
+  .community-tile.discord:hover { box-shadow: inset 0 1px 0 #fff6, 0 6px 0 #2d3594, 0 0 32px #5865f2cc; }
+}
+.community-tile:active:not(:focus-visible) { transform: translateY(3px); filter: none; }
+.community-tile.discord:active { box-shadow: inset 0 1px 0 #fff6, 0 1px 0 #2d3594, 0 0 16px #5865f28c; }
+.community-tile.twitter:active { box-shadow: inset 0 1px 0 #ffffff2e, 0 1px 0 #0c0c0c; }
+.community-tile:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
 .contributors {
   max-width: 100%; padding: 12px 14px;
   background: #262626; border: 2px solid #414141;
@@ -233,15 +271,18 @@ button:disabled { opacity: .45; cursor: default; }
   .topbar { position: relative; top: auto; right: auto; margin: 18px 8vw 0; max-width: none; }
   .hero { height: auto; min-height: 65dvh; padding: 24px 8vw 32px; }
   .left { height: auto; gap: 24px; }
-  .game-logo { align-self: center; }
-  .game-logo img { object-position: center; }
+  .game-logo { flex: none; align-self: center; margin: 0; }
+  .game-logo img { width: clamp(220px, 28vw, 430px); height: auto; object-position: center; }
   .menu { margin-top: 12px; }
   .menu-item { min-height: 58px; }
   .status-line { margin-top: 0; }
   .corner { position: relative; right: auto; bottom: auto; margin: 0 8vw 24px; max-width: none; align-items: stretch; }
-  .community { flex-wrap: wrap; justify-content: center; align-items: flex-end; gap: 12px; }
-  .community-item { width: min(172px, calc(50% - 8px)); }
-  .community-tile { width: min(150px, 100%); }
+  .community {
+    grid-template-columns: minmax(0, 1fr); grid-template-areas: "dcap" "dbtn" "tcap" "tbtn";
+    width: 100%; margin-top: 0;
+  }
+  .twitter-caption { margin-top: 6px; text-align: left; }
+  .community-tile.twitter { flex-direction: row; justify-content: flex-start; gap: 12px; min-height: 60px; padding: 10px 14px; }
   .contributors ul { gap: 12px 24px; }
   .menu-help { position: relative; left: auto; bottom: auto; margin: 0 8vw 24px; flex-wrap: wrap; gap: 12px 24px; }
   .photo { background-position: 58% center; }
@@ -253,20 +294,26 @@ button:disabled { opacity: .45; cursor: default; }
 @media (max-height: 500px) and (min-width: 801px) {
   :root { --launcher-text: 18px; }
   .game-logo img { max-height: 36dvh; }
-  .hero { padding-top: 5vh; padding-bottom: 17vh; }
+  .hero { padding-top: 5vh; padding-bottom: 46px; }
+  .game-logo { margin-bottom: 8px; }
   .menu { gap: 2px; }
   .menu-item { min-height: 48px; padding: 6px 14px; }
   .status-line { margin-top: 8px; }
   .menu-help { bottom: 12px; }
   .corner { bottom: 12px; gap: 10px; }
-  .community-item { width: 136px; gap: 6px; }
-  .community-caption { font-size: 13px; }
-  .community-tile { width: 112px; gap: 6px; padding: 8px; font-size: 13px; }
-  .community-tile img { width: 36px; height: 36px; }
+  .community { grid-template-columns: minmax(0, 1fr) 120px; gap: 6px 8px; margin-top: 8px; padding: 8px; }
+  .community-caption { font-size: 12px; }
+  .community-tile { min-height: 50px; gap: 10px; padding: 6px 10px; font-size: 13px; }
+  .community-tile.discord img { width: 32px; height: 24px; }
+  .community-tile.twitter { gap: 4px; padding: 6px; }
+  .community-tile.twitter img { width: 18px; height: 18px; }
   .contributors { padding: 8px 10px; }
   .contributors-title { margin-bottom: 6px; }
 }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+  .community-tile.discord::after { display: none; }
+}
 .live-players-link { color: inherit; font-size: 14px; text-decoration: none; padding: 8px 0; }
 .live-players-link:hover { text-decoration: underline; }
 .live-players-link:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }

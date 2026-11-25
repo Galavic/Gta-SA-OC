@@ -41,18 +41,22 @@ Candidato local: Wasm `3441cd8917abd8efee0fe780a9ce32908fbf471579b14105755e3b5d5
   54,0 con perfil nuevo, sin avisos del presentador. El arreglo solo cambia qué
   textura compone cada cuadro. El candidato no se pudo medir en una máquina
   libre, porque mientras se probaba corría otro juego en la misma PC.
-- **Lanzador.** Hay un panel con dos botones cuadrados, con el estilo de la
-  página:
-  - Discord, en su color, con el texto «Únete a la comunidad de Ports HISPANA
-    más grande de todas. +30k usuarios. :)», hacia
-    `https://discord.gg/7hbqkDmKHA`;
-  - Twitter, con el texto «Seguime en Twitter», hacia `https://x.com/LautaTWT`.
+- **Lanzador.** Debajo del menú, en la columna izquierda, hay un panel con dos
+  botones con el estilo de la página. Ahí el fondo es solo ciudad, así que no
+  tapa a los personajes de las portadas.
+  - Discord, en su color, con brillo y un reflejo que lo cruza cada cinco
+    segundos, bajo el texto «Únete a la comunidad de Ports HISPANA más grande
+    de todas. +30k usuarios. :)». Lleva a `https://discord.gg/7hbqkDmKHA`.
+  - Twitter, bajo «Seguime en Twitter», hacia `https://x.com/LautaTWT`.
 
   Usan Arial porque la fuente del menú de San Andreas no tiene «@», acentos ni
-  «)». Probado sin desborde horizontal a 1280×720, 1280×500, 1920×1080 y
-  390×844. Los fondos pasan de cuatro a dos (`background.png` y
-  `background-2.png`). `build/launcher-assets` se rehízo con los recursos
-  publicados en el sitio: logo, favicon, música y esos dos fondos.
+  «)». El logo toma el alto que dejan el menú, el estado y el panel: a
+  1920×1080 conserva su tamaño, y a 1280×720 queda más chico. Probado sin
+  desborde horizontal a 1366×768, 1280×720, 1280×500, 1920×1080 y 390×844.
+  Con `prefers-reduced-motion` no hay reflejo. Los fondos pasan de cuatro a
+  dos (`background.png` y `background-2.png`). `build/launcher-assets` se
+  rehízo con los recursos publicados en el sitio: logo, favicon, música y esos
+  dos fondos.
 - **Pendiente.**
   - Medir el candidato con la PC libre.
   - Probar en teléfonos reales: WebGPU, memoria inicial de 1 GiB y rendimiento.
