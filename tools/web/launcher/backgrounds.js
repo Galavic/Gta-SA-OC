@@ -1,5 +1,5 @@
 // Add approved local cover filenames here as the launcher gallery grows.
-export const backgrounds = ["background.png", "background-2.png", "background-3.png", "background-4.png"];
+export const backgrounds = ["background.png", "background-2.png"];
 
 export function installBackgroundRotation() {
   const layers = [...document.querySelectorAll(".scene .photo")];

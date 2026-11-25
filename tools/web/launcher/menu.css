@@ -95,9 +95,37 @@ button { font: inherit; color: inherit; cursor: pointer; }
   position: absolute; z-index: 1; bottom: 26px; left: 6vw; display: flex; gap: 26px;
   color: #eee9db; font-size: var(--launcher-text); font-weight: bold; text-shadow: 1px 2px 2px #000;
 }
-.contributors {
+.corner {
   position: absolute; right: 28px; bottom: 22px; z-index: 2;
-  max-width: min(650px, calc(100vw - 36px)); padding: 12px 14px;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 16px;
+  max-width: min(650px, calc(100vw - 36px));
+}
+/* A panel like the contributors' one. Its text is Spanish with accents, "@"
+   and ":)", which the San Andreas menu font maps to other glyphs. */
+.community {
+  display: flex; align-items: flex-end; gap: 16px; padding: 12px 14px;
+  background: #262626; border: 2px solid #414141;
+  box-shadow: 0 0 0 2px #181818, inset 0 1px 0 #535353;
+  font-family: Arial, Helvetica, sans-serif; font-weight: 700;
+}
+.community-item { display: flex; flex-direction: column; align-items: center; gap: 8px; width: 172px; }
+.community-caption { margin: 0; font-size: 14px; line-height: 1.35; text-align: center; color: var(--dim); }
+/* Square tiles in the launcher's button style, each in its own brand colour. */
+.community-tile {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  width: 150px; aspect-ratio: 1; padding: 12px; color: #fff; text-align: center;
+  text-decoration: none; font-size: 16px; line-height: 1.2;
+  border: 2px solid; box-shadow: 0 0 0 2px #181818, inset 0 1px 0 rgba(255, 255, 255, .3);
+  transition: transform 120ms cubic-bezier(.23, 1, .32, 1), filter 120ms ease;
+}
+.community-tile img { display: block; width: 48px; height: 48px; object-fit: contain; }
+.community-tile.discord { background: #5865f2; border-color: #4752c4; }
+.community-tile.twitter { background: #000; border-color: #5a5a5a; }
+.community-tile:hover { filter: brightness(1.12); }
+.community-tile:active:not(:focus-visible) { transform: scale(.97); }
+.community-tile:focus-visible { outline: 2px solid #fff; outline-offset: 4px; }
+.contributors {
+  max-width: 100%; padding: 12px 14px;
   background: #262626; border: 2px solid #414141;
   box-shadow: 0 0 0 2px #181818, inset 0 1px 0 #535353;
 }
@@ -210,7 +238,10 @@ button:disabled { opacity: .45; cursor: default; }
   .menu { margin-top: 12px; }
   .menu-item { min-height: 58px; }
   .status-line { margin-top: 0; }
-  .contributors { position: relative; right: auto; bottom: auto; margin: 0 8vw 24px; max-width: none; }
+  .corner { position: relative; right: auto; bottom: auto; margin: 0 8vw 24px; max-width: none; align-items: stretch; }
+  .community { flex-wrap: wrap; justify-content: center; align-items: flex-end; gap: 12px; }
+  .community-item { width: min(172px, calc(50% - 8px)); }
+  .community-tile { width: min(150px, 100%); }
   .contributors ul { gap: 12px 24px; }
   .menu-help { position: relative; left: auto; bottom: auto; margin: 0 8vw 24px; flex-wrap: wrap; gap: 12px 24px; }
   .photo { background-position: 58% center; }
@@ -227,7 +258,12 @@ button:disabled { opacity: .45; cursor: default; }
   .menu-item { min-height: 48px; padding: 6px 14px; }
   .status-line { margin-top: 8px; }
   .menu-help { bottom: 12px; }
-  .contributors { bottom: 12px; padding: 8px 10px; }
+  .corner { bottom: 12px; gap: 10px; }
+  .community-item { width: 136px; gap: 6px; }
+  .community-caption { font-size: 13px; }
+  .community-tile { width: 112px; gap: 6px; padding: 8px; font-size: 13px; }
+  .community-tile img { width: 36px; height: 36px; }
+  .contributors { padding: 8px 10px; }
   .contributors-title { margin-bottom: 6px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
