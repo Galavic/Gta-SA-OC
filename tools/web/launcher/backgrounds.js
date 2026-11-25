@@ -68,7 +68,9 @@ export function installBackgroundRotation() {
 
   function sync() {
     revision++;
-    toggle.textContent = paused() ? "Play backgrounds" : "Pause backgrounds";
+    const label = paused() ? "Reanudar fondos" : "Pausar fondos";
+    toggle.setAttribute("aria-label", label);
+    toggle.title = label;
     toggle.setAttribute("aria-pressed", String(paused()));
     schedule();
   }

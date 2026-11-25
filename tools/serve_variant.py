@@ -78,7 +78,7 @@ def stage_launcher(site=SITE, prepared=PREPARED, assets=ROOT / "build/launcher-a
         '      if (installed) { const { inventory, ...summary } = installed; status = summary; }\n'
         '    }\n'
         '    status ??= await gameStatus(game, opfsStore(root));', 1), encoding="utf-8")
-    for name in ("index.html", "start.js", "menu.css", "menu-sounds.js", "contributors.js", "backgrounds.js", "music.js"):
+    for name in ("index.html", "start.js", "menu.css", "menu-sounds.js", "contributors.js", "backgrounds.js", "music.js", "live.js"):
         shutil.copy2(ROOT / "tools/web/launcher" / name, site / name)
     shutil.copytree(ROOT / "tools/web/launcher/social-icons", site / "social-icons", dirs_exist_ok=True)
     app = site / "app.js"

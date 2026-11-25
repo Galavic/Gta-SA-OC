@@ -50,7 +50,16 @@ Candidato local: Wasm `3441cd8917abd8efee0fe780a9ce32908fbf471579b14105755e3b5d5
   - Twitter, bajo «Seguime en Twitter», hacia `https://x.com/LautaTWT`.
 
   Usan Arial porque la fuente del menú de San Andreas no tiene «@», acentos ni
-  «)». El logo toma el alto que dejan el menú, el estado y el panel: a
+  «)». Barra superior: una sola fila de botones chicos y semitransparentes.
+  - «N en línea» lee `/api/presence` y abre el resumen de jugadores en un panel
+    del launcher. Antes era un enlace de texto suelto que sacaba de la página
+    y cortaba la música.
+  - «Partidas» abre la nota de guardado, ahora en español.
+  - Fondos y música son íconos que se tachan cuando están pausados o en
+    silencio.
+
+  Abajo a la izquierda está el contacto DMCA (`galavic@nibble.lat`), que
+  también figura en el pie de `/jugadores/`. El logo toma el alto que dejan el menú, el estado y el panel: a
   1920×1080 conserva su tamaño, y a 1280×720 queda más chico. Probado sin
   desborde horizontal a 1366×768, 1280×720, 1280×500, 1920×1080 y 390×844.
   Con `prefers-reduced-motion` no hay reflejo. Los fondos pasan de cuatro a

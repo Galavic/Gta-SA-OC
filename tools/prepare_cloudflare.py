@@ -43,7 +43,7 @@ def prepare(output, target="workers", game_manifest=None, demand_files=False, si
         (runtime / f"{APP}.{ext}").write_bytes(sanitized((player / f"{APP}.{ext}").read_bytes()))
     source_build_id = digest(player / f"{APP}.wasm")
     build_id = digest(runtime / f"{APP}.wasm")
-    selected = ["index.html", "menu.css", "start.js", "menu-sounds.js", "contributors.js", "backgrounds.js", "music.js", "app.js", "core.js", "worker.js",
+    selected = ["index.html", "menu.css", "start.js", "menu-sounds.js", "contributors.js", "backgrounds.js", "music.js", "live.js", "app.js", "core.js", "worker.js",
                 "games.json", "gta-sa-logo.png", "background.png", "auxiliary-files.json", "hosted-import.mjs", "demand-files.mjs",
                 "player-presence.mjs", "jugadores/index.html", "jugadores/panel.mjs", "jugadores/panel.css",
                 "original-menu/menu.ttf", "original-menu-audio/highlight.wav", "original-menu-audio/select.wav",

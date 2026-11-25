@@ -80,21 +80,49 @@ button { font: inherit; color: inherit; cursor: pointer; }
   background: #171717; border: 2px solid #515151; box-shadow: 0 0 0 1px #171717;
 }
 .start-progress .bar { height: 100%; width: 0; background: linear-gradient(#fafafa, #bcbcbc); }
+/* One low row of translucent chips: it should not compete with the covers.
+   Arial, because the labels are Spanish ("¿", accents) and the menu font
+   maps those to other glyphs. */
 .topbar {
-  position: absolute; z-index: 2; top: 24px; right: 28px;
-  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
-  text-shadow: 1px 2px 2px #000; max-width: min(650px, 46vw);
+  position: absolute; z-index: 2; top: 18px; right: 20px;
+  display: flex; align-items: center; justify-content: flex-end; gap: 6px;
 }
-.save-help, .background-toggle, .music-toggle {
-  padding: 11px 14px; border: 2px solid #414141; background: #262626;
-  box-shadow: 0 0 0 2px #181818, inset 0 1px 0 #535353;
-  font-size: var(--launcher-text); text-shadow: none;
+.top-chip {
+  position: relative; display: inline-flex; align-items: center; gap: 8px;
+  height: 36px; padding: 0 12px; border: 1px solid #ffffff2b; border-radius: 6px;
+  background: #141414b8; color: #ececec; box-shadow: 0 2px 8px #0005;
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  font: 700 13px/1 Arial, Helvetica, sans-serif; white-space: nowrap; text-shadow: none;
+  transition: background 120ms, border-color 120ms, transform 120ms cubic-bezier(.23, 1, .32, 1);
 }
-.save-help:hover, .background-toggle:hover, .music-toggle:hover { background: #323232; border-color: #777; }
-.launcher-controls { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.background-toggle, .music-toggle { font-size: 16px; color: var(--dim); padding: 8px 12px; }
+.top-chip:hover { background: #262626e6; border-color: #ffffff59; }
+.top-chip:active:not(:focus-visible) { transform: scale(.96); }
+.top-chip:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.top-icon {
+  flex: none; width: 18px; height: 18px;
+  fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+}
+.top-icon-button { width: 36px; padding: 0; justify-content: center; }
+/* Music off, or backgrounds paused: the icon is struck through. */
+.toggle-slash {
+  position: absolute; left: 50%; top: 50%; width: 24px; height: 2px; border-radius: 1px;
+  background: currentColor; box-shadow: 0 0 0 1.5px #141414;
+  transform: translate(-50%, -50%) rotate(-45deg) scaleX(0);
+  transition: transform 150ms cubic-bezier(.23, 1, .32, 1);
+}
+.music-toggle:is([data-state="muted"], [data-state="blocked"], [data-state="failed"]) .toggle-slash,
+.background-toggle[aria-pressed="true"] .toggle-slash {
+  transform: translate(-50%, -50%) rotate(-45deg) scaleX(1);
+}
+.live-dot { position: relative; flex: none; width: 8px; height: 8px; border-radius: 50%; background: #8a8a8a; }
+.live-chip:is([data-state="live"], [data-state="empty"]) .live-dot { background: #43d17a; }
+.live-chip[data-state="live"] .live-dot::after {
+  content: ""; position: absolute; inset: 0; border-radius: 50%; background: #43d17a;
+  animation: live-pulse 2s ease-out infinite;
+}
+@keyframes live-pulse { from { transform: scale(1); opacity: .7; } to { transform: scale(2.6); opacity: 0; } }
 .menu-help {
-  position: absolute; z-index: 1; bottom: 26px; left: 6vw; display: flex; gap: 26px;
+  position: absolute; z-index: 1; bottom: 30px; left: 6vw; display: flex; gap: 26px;
   color: #eee9db; font-size: var(--launcher-text); font-weight: bold; text-shadow: 1px 2px 2px #000;
 }
 .corner {
@@ -224,6 +252,34 @@ kbd { font: inherit; color: #fff; margin-right: 6px; }
 .panel > h2 { margin: 0 40px 12px 0; font: 700 clamp(30px, 4vw, 44px)/1.1 var(--menu); }
 .panel-close { position: absolute; right: 18px; top: 18px; background: none; border: 0; font-size: 22px; }
 .panel .lead, .save-copy { font-size: var(--launcher-text); line-height: 1.6; color: #ccc; }
+.save-copy { font-family: Arial, Helvetica, sans-serif; font-size: 17px; }
+.legal {
+  position: absolute; z-index: 1; left: 6vw; bottom: 8px; margin: 0;
+  font: 12px/1.3 Arial, Helvetica, sans-serif; color: #dcdcdc;
+  text-shadow: 0 1px 2px #000, 0 0 6px #000;
+}
+.legal a { color: inherit; }
+.legal a:hover { color: #fff; }
+.legal a:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.live-panel { width: min(520px, 100%); }
+.live-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 8px 0 18px; }
+.live-metrics > div {
+  padding: 16px 8px 14px; text-align: center;
+  background: #202020; border: 2px solid #434343; box-shadow: inset 0 0 0 1px #171717;
+}
+.live-metrics strong {
+  display: block; color: #fff; font: 700 40px/1 Arial, Helvetica, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+.live-metrics > div:nth-child(2) strong { color: #6be39a; }
+.live-metrics span {
+  display: block; margin-top: 8px; color: var(--dim);
+  font: 700 12px/1.2 Arial, Helvetica, sans-serif; letter-spacing: .06em; text-transform: uppercase;
+}
+.live-note { margin: 0 0 14px; color: #ccc; font: 15px/1.5 Arial, Helvetica, sans-serif; }
+.live-more { color: #e8bc9e; font: 700 15px/1.2 Arial, Helvetica, sans-serif; text-decoration: none; }
+.live-more:hover { text-decoration: underline; }
+.live-more:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
 .save-copy {
   padding: 18px; border: 2px solid #434343; background: #202020;
   box-shadow: inset 0 0 0 1px #171717;
@@ -268,7 +324,9 @@ button:disabled { opacity: .45; cursor: default; }
   :root { --launcher-text: 19px; }
   .start { overflow-y: auto; }
   .scene { position: fixed; }
-  .topbar { position: relative; top: auto; right: auto; margin: 18px 8vw 0; max-width: none; }
+  .topbar { position: relative; top: auto; right: auto; margin: 14px 8vw 0; flex-wrap: wrap; }
+  .legal { position: relative; left: auto; bottom: auto; margin: 0 8vw 20px; }
+  .live-metrics strong { font-size: 32px; }
   .hero { height: auto; min-height: 65dvh; padding: 24px 8vw 32px; }
   .left { height: auto; gap: 24px; }
   .game-logo { flex: none; align-self: center; margin: 0; }
@@ -299,7 +357,8 @@ button:disabled { opacity: .45; cursor: default; }
   .menu { gap: 2px; }
   .menu-item { min-height: 48px; padding: 6px 14px; }
   .status-line { margin-top: 8px; }
-  .menu-help { bottom: 12px; }
+  .menu-help { bottom: 22px; }
+  .legal { bottom: 4px; }
   .corner { bottom: 12px; gap: 10px; }
   .community { grid-template-columns: minmax(0, 1fr) 120px; gap: 6px 8px; margin-top: 8px; padding: 8px; }
   .community-caption { font-size: 12px; }
@@ -312,8 +371,5 @@ button:disabled { opacity: .45; cursor: default; }
 }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
-  .community-tile.discord::after { display: none; }
+  .community-tile.discord::after, .live-chip .live-dot::after { display: none; }
 }
-.live-players-link { color: inherit; font-size: 14px; text-decoration: none; padding: 8px 0; }
-.live-players-link:hover { text-decoration: underline; }
-.live-players-link:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }

@@ -10,10 +10,13 @@ export function installLauncherMusic(page = document, host = window) {
   audio.volume = 0.3;
   audio.muted = muted;
 
+  // An icon button: the state goes to its label, tooltip and data-state.
   function render() {
-    const label = failed ? "Music unavailable" : muted ? "Unmute music" : blocked ? "Play music" : "Mute music";
-    button.textContent = label;
+    const label = failed ? "Música no disponible" : muted ? "Activar música"
+      : blocked ? "Reproducir música" : "Silenciar música";
     button.setAttribute("aria-label", label);
+    button.title = label;
+    button.dataset.state = failed ? "failed" : muted ? "muted" : blocked ? "blocked" : "playing";
     button.setAttribute("aria-pressed", String(muted));
     button.disabled = failed;
   }

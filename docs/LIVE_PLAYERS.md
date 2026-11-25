@@ -1,7 +1,13 @@
 # Panel de presencia
 
-El panel se publica en https://gta.galavic.world/jugadores/ y tiene un enlace
-desde el launcher. Muestra sesiones anonimas del reproductor: carga del motor,
+El panel se publica en https://gta.galavic.world/jugadores/. El launcher
+muestra en su barra superior cuántas sesiones hay en línea. Al tocar ese número
+se abre un resumen sin salir de la página (en línea, jugando y cargando), con
+un enlace a este panel. El launcher solo lee el snapshot de `/api/presence`
+cada 60 segundos, y cada 10 mientras el resumen está abierto. No abre ningún
+WebSocket, así que no cuenta como sesión ni suma observadores. Si el servidor
+no responde, el número no aparece, y después de tres fallos deja de
+preguntar. El panel muestra sesiones anonimas del reproductor: carga del motor,
 juego abierto, visibilidad de la pestana y tiempo conectado. El menu del juego
 tambien cuenta como juego abierto. Una persona puede abrir varias pestanas;
 estas cifras no representan personas unicas ni verifican una mision activa.

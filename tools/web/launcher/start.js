@@ -1,6 +1,7 @@
 import { installContributorCards } from "./contributors.js";
 import { installBackgroundRotation } from "./backgrounds.js";
 import { installLauncherMusic } from "./music.js";
+import { installLivePlayers } from "./live.js";
 
 installBackgroundRotation();
 installLauncherMusic();
@@ -172,6 +173,7 @@ menuItems.forEach((item, index) => {
 
 document.getElementById("save-help").addEventListener("click", () => openModal("save-note"));
 installContributorCards(openModal);
+installLivePlayers(openModal);
 
 for (const modal of document.querySelectorAll(".modal")) {
   modal.addEventListener("click", (event) => {
