@@ -38,7 +38,7 @@ export function watchDemandFiles(game, onStats = () => {}) {
 }
 
 export function createDemandReader(game, inventory, { fetchFile = fetch, cache = null,
-  memoryBytes = 32 * 1024 * 1024, concurrency = 4, timeoutMs = 45000,
+  memoryBytes = 96 * 1024 * 1024, concurrency = 4, timeoutMs = 45000,
   onActivity = browserReporter(game.id), readLegacyBlock = null } = {}) {
   if (!Number.isInteger(concurrency) || concurrency < 1 || !Number.isSafeInteger(memoryBytes) || memoryBytes < 0)
     throw new Error("Invalid archive cache limits");
@@ -53,7 +53,11 @@ export function createDemandReader(game, inventory, { fetchFile = fetch, cache =
     return legacyBlockReader(game, root);
   })().catch(() => null);
   const memory = new Map(), pending = new Map(), waiters = [];
-  let used = 0, active = 0;
+  // Blocks whose stored copy was hashed this session. Hashing a 4 MiB block
+  // costs milliseconds; a block evicted from memory and read again from the
+  // cache is the same bytes, written only after they matched.
+  const verified = new Set();
+  let used = 0, active = 0, lastDemand = 0;
   const stats = { networkBytes: 0, memoryHits: 0, diskHits: 0, legacyHits: 0, requests: 0, failures: 0, activeDownloads: 0 };
   async function slot(fn) {
     if (active >= concurrency) await new Promise(resolve => waiters.push(resolve));
@@ -71,6 +75,7 @@ export function createDemandReader(game, inventory, { fetchFile = fetch, cache =
     return bytes;
   }
   async function blockBytes(block) {
+    lastDemand = Date.now();
     const key = inventory.build + "/" + block.sha256;
     if (memory.has(key)) {
       stats.memoryHits++;
@@ -81,7 +86,8 @@ export function createDemandReader(game, inventory, { fetchFile = fetch, cache =
     const request = slot(async () => {
       let saved;
       try { saved = await cache?.get(key); } catch { /* Storage is optional. */ }
-      if (saved?.length === block.size && await digest(saved) === block.sha256) {
+      if (saved?.length === block.size && (verified.has(key) || await digest(saved) === block.sha256)) {
+        verified.add(key);
         stats.diskHits++; return remember(key, saved);
       }
       try {
@@ -93,8 +99,15 @@ export function createDemandReader(game, inventory, { fetchFile = fetch, cache =
           return remember(key, previous);
         }
       } catch { /* Missing or corrupt old partial data is fetched again. */ }
-      stats.activeDownloads++; onActivity(stats);
-      try {
+      return remember(key, await download(block, key));
+    });
+    pending.set(key, request);
+    try { return await request; } finally { pending.delete(key); }
+  }
+  // One block from the network, verified and stored in the persistent cache.
+  async function download(block, key) {
+    stats.activeDownloads++; onActivity(stats);
+    try {
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           stats.requests++;
@@ -111,19 +124,46 @@ export function createDemandReader(game, inventory, { fetchFile = fetch, cache =
           if (bytes.length !== block.size || await digest(bytes) !== block.sha256)
             throw new Error(`Archive checksum mismatch: ${block.path}`);
           stats.networkBytes += bytes.length;
+          verified.add(key);
           try { await cache?.set(key, bytes); } catch { /* Continue in memory if storage is full. */ }
-          return remember(key, bytes);
+          return bytes;
         } catch (error) {
           if (attempt === 2) { stats.failures++; stats.error = true; throw error; }
         }
       }
-      } finally { stats.activeDownloads--; onActivity(stats); }
-    });
-    pending.set(key, request);
-    try { return await request; } finally { pending.delete(key); }
+    } finally { stats.activeDownloads--; onActivity(stats); }
   }
   return {
     stats,
+    // Fetches the listed blocks (inventory.prefetch: [object path, offset]
+    // pairs, in the order a recorded session first read them) into the
+    // persistent cache, one at a time and only while the game reads nothing,
+    // so a new player's first minutes are served from the cache. Never into
+    // memory: the game's working set stays where it is. Returns how many were
+    // fetched; stops quietly at the first network failure.
+    async prefetch(list = inventory.prefetch, { quietMs = 750,
+      idle = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+      if (!cache || !Array.isArray(list)) return 0;
+      const index = new Map();
+      for (const entry of entries.values())
+        for (const block of entry.blocks) index.set(block.path + "\t" + block.offset, block);
+      let fetched = 0;
+      for (const item of list) {
+        const block = Array.isArray(item) ? index.get(item[0] + "\t" + item[1]) : undefined;
+        if (!block) continue;
+        const key = inventory.build + "/" + block.sha256;
+        if (memory.has(key) || pending.has(key) || verified.has(key)) continue;
+        try { if (await cache.has?.(key)) continue; } catch { /* Check by downloading. */ }
+        while (active > 0 || pending.size > 0 || Date.now() - lastDemand < quietMs) await idle(quietMs);
+        if (pending.has(key) || verified.has(key)) continue;
+        const request = download(block, key);
+        pending.set(key, request);
+        try { await request; fetched++; stats.prefetched = (stats.prefetched || 0) + 1; }
+        catch { return fetched; }
+        finally { pending.delete(key); }
+      }
+      return fetched;
+    },
     size(path) {
       const entry = entries.get(path);
       if (!entry) throw new Error(`Unlisted game file: ${path}`);
@@ -189,6 +229,10 @@ export async function browserBlockCache({ maxBytes = 1024 * 1024 * 1024 } = {}) 
     async get(key) {
       const response = await cache.match(url(key));
       return response ? new Uint8Array(await response.arrayBuffer()) : null;
+    },
+    // Whether a block is stored, without reading its bytes.
+    async has(key) {
+      return !!(await cache.match(url(key)));
     },
     async set(key, bytes) {
       await cache.put(url(key), new Response(bytes));

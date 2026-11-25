@@ -12,6 +12,7 @@ import tomllib
 import sys
 import os
 import re
+import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -370,6 +371,9 @@ class Handler(SimpleHTTPRequestHandler):
                 self.end_headers()
                 return
             start, end = int(match[1]), int(match[2])
+            if self.server.range_delay:
+                # Stand-in for the round trip and transfer time of a hosted block.
+                time.sleep(self.server.range_delay)
             self.send_response(206)
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Content-Length", str(end - start + 1))
@@ -386,6 +390,10 @@ class Handler(SimpleHTTPRequestHandler):
                         self.wfile.write(chunk)
                         remaining -= len(chunk)
                 self.server.hosted_download_bytes += end - start + 1 - remaining
+                if self.server.range_log:
+                    with self.server.range_log.open("a", encoding="utf-8") as log:
+                        log.write("%.3f\t%s\t%d\t%d\n" % (time.monotonic(), relative[len(prefix):],
+                                                         start, end - start + 1))
                 self.server.hosted_read_requests += 1
             except (BrokenPipeError, ConnectionResetError):
                 pass
@@ -476,6 +484,9 @@ def main():
                         help="Comma-separated path prefixes to expose (subset import for iteration)")
     parser.add_argument("--site", type=Path, help="Separate candidate site with its runtime and games.json")
     parser.add_argument("--demand-manifest", type=Path, help="Enable demand-file testing against a hosted range inventory")
+    parser.add_argument("--range-log", type=Path, help="Append each served game range (time, object, offset, bytes) to this file")
+    parser.add_argument("--range-delay-ms", type=int, default=0,
+                        help="Delay each served game range, to test reads that wait on a network")
     args = parser.parse_args()
     if args.site:
         SITE = args.site.resolve()
@@ -512,6 +523,10 @@ def main():
     with ThreadingHTTPServer(("127.0.0.1", args.port), Handler) as server:
         server.manifest = manifest
         server.import_files = {f["path"] for f in manifest["files"]}
+        server.range_log = args.range_log
+        server.range_delay = max(0, args.range_delay_ms) / 1000.0
+        if args.range_log:
+            args.range_log.write_text("", encoding="utf-8")
         if hosted:
             configure_hosted(server, hosted)
         total = sum(f["size"] for f in manifest["files"])

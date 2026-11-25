@@ -1,5 +1,236 @@
 # Estado actual
 
+## Limitador apagado de fábrica, controles táctiles, lanzador y `Present` diferido (2026-11-25, tarde)
+
+Candidato local: Wasm `3441cd8917abd8efee0fe780a9ce32908fbf471579b14105755e3b5d57a59a99`
+(128.997.182 bytes), ejecutable fuente
+`a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`. No está publicado.
+
+- **«Frame Limiter» apagado de fábrica.** `[translate] instruction_patches`
+  cambia `0x00573bb8 MOV byte ptr [ESI + 0x4c],BL` por `...,AL`. Es la
+  escritura de `m_bPrefsFrameLimiter` (`0x00ba6794`) en los valores por defecto
+  de Display de `CMenuManager`, y `EAX` acaba de quedar en 0 por el `XOR` de
+  `0x00573bb6`. Los ajustes guardados se cargan igual y la opción del menú sigue
+  funcionando. Verificado en una sesión con perfil nuevo: la ciudad corrió a
+  54,0 FPS de mediana, y no a 24,4. `configure_module` ya no aplica parches,
+  redirecciones ni semillas del ejecutable a las DLL; antes, la traducción de
+  `eax.dll` abortaba con «instruction patches matched no instruction».
+- **Controles táctiles.** `[controls] default_layout = "pad"`, `pad = "native"`.
+  El reproductor pone `RECOMP_TOUCH_DEVICE=1` cuando el puntero principal es un
+  dedo (`pointer: coarse` y `maxTouchPoints > 0`), y
+  `platform_ui_touch_device()` lo lee en la web; antes devolvía siempre `false`
+  y el mando nunca aparecía. En escritorio no se dibuja nada. En Chrome con
+  emulación de teléfono (915×412, táctil) el mando aparece sobre la imagen.
+  Mantener el stick izquierdo hace caminar a CJ hasta la BMX: el juego abre
+  «Recomp Virtual Pad» por DirectInput 8 y lee sus ejes. El orden de botones de
+  `[controls.native]` es el de los adaptadores PlayStation para PC; los botones
+  no se probaron uno por uno. Los avisos del juego siguen nombrando teclas
+  («Press RETURN»).
+- **`Present` diferido, segunda versión.** Al presentar, el presentador marca
+  el cuadro abierto. El trabajo en el navegador copia el back buffer a ese
+  cuadro y termina su cierre si el juego ya lo había cerrado. La primera
+  prueba dejaba la imagen negra en la mayoría de las sesiones: el lado
+  «front-end» de `host_frame_seal` elige los píxeles copiados según
+  `staged_pixels`, y eso todavía era falso. Ahora `legacy_when_staged` deja la
+  elección pendiente y `finish_seal` la aplica. Con perfil nuevo, dos sesiones
+  y otra con caché caliente muestran imagen en todas las capturas (logos, menú,
+  cinemática, ciudad). `RECOMP_D3D9_ASYNC_PRESENT=0` vuelve al `Present`
+  síncrono.
+- **Rendimiento.** La versión anterior a ese arreglo (`e92be1d6…`) midió 50,9
+  FPS de mediana en la ciudad con caché caliente (p10 42,1, mínimo 36,9) y
+  54,0 con perfil nuevo, sin avisos del presentador. El arreglo solo cambia qué
+  textura compone cada cuadro. El candidato no se pudo medir en una máquina
+  libre, porque mientras se probaba corría otro juego en la misma PC.
+- **Lanzador.** Hay un panel con dos botones cuadrados, con el estilo de la
+  página:
+  - Discord, en su color, con el texto «Únete a la comunidad de Ports HISPANA
+    más grande de todas. +30k usuarios. :)», hacia
+    `https://discord.gg/7hbqkDmKHA`;
+  - Twitter, con el texto «Seguime en Twitter», hacia `https://x.com/LautaTWT`.
+
+  Usan Arial porque la fuente del menú de San Andreas no tiene «@», acentos ni
+  «)». Probado sin desborde horizontal a 1280×720, 1280×500, 1920×1080 y
+  390×844. Los fondos pasan de cuatro a dos (`background.png` y
+  `background-2.png`). `build/launcher-assets` se rehízo con los recursos
+  publicados en el sitio: logo, favicon, música y esos dos fondos.
+- **Pendiente.**
+  - Medir el candidato con la PC libre.
+  - Probar en teléfonos reales: WebGPU, memoria inicial de 1 GiB y rendimiento.
+  - Publicar: `wrangler` está iniciado en otra cuenta de Cloudflare
+    (`b43bee1e…`), donde el Worker `gta-sa-oc` no existe.
+
+## Rendimiento: el doble de FPS en ciudad y lecturas que no congelan el juego (2026-11-25)
+
+Medido en Chrome 158 con WebGPU (Ryzen 5 8600G, Radeon 760M integrada) con el
+ejecutable `a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26`.
+Servido en local con `tools/serve_variant.py --demand-manifest`, que entrega los
+bloques de la instalación preparada por rangos igual que R2. Mismo origen y
+caché para todas las versiones, CPU sin otra carga, «Frame Limiter» del juego
+en OFF. Recorrido automatizado: nueva partida, cinemática inicial y Grove Street,
+con unos 780 dibujos por cuadro. Cifras de los informes `d3d9 webgpu:` (cada
+300 cuadros) de una ejecución de 6 minutos por versión.
+
+| Wasm servido | Cambios | Ciudad mediana | p10 | mínimo | Menú |
+|---|---|---|---|---|---|
+| `8e80be0e…` (171.203.195 B) | base: `--diagnostic-all`, como el pipeline | 19,8 | 15,5 | 12,9 | 451 |
+| `425614b2…` (134.906.475 B) | `-O2`, `store_hooks = false`, lecturas sin testigo | 37,9 | 33,0 | 26,9 | 706 |
+| `997fdd69…` (134.906.881 B) | + `Present` asíncrono, tamaño de capa en caché | 39,2 | 34,8 | 27,6 | 1195 |
+| `84fe68b8…` (134.906.608 B) | + reloj sin ida al hilo principal, `Lock` sin copias redundantes | 40,5 | 34,9 | 25,3 | — |
+| `f146f6c2…` (128.988.957 B) | + `flag_liveness = "flow"`, JS sin `ASSERTIONS` | 49,2 | 41,9 | 36,1 | 1096 |
+| `a6266b87…` (128.989.854 B) | + `D3DLOCK_NOOVERWRITE` escrito en su sitio | 53,3 | 43,3 | 37,2 | — |
+| `1f06a97f…` (128.990.402 B) | **actual:** sin `Present` asíncrono (retirado, ver abajo); planificador cede ante E/S | **45,3** | **37,5** | **32,4** | 1865 |
+
+Las filas `997fdd69…` a `a6266b87…` llevaban un `Present` asíncrono incorrecto
+(ver «Presentación»). Sus cifras son reales pero no se pueden usar tal cual. La
+versión actual es la última fila: 2,3 veces la base en la mediana y 2,5 veces
+en el mínimo, sin un solo aviso del presentador.
+
+**Carga en frío** con caché vacío, `--range-delay-ms 200` (unos 200 ms por
+bloque, parecido a bajar 4 MiB por internet) y el limitador de fábrica
+activado:
+
+| Wasm | Pantalla de carga | Llega a la ciudad | Pedidos a la red | Hueco entre pedidos (p90) |
+|---|---|---|---|---|
+| base `8e80be0e…` | ~72 s | ~165 s | 361 | 0,42 s |
+| con `Present` asíncrono | ~210 s | ~323 s | 340 | 4,08 s |
+| actual `1f06a97f…` | **~66 s** | **~152 s** | 363 | **0,38 s** |
+
+En las filas sin dato de menú, los vídeos de inicio se reprodujeron enteros y el
+menú pasó en pocos segundos; no es una regresión medida. Con
+`D3DLOCK_NOOVERWRITE` los envíos por cuadro bajan de ~5,8 a 1,0, los renombres
+de búfer de ~103 a 0,9 y las barreras de 5 a 0 (114 escrituras en su sitio por
+cuadro). Las capturas de la ciudad y de la cinemática no muestran geometría
+dañada.
+
+### Qué cambió
+
+- **El pipeline compilaba sin optimizar.** `--diagnostic-all` compila cada trozo
+  generado con `-O1 -Xclang -disable-llvm-passes`, sin el optimizador de LLVM.
+  `tools/finish_singleplayer_pipeline.py` vuelve a `-O2`. El armado tarda más
+  (unos 25 minutos con 6 procesos frente a 7) y el FPS en ciudad casi se duplica.
+- **Escrituras del invitado sin comprobaciones** (`[game] store_hooks = false`,
+  `RECOMP_STORE_HOOKS=0`). Cada `wr*` comprobaba el punto de vigilancia y los
+  rangos sucios de DirectDraw. Como una escritura por `g_mem` puede pisar
+  cualquier global, el compilador recargaba `g_mem`, esos contadores y los
+  registros después de cada escritura. Medido en `chunk_040.c` a `-O2`: −34 %
+  de código, −38 % de lecturas y −64 % de saltos. Con la opción apagada,
+  `RECOMP_WATCH` se rechaza con un aviso y un `Lock` de DirectDraw cae al
+  camino que ya existía de comparar la superficie entera.
+- **Las lecturas de archivos por demanda ya no detienen el juego.**
+  `k_ReadFile` sobre `/stream-game/` lee con `pread` en un hilo de E/S del
+  host. Espera 2 ms con el testigo (suficiente para un bloque en memoria) y, si
+  no llega, bloquea al hilo llamador en un evento privado y deja correr a los
+  demás. Antes, cada fallo de caché del hilo de streaming de GTA SA congelaba
+  todos los hilos mientras esperaba la red.
+- **Lector por demanda:** cada bloque del caché persistente se verifica con
+  SHA-256 una sola vez por sesión, y la memoria pasa de 32 a 96 MiB.
+- **Presentación:**
+  - `acquire()` ya no le pide al dispositivo el tamaño de la capa en cada
+    cuadro, una ida y vuelta síncrona al hilo principal del navegador;
+  - `WebGpuDevice::now_seconds()` lee el reloj en el hilo que lo pide.
+    `emscripten_get_now` es `performance.timeOrigin + performance.now()`, el
+    mismo reloj absoluto en todos los workers.
+  - **Retirado: `Present` asíncrono.** Las filas `997fdd69…` a `a6266b87…` lo
+    incluían. `Dev_Present` abre el cuadro, el backend copia el back buffer a
+    ese cuadro y `ddraw_external_present_end` lo cierra. Encolado, la copia
+    corría en el navegador después del cierre: no encontraba cuadro abierto y
+    esperaba un hueco libre dando vueltas sobre el reloj, hasta 250 ms en el
+    hilo principal del navegador («target pool stalled for 250ms», «GPU
+    completion timed out»). Un perfil de la pantalla de carga mostró ese hilo
+    ocupado al 98 %, con un 70 % en esa espera. `Present` vuelve a ser síncrono;
+    hacerlo asíncrono exige mover el cierre del cuadro al mismo trabajo.
+- **Búferes de vértices e índices:** el primer `Lock` ya no copia el búfer
+  entero al bloque de preparación cuando este ya coincide, y `Unlock` copia de
+  vuelta solo el rango bloqueado, que es lo único que ya se subía a la GPU.
+- **Banderas por grafo** (`[translate] flag_liveness = "flow"`). Una
+  instrucción guarda solo las banderas que lee algún sucesor dentro de la
+  función. Las salidas de la función (retornos, llamadas, saltos fuera del
+  cuerpo, saltos calculados sin tabla y huecos del listado) mantienen las seis.
+  El Wasm final baja un 4,4 %.
+- **JavaScript sin `ASSERTIONS`.** El enlace web se hace sin `-O`, y eso dejaba
+  activas las comprobaciones del pegamento JS. Ahora va `-sASSERTIONS=0`: el JS
+  baja de 476.701 a 401.164 bytes, y leer una propiedad no exportada de `Module`
+  ya no termina en `abort()`.
+- **`D3DLOCK_NOOVERWRITE`.** `buffer_lock` lee las banderas y el espejo de la
+  GPU recuerda si todos los `Lock` desde la última subida la usaron. En ese
+  caso, WebGPU escribe el rango en su sitio, en la base o en la copia
+  renombrada de ese envío, sin copiar el búfer entero ni forzar un envío. Los
+  demás backends tratan la subida como siempre.
+- **Planificador.** Cuando un punto de control aplica señales del host (una
+  lectura terminada, una notificación de audio), cede el turno en el acto, en
+  vez de esperar el resto de su porción de 16 ms. Además, la espera en línea de
+  las lecturas sube a 4 ms.
+- **Precarga opcional.** `prepare_fast_game_manifest.py --prefetch-trace`
+  agrega al inventario los bloques de una sesión grabada, en orden de primer
+  acceso y hasta un tope (384 MB por defecto). El lector por demanda los baja
+  de a uno y solo cuando el juego no está leyendo nada; van al caché
+  persistente, nunca a la memoria. `serve_variant.py` suma `--range-log`, para
+  grabar esa sesión, y `--range-delay-ms`, para simular la latencia de la red.
+
+### Hallazgos
+
+- **El «Frame Limiter» del juego limita a 25 FPS y viene activado en un perfil
+  nuevo.** El bucle de `WinMain` (`0x00748d1f`) solo llama a `Idle` cuando
+  pasaron más de `1000 / RsGlobal.frameLimit` ms. Lo hace si la preferencia del
+  menú (`0x00ba6794`) está activa, si hay una repetición en curso
+  (`0x00a43088 == 1`) o si el motor de audio informa «beat info»
+  (`0x005071d0`). Con el limitador activado, las versiones optimizadas medían
+  24,4 FPS de mediana, igual que antes. Apagado en Opciones → Display Setup →
+  Advanced, subieron a 37,9–40,5.
+- **La espera de 14 ms de `Idle` no se suma al trabajo del cuadro.** El bucle de
+  `0x0053e930` compara contra una marca que se fija justo después de esperar
+  (`0x0053e963`), así que limita a unos 71 FPS. Esto corrige la lectura de la
+  sección del 2026-10-23, que la sumaba a 27 ms de trabajo. Esa medición no se
+  repitió con su perfil original, y no se afirma con qué preferencia corrió.
+- **Las banderas sí cruzan llamadas en este ejecutable.** `translate.py
+  --check-flags` encuentra 341 de 19.207 funciones que leen banderas al entrar y
+  188 de 69.866 llamadas que las leen después. Por eso la variante usa
+  `flag_liveness = "flow"` (vida de banderas sobre el grafo de cada función) y
+  **no** `flags_cross_calls = false`.
+- **Mis perfiles de prueba tenían el caché persistente roto.** En un perfil de
+  Chrome con ruta larga, `caches.open` falla con «Unexpected internal error», y
+  `browserBlockCache` se traga ese error. Por eso una sesión en frío volvía a
+  bajar el mismo bloque de `gta3.img` hasta 9 veces. Con una ruta corta, el
+  mismo `put`/`match` funciona en la página y en un worker. Fue un fallo del
+  entorno de prueba, no un fallo verificado de los jugadores. Igual, si un
+  navegador se queda sin cuota, hoy el lector cae a la memoria sin avisar.
+- **Perfil de la última versión** (12 s de traza de V8 en la ciudad). En el hilo
+  del juego, el código traducido y el runtime se reparten el tiempo. Las
+  lecturas de reloj de los bucles de espera del propio juego pesan alrededor de
+  un 20 %. El hilo principal del navegador queda inactivo cerca del 47 %: ya no
+  es el cuello de botella.
+
+### Pruebas
+
+- `tools/tests/demand-files.test.mjs`: 7/7.
+- `tools/recomp/tests/test_translate_flags.py` (nuevo): 6/6.
+- Suites del traductor sin directorio de juego: 109 pasan y 1 falla,
+  `test_an_off_image_direct_call_ends_the_path`. Esa falla es anterior a estos
+  cambios: el `translate.py` previo solo difiere en las opciones nuevas.
+- Navegador: 7 recorridos de 6 minutos (menú, nueva partida, cinemática y
+  ciudad) sin `abort()` ni caída de página. Los avisos «target pool stalled
+  for 250ms» y «GPU completion timed out» que aparecieron en esas corridas
+  venían del `Present` asíncrono, ya retirado (ver arriba).
+- Con `RECOMP_PERF_STATS=1`, una sesión en frío cerró el navegador dos veces,
+  justo después de empezar la partida. Sin ese modo de diagnóstico, la misma
+  sesión siguió normalmente. No está investigado.
+
+### Pendiente
+
+- 60 FPS estables: la versión actual da 45,3 de mediana y 37,5 de p10 en la
+  ciudad. Próximos pasos medidos:
+  - un `Present` asíncrono correcto, con el cierre del cuadro dentro del mismo
+    trabajo (la versión defectuosa sumaba ~8 FPS);
+  - reutilizar el shader del pipeline fijo entre dibujos;
+  - más trabajo del traductor sobre las banderas en llamadas.
+- El `abort()` que informó el usuario y el cuelgue de 11 s en los vídeos de
+  inicio, visto una vez en el sitio publicado, no se reprodujeron en local.
+- Nada de esto está publicado. El sitio sigue sirviendo el runtime
+  `3da0a8f1…`, y la publicación necesita la aprobación del usuario.
+- Decidir con el usuario si el «Frame Limiter» debe venir en OFF de fábrica. Es
+  la diferencia entre 25 FPS y lo medido arriba, pero cambia el ritmo que el
+  juego trae por defecto.
+
 ## Panel de jugadores publicado (2026-10-28)
 
 https://gta.galavic.world/jugadores/ muestra presencia anonima en vivo y tiene

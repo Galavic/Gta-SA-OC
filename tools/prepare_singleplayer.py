@@ -92,10 +92,16 @@ guest_size = 0x20000000
 guest_root = 'C:\\GTASA'
 developer_exe = "prepared/gta_sa.exe"
 windows_version = "5.1"
+# Direct3D 9 only: no guest store has to widen a DirectDraw dirty range.
+store_hooks = false
 
 [translate]
 listings = "analysis/gta_sa.exe"
 globals = "analysis/globals.toml"
+# Flags cross calls in this executable (--check-flags), so only flow liveness.
+flag_liveness = "flow"
+# Frame Limiter off by default (CMenuManager display defaults; EAX is zero).
+instruction_patches = [{{ at = 0x00573bb8, text = "MOV byte ptr [ESI + 0x4c],AL" }}]
 entry_points = [0x{entry:08x}]
 animation_counter = 0
 volatile_reads = []
@@ -105,8 +111,12 @@ legacy_address_intrinsics = false
 [setup]
 required_dirs = ["models", "data", "audio", "anim"]
 [controls]
-default_layout = "hidden"
-pad = "off"
+# Touch devices only: an on-screen pad the game reads as a DirectInput joystick.
+default_layout = "pad"
+pad = "native"
+[controls.native]
+buttons = ["triangle", "circle", "cross", "square", "l2", "r2", "l1", "r1",
+           "select", "start", "l3", "r3", "ps"]
 [hooks]
 cursor_surface_ptrs = []
 [mods]

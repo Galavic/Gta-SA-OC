@@ -123,3 +123,33 @@ test("network concurrency is bounded and activity reports return to idle", async
   assert.equal(events.at(-1).networkBytes, 32);
   assert.equal(events.at(-1).failures, 0);
 });
+test("prefetch stores each listed block once and later reads come from the cache", async () => {
+  const f = fixture(), stored = new Map();
+  const cache = { get: async key => stored.get(key), set: async (key, value) => stored.set(key, value),
+    has: async key => stored.has(key) };
+  const inventory = { ...f.inventory,
+    prefetch: [["archive.part1", 0], ["archive.part0", 0], ["archive.part1", 0], ["missing", 0]] };
+  const r = createDemandReader(f.game, inventory, { ...f, cache });
+  const now = { quietMs: 0, idle: async () => {} };
+  assert.equal(await r.prefetch(undefined, now), 2);
+  assert.deepEqual(f.requests.map(q => q.url.at(-1)), ["1", "0"]);
+  assert.equal(stored.size, 2);
+  const out = new Uint8Array(4);
+  await r.readInto("models/gta3.img", out, 16, 4);
+  assert.deepEqual(Buffer.from(out), f.all.subarray(16, 20));
+  assert.equal(f.requests.length, 2);
+  assert.equal(await r.prefetch(undefined, now), 0);
+});
+test("prefetch waits while the game has just read", async () => {
+  const f = fixture(), stored = new Map();
+  const cache = { get: async key => stored.get(key), set: async (key, value) => stored.set(key, value),
+    has: async key => stored.has(key) };
+  const inventory = { ...f.inventory, prefetch: [["archive.part1", 0]] };
+  const r = createDemandReader(f.game, inventory, { ...f, cache });
+  await r.readInto("models/gta3.img", new Uint8Array(2), 0, 2);
+  let idles = 0;
+  const fetched = await r.prefetch(undefined, { quietMs: 40,
+    idle: ms => { idles++; return new Promise(resolve => setTimeout(resolve, ms)); } });
+  assert.equal(fetched, 1);
+  assert.ok(idles >= 1);
+});

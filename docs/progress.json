@@ -1,4 +1,141 @@
 {
+  "touch_limiter_launcher_20261125": {
+    "checked_date": "2026-11-25",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "candidate_wasm_sha256": "3441cd8917abd8efee0fe780a9ce32908fbf471579b14105755e3b5d57a59a99",
+    "candidate_wasm_bytes": 128997182,
+    "published": false,
+    "frame_limiter_default_off": {
+      "patch": "0x00573bb8 MOV byte ptr [ESI + 0x4c],AL",
+      "fresh_profile_city_fps_median": 54.0
+    },
+    "touch_controls": {
+      "layout": "pad",
+      "pad": "native",
+      "verified": "phone emulation 915x412: pad drawn over the game image, left stick walks CJ (DirectInput 8 virtual pad)",
+      "unverified": [
+        "individual button mapping",
+        "real phones"
+      ]
+    },
+    "deferred_present": {
+      "switch": "RECOMP_D3D9_ASYNC_PRESENT=0",
+      "fixed_bug": "front-end seal chose staged pixels before a deferred present staged them (black image)",
+      "previous_build_city_fps": {
+        "e92be1d6f644b2c5af163c5e35e033deca897a5b4ec999fe0f59b988bca201d2": {
+          "warm_median": 50.9,
+          "warm_p10": 42.1,
+          "fresh_median": 54.0
+        }
+      },
+      "candidate_measured_on_idle_machine": false
+    },
+    "launcher": [
+      "Discord and Twitter tiles with captions",
+      "backgrounds reduced to background.png and background-2.png"
+    ],
+    "blockers": [
+      "measure the candidate on an idle machine",
+      "real phone tests",
+      "wrangler is logged into another Cloudflare account; the gta-sa-oc Worker is not on it"
+    ]
+  },
+  "performance_round_20261125": {
+    "checked_date": "2026-11-25",
+    "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
+    "browser": "Chrome 158, WebGPU, Ryzen 5 8600G with Radeon 760M",
+    "method": "Local tools/serve_variant.py --demand-manifest, same origin and cache, in-game Frame Limiter OFF, new game through the opening cutscene to Grove Street (~780 draws/frame); d3d9 webgpu reports every 300 frames.",
+    "city_fps": {
+      "8e80be0e661c47a5e51e3a121990d96a0e9a072762589ceab9bad8e34c9f0074": {
+        "build": "pipeline --diagnostic-all",
+        "median": 19.8,
+        "p10": 15.5,
+        "min": 12.9
+      },
+      "425614b2d30d67dd0b4337cd4eb58a692bac731b8d673ea6201ba3e0c8991763": {
+        "build": "-O2, store_hooks=false, demand reads off the baton",
+        "median": 37.9,
+        "p10": 33.0,
+        "min": 26.9
+      },
+      "997fdd6943f71ede123b54c2f3d4213a4daf814a62743204c605d560cb6d0141": {
+        "build": "+ asynchronous Present, cached overlay size",
+        "median": 39.2,
+        "p10": 34.8,
+        "min": 27.6
+      },
+      "84fe68b80b1ee80632528510b24f0d149edf49c60d8fc32a1b84fefadcae9396": {
+        "build": "+ local presenter clock, no redundant buffer lock copies",
+        "median": 40.5,
+        "p10": 34.9,
+        "min": 25.3
+      },
+      "f146f6c2b6d486a40de3845b17cd0a405a201bc3695285e71bbdb20e9c70eaf8": {
+        "build": "+ flag_liveness=flow, JS without ASSERTIONS (includes the withdrawn asynchronous Present)",
+        "median": 49.2,
+        "p10": 41.9,
+        "min": 36.1
+      },
+      "a6266b87d5138f9eee56ed626c91205631873256d54e91d2dbe3b16d491fb68d": {
+        "build": "+ D3DLOCK_NOOVERWRITE written in place (includes the withdrawn asynchronous Present)",
+        "median": 53.3,
+        "p10": 43.3,
+        "min": 37.2
+      },
+      "1f06a97fd439084302eaf726eee71c7dc0086b789123ebdf8686dd6cb6f3bf27": {
+        "build": "current: synchronous Present again, scheduler yields on host completions",
+        "median": 45.3,
+        "p10": 37.5,
+        "min": 32.4,
+        "presenter_faults": 0
+      }
+    },
+    "frame_limiter_on_city_fps_median": 24.4,
+    "check_flags": {
+      "functions_reading_flags_at_entry": 341,
+      "functions": 19207,
+      "call_sites_reading_flags_after": 188,
+      "call_sites": 69866
+    },
+    "tests": {
+      "demand_files_js": "9/9",
+      "translate_flags": "6/6",
+      "translator_suites": "109 passed, 1 pre-existing failure"
+    },
+    "published": false,
+    "gameplay_verified": false,
+    "blockers": [
+      "60 FPS stable not reached: current city median 45.3, p10 37.5 on a Radeon 760M laptop-class iGPU",
+      "user-reported abort() and a one-off 11 s intro stall on the public site not reproduced locally",
+      "RECOMP_PERF_STATS=1 closed the browser twice in a cold session (diagnostic mode only, not investigated)",
+      "publication requires the user's approval",
+      "Frame Limiter default (ON in a fresh profile, 25 FPS) needs a user decision"
+    ],
+    "current_wasm_sha256": "1f06a97fd439084302eaf726eee71c7dc0086b789123ebdf8686dd6cb6f3bf27",
+    "withdrawn": [
+      "Asynchronous web Present: the backend staged the back buffer after ddraw_external_present_end sealed the frame, spinning up to 250 ms on the browser main thread for a new target slot."
+    ],
+    "cold_load_200ms_per_block": {
+      "8e80be0e661c47a5e51e3a121990d96a0e9a072762589ceab9bad8e34c9f0074": {
+        "loading_screen_s": 72,
+        "city_reached_s": 165,
+        "requests": 361,
+        "gap_p90_s": 0.42
+      },
+      "async Present builds": {
+        "loading_screen_s": 210,
+        "city_reached_s": 323,
+        "requests": 340,
+        "gap_p90_s": 4.08
+      },
+      "1f06a97fd439084302eaf726eee71c7dc0086b789123ebdf8686dd6cb6f3bf27": {
+        "loading_screen_s": 66,
+        "city_reached_s": 152,
+        "requests": 363,
+        "gap_p90_s": 0.38
+      }
+    }
+  },
   "live_player_panel_20261028": {
     "checked_utc": "2026-10-28T22:56:59.310665+00:00",
     "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
@@ -399,7 +536,7 @@
     ],
     "published": false
   },
-"browser_frame_time_round": {
+  "browser_frame_time_round": {
     "updated_utc": "2026-10-23T00:00:00+00:00",
     "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
     "target": "Raise browser gameplay frame rate toward 60 FPS, or establish with evidence what prevents it.",
@@ -507,7 +644,7 @@
       "The build is still not bit-reproducible."
     ]
   },
-"web_git_snapshot_20261027": {
+  "web_git_snapshot_20261027": {
     "checked_utc": "2026-10-27T06:19:25.072272+00:00",
     "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
     "python_tests_passed": 112,
@@ -519,7 +656,7 @@
     "outstanding_blockers": "Existing runtime/gameplay blockers and build-specific verification remain recorded below.",
     "pushed": false
   },
-"deska_panel": {
+  "deska_panel": {
     "updated_utc": "2026-10-24T03:59:29Z",
     "path": "deska/san-andreas-web",
     "panel_id": "san-andreas-web",

@@ -267,7 +267,7 @@ index 20fdc15..8c336f0 100644
 +  available) through both GetCaps and GetAvailableVidMem. The former 24 MiB
 +  free value caused native game menus to reject higher-resolution display modes.
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 10a37a1..7a558df 100644
+index 10a37a1..372cb6f 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -15,6 +15,22 @@ if(EMSCRIPTEN)
@@ -293,6 +293,16 @@ index 10a37a1..7a558df 100644
  endif()
  set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
  if(ANDROID)
+@@ -104,6 +120,9 @@ include_directories(${CMAKE_BINARY_DIR}/generated)
+ add_compile_definitions(GUEST_IMAGE_BASE=${RECOMP_IMAGE_BASE})
+ add_compile_definitions(GUEST_HEAP_BASE=${RECOMP_HEAP_BASE})
+ add_compile_definitions(GUEST_SIZE=${RECOMP_GUEST_SIZE})
++# Runtime and generated code must agree: ddraw.cpp only opens a dirty range
++# that the generated stores maintain.
++add_compile_definitions(RECOMP_STORE_HOOKS=${RECOMP_STORE_HOOKS})
+ 
+ if(IOS)
+   set(RECOMP_IOS_TEAM "$ENV{RECOMP_IOS_TEAM}" CACHE STRING "Apple development team for automatic signing")
 diff --git a/cmake/Translate.cmake b/cmake/Translate.cmake
 index 2542377..a291325 100644
 --- a/cmake/Translate.cmake
@@ -515,7 +525,7 @@ index a16dd2f..8205cc6 100644
  set_tests_properties(dx_tests PROPERTIES LABELS nogame)
  
 diff --git a/dx/com.h b/dx/com.h
-index 0a87829..9dc43e3 100644
+index 0a87829..50cc37c 100644
 --- a/dx/com.h
 +++ b/dx/com.h
 @@ -47,6 +47,7 @@ enum ComIface : uint16_t {
@@ -564,7 +574,7 @@ index 0a87829..9dc43e3 100644
  };
  
  // A DirectInput joystick axis's DIPROP_RANGE, DIPROP_DEADZONE and
-@@ -266,6 +274,14 @@ struct ComObj {
+@@ -266,6 +274,19 @@ struct ComObj {
      uint32_t ckey_dst_lo = 0, ckey_dst_hi = 0;
      bool has_ckey_src = false, has_ckey_dst = false;
      int32_t lock_count = 0;
@@ -576,10 +586,15 @@ index 0a87829..9dc43e3 100644
 +    uint32_t stage_bytes = 0;
 +    uint32_t lock_lo = 0;
 +    uint32_t lock_hi = 0;
++    // A vertex or index buffer's staging block already holds what the guest
++    // last saw through a Lock, so the next Lock need not copy `blob` into it.
++    bool stage_synced = false;
++    // Every Lock of the current lock nest carried D3DLOCK_NOOVERWRITE.
++    bool lock_no_overwrite = false;
      // Once handed a writable Lock pointer, the guest may keep using it forever.
      bool retained_pointer = false;
      bool is_primary = false;
-@@ -352,7 +368,11 @@ struct ComObj {
+@@ -352,7 +373,11 @@ struct ComObj {
      uint32_t dsh_stream = 0;       // multimedia stream: the audio media stream it carries
      uint32_t dsh_graph = 0;        // multimedia stream: its filter graph, once asked for
      uint32_t dsh_notify_flags = 0; // graph: IMediaEventEx::SetNotifyFlags
@@ -593,7 +608,7 @@ index 0a87829..9dc43e3 100644
      uint32_t dsh_state = 0;                               // STREAMSTATE_STOP 0 / STREAMSTATE_RUN 1
      uint32_t md_buffer = 0, md_length = 0, md_actual = 0; // audio data: the guest buffer
 diff --git a/dx/d3d9.cpp b/dx/d3d9.cpp
-index 1973efb..1a6afa6 100644
+index 1973efb..69bf119 100644
 --- a/dx/d3d9.cpp
 +++ b/dx/d3d9.cpp
 @@ -19,8 +19,10 @@
@@ -757,12 +772,13 @@ index 1973efb..1a6afa6 100644
      device_forget_buffers(dev);
      ComObj *bb = device_backbuffer(dev);
      dev->render_target = bb ? bb->id : 0;
-@@ -627,8 +654,12 @@ static uint32_t resource_alloc(ComObj *o, uint32_t bytes) {
+@@ -627,8 +654,13 @@ static uint32_t resource_alloc(ComObj *o, uint32_t bytes) {
      if (!bytes)
          return 0;
      o->blob.assign(bytes, 0);
 -    o->pixels = 0;
 -    o->pixels_bytes = bytes;
++    o->stage_synced = false;
 +    if (o->stage_bytes) {
 +        heap_free(o->pixels);
 +        o->pixels = 0;
@@ -772,7 +788,7 @@ index 1973efb..1a6afa6 100644
      return 1;
  }
  
-@@ -645,18 +676,37 @@ static void gpu_before_lock(ComObj *s);
+@@ -645,18 +677,43 @@ static void gpu_before_lock(ComObj *s);
  static void gpu_after_unlock(ComObj *o, uint32_t lo, uint32_t hi);
  static void gpu_forget(ComObj *o);
  
@@ -801,8 +817,15 @@ index 1973efb..1a6afa6 100644
 +                return 0;
 +            }
 +            o->stage_bytes = (uint32_t)o->blob.size();
++            o->stage_synced = false;
          }
-         memcpy(gm_ptr(o->pixels), o->blob.data(), o->blob.size());
+-        memcpy(gm_ptr(o->pixels), o->blob.data(), o->blob.size());
++        // A buffer's block persists between locks and only its Unlock writes
++        // `blob`, so after the first copy the two already agree: copying the
++        // whole buffer on every Lock cost as much as the copy back.
++        if (!o->stage_synced)
++            memcpy(gm_ptr(o->pixels), o->blob.data(), o->blob.size());
++        o->stage_synced = o->kind == K_D3D9VB || o->kind == K_D3D9IB;
 +        o->lock_lo = lo;
 +        o->lock_hi = hi;
 +    } else {
@@ -815,12 +838,21 @@ index 1973efb..1a6afa6 100644
      }
      return o->pixels;
  }
-@@ -666,10 +716,17 @@ static void stage_unlock(ComObj *o) {
+@@ -665,11 +722,25 @@ static void stage_unlock(ComObj *o) {
+     if (!o || o->lock_count <= 0)
          return;
      if (--o->lock_count == 0 && o->pixels) {
-         memcpy(o->blob.data(), gm_ptr(o->pixels), o->blob.size());
+-        memcpy(o->blob.data(), gm_ptr(o->pixels), o->blob.size());
 -        heap_free(o->pixels);
 -        o->pixels = 0;
++        // A buffer Lock permits writes only inside its range, which is also all
++        // that gpu_after_unlock uploads; a surface is written back whole.
++        const bool buffer = o->kind == K_D3D9VB || o->kind == K_D3D9IB;
++        if (buffer && o->lock_hi > o->lock_lo && o->lock_hi <= o->blob.size())
++            memcpy(o->blob.data() + o->lock_lo, gm_ptr(o->pixels) + o->lock_lo,
++                   o->lock_hi - o->lock_lo);
++        else
++            memcpy(o->blob.data(), gm_ptr(o->pixels), o->blob.size());
          d9_raster_invalidate(o->id);
 -        gpu_after_unlock(o, 0, (uint32_t)o->blob.size());
 +        gpu_after_unlock(o, o->lock_lo, o->lock_hi);
@@ -836,16 +868,25 @@ index 1973efb..1a6afa6 100644
      }
  }
  
-@@ -678,6 +735,8 @@ static void d3d9_resource_destroy(ComObj *o) {
+@@ -678,6 +749,9 @@ static void d3d9_resource_destroy(ComObj *o) {
          heap_free(o->pixels);
      o->pixels = 0;
      o->lock_count = 0;
 +    o->stage_bytes = 0;
++    o->stage_synced = false;
 +    o->lock_lo = o->lock_hi = 0;
      o->pixels_bytes = 0;
      std::vector<uint8_t>().swap(o->blob);
      d9_raster_invalidate(o->id);
-@@ -941,6 +1000,20 @@ static void gpu_after_unlock(ComObj *o, uint32_t lo, uint32_t hi) {
+@@ -808,6 +882,7 @@ struct GpuMirror {
+     std::vector<uint8_t> cpu_dirty;      // by slot
+     std::vector<uint8_t> gpu_newer;      // by slot
+     uint32_t dirty_lo = 0, dirty_hi = 0; // buffers: the changed byte range
++    bool no_overwrite = false;           // ...and every Lock behind it was NOOVERWRITE
+ };
+ static std::unordered_map<uint32_t, GpuMirror> &gpu_mirrors() {
+     static auto *m = new std::unordered_map<uint32_t, GpuMirror>();
+@@ -941,13 +1016,29 @@ static void gpu_after_unlock(ComObj *o, uint32_t lo, uint32_t hi) {
      if (!o)
          return;
      if (o->kind == K_D3D9VB || o->kind == K_D3D9IB) {
@@ -866,7 +907,37 @@ index 1973efb..1a6afa6 100644
          GpuMirror &m = gpu_mirrors()[o->id];
          if (m.dirty_hi <= m.dirty_lo) {
              m.dirty_lo = lo;
-@@ -1328,6 +1401,35 @@ void Dev_GetDepthStencilSurface(X86 *c) {
+             m.dirty_hi = hi;
++            m.no_overwrite = o->lock_no_overwrite;
+         } else {
+             m.dirty_lo = std::min(m.dirty_lo, lo);
+             m.dirty_hi = std::max(m.dirty_hi, hi);
++            m.no_overwrite = m.no_overwrite && o->lock_no_overwrite;
+         }
+         m.defined = true;
+         return;
+@@ -985,10 +1076,18 @@ static void gpu_sync_buffer(ComObj *b) {
+     }
+     if (m.dirty_hi > m.dirty_lo && !b->blob.empty()) {
+         uint32_t hi = std::min<uint32_t>(m.dirty_hi, (uint32_t)b->blob.size());
+-        host_d9_buffer_upload(b->id, (uint32_t)b->blob.size(), m.dirty_lo,
+-                              b->blob.data() + m.dirty_lo, hi - m.dirty_lo);
++        // A range stitched from several NOOVERWRITE locks also covers the
++        // bytes between them, which are unchanged since the GPU last saw
++        // them, so rewriting them in place is still safe.
++        if (m.no_overwrite)
++            host_d9_buffer_upload_no_overwrite(b->id, (uint32_t)b->blob.size(), m.dirty_lo,
++                                               b->blob.data() + m.dirty_lo, hi - m.dirty_lo);
++        else
++            host_d9_buffer_upload(b->id, (uint32_t)b->blob.size(), m.dirty_lo,
++                                  b->blob.data() + m.dirty_lo, hi - m.dirty_lo);
+     }
+     m.dirty_lo = m.dirty_hi = 0;
++    m.no_overwrite = false;
+ }
+ static void gpu_forget(ComObj *o) {
+     auto it = gpu_mirrors().find(o->id);
+@@ -1328,6 +1427,35 @@ void Dev_GetDepthStencilSurface(X86 *c) {
      com_ret(c, D3D_OK9);
  }
  
@@ -902,7 +973,7 @@ index 1973efb..1a6afa6 100644
  void Dev_SetRenderTarget(X86 *c) {
      ComObj *dev = this_device9(c);
      ComObj *s = com_this(arg(c, 2));
-@@ -1402,7 +1504,221 @@ void Dev_SetVertexDeclaration(X86 *c) {
+@@ -1402,7 +1530,221 @@ void Dev_SetVertexDeclaration(X86 *c) {
      if (dev) {
          dev->current_viewport = (d && d->kind == K_D3D9DECL) ? d->id : 0;
          d9_pipeline(dev->id).declaration = dev->current_viewport;
@@ -1124,7 +1195,7 @@ index 1973efb..1a6afa6 100644
      com_ret(c, D3D_OK9);
  }
  
-@@ -1580,15 +1896,85 @@ static void target_viewport(ComObj *dev, const HostD9Target &t, int32_t vp[4]) {
+@@ -1580,15 +1922,85 @@ static void target_viewport(ComObj *dev, const HostD9Target &t, int32_t vp[4]) {
      vp[3] = rt ? (int32_t)rt->height : (int32_t)dev->height;
  }
  
@@ -1218,7 +1289,7 @@ index 1973efb..1a6afa6 100644
      d.target = gpu_target(dev);
      target_viewport(dev, d.target, d.viewport);
      d.depth_range[0] = pl.viewport_z[0];
-@@ -1607,6 +1993,10 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
+@@ -1607,6 +2019,10 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
      d.vs_size = (uint32_t)pl.vs.size();
      d.ps = pl.ps.data();
      d.ps_size = (uint32_t)pl.ps.size();
@@ -1229,7 +1300,7 @@ index 1973efb..1a6afa6 100644
      d.vconst = &pl.vconst[0][0];
      d.vconst_count = std::min<uint32_t>(vs.max_const, 256);
      d.pconst = &pl.pconst[0][0];
-@@ -1614,7 +2004,7 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
+@@ -1614,7 +2030,7 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
      ComObj *decl = com_get(pl.declaration);
      if (!decl || decl->kind != K_D3D9DECL) {
          log_once("d3d9.gpu.nodecl", "d3d9: a draw with no vertex declaration is skipped");
@@ -1238,7 +1309,7 @@ index 1973efb..1a6afa6 100644
      }
      d.decl = decl->blob.data();
      d.decl_size = (uint32_t)decl->blob.size();
-@@ -1649,19 +2039,28 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
+@@ -1649,19 +2065,28 @@ static void gpu_draw(ComObj *dev, HostD9Draw &d) {
      bool color_write = !pl.rs_set[168] || (pl.rs[168] & 0xf) != 0;
      bool z_write = (!pl.rs_set[14] || pl.rs[14]) && (!pl.rs_set[7] || pl.rs[7]);
      gpu_target_drawn(dev, color_write, z_write);
@@ -1270,7 +1341,7 @@ index 1973efb..1a6afa6 100644
  }
  
  // (this, PrimitiveType, StartVertex, PrimitiveCount)
-@@ -1675,8 +2074,7 @@ void Dev_DrawPrimitive(X86 *c) {
+@@ -1675,8 +2100,7 @@ void Dev_DrawPrimitive(X86 *c) {
          d.primitive = arg(c, 1);
          d.primitive_count = arg(c, 3);
          d.start = arg(c, 2);
@@ -1280,7 +1351,7 @@ index 1973efb..1a6afa6 100644
          return;
      }
      ComObj *vb = dev ? com_get(dev->back_obj) : nullptr;
-@@ -1688,7 +2086,10 @@ void Dev_DrawPrimitive(X86 *c) {
+@@ -1688,7 +2112,10 @@ void Dev_DrawPrimitive(X86 *c) {
          call.vertex_bytes = vb->blob.size() - dev->lock_off;
          call.stride = dev->rate;
          call.first = arg(c, 2);
@@ -1292,7 +1363,7 @@ index 1973efb..1a6afa6 100644
      }
      com_ret(c, D3D_OK9);
  }
-@@ -1701,6 +2102,7 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
+@@ -1701,6 +2128,7 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
      ComObj *dev = this_device9(c);
      if (dev && gpu_on()) {
          ComObj *ibo = com_get(d9_pipeline(dev->id).index_buffer);
@@ -1300,7 +1371,7 @@ index 1973efb..1a6afa6 100644
          if (ibo) {
              gpu_sync_buffer(ibo);
              HostD9Draw d{};
-@@ -1710,9 +2112,9 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
+@@ -1710,9 +2138,9 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
              d.base_vertex = (int32_t)arg(c, 2);
              d.index_buffer = ibo->id;
              d.index_size = ibo->rmask ? ibo->rmask : 2;
@@ -1312,7 +1383,7 @@ index 1973efb..1a6afa6 100644
          return;
      }
      ComObj *vb = dev ? com_get(dev->back_obj) : nullptr;
-@@ -1729,7 +2131,10 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
+@@ -1729,7 +2157,10 @@ void Dev_DrawIndexedPrimitive(X86 *c) {
          call.index_size = ib->rmask ? ib->rmask : 2;
          call.base_vertex = (int32_t)arg(c, 2);
          call.first = arg(c, 5);
@@ -1324,7 +1395,7 @@ index 1973efb..1a6afa6 100644
      }
      com_ret(c, D3D_OK9);
  }
-@@ -1801,6 +2206,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
+@@ -1801,6 +2232,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
              describe_draw_inputs(c, arg(c, 3), arg(c, 4), arg(c, 2) + 2);
      }
      if (ComObj *dev = this_device9(c); dev && gpu_on()) {
@@ -1332,7 +1403,7 @@ index 1973efb..1a6afa6 100644
          HostD9Draw d{};
          d.primitive = arg(c, 1);
          d.primitive_count = arg(c, 2);
-@@ -1809,9 +2215,9 @@ void Dev_DrawPrimitiveUP(X86 *c) {
+@@ -1809,9 +2241,9 @@ void Dev_DrawPrimitiveUP(X86 *c) {
              d.stream[0].stride = arg(c, 4);
              d.inline_vertices = gm_ptr(arg(c, 3));
              d.inline_bytes = bytes;
@@ -1344,7 +1415,7 @@ index 1973efb..1a6afa6 100644
          return;
      }
      D9DrawCall call;
-@@ -1819,8 +2225,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
+@@ -1819,8 +2251,7 @@ void Dev_DrawPrimitiveUP(X86 *c) {
      call.prim_count = arg(c, 2);
      call.vertices = arg(c, 3);
      call.stride = arg(c, 4);
@@ -1354,7 +1425,7 @@ index 1973efb..1a6afa6 100644
  }
  
  // (this, PrimitiveType, MinVertexIndex, NumVertices, PrimitiveCount,
-@@ -1831,6 +2236,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
+@@ -1831,6 +2262,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
               "indices at %08x",
               g_draws, prim_name(arg(c, 1)), arg(c, 4), arg(c, 3), arg(c, 8), arg(c, 7), arg(c, 5));
      if (ComObj *dev = this_device9(c); dev && gpu_on()) {
@@ -1362,7 +1433,7 @@ index 1973efb..1a6afa6 100644
          HostD9Draw d{};
          d.primitive = arg(c, 1);
          d.primitive_count = arg(c, 4);
-@@ -1844,9 +2250,9 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
+@@ -1844,9 +2276,9 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
              d.inline_indices = gm_ptr(arg(c, 5));
              d.inline_index_bytes = ibytes;
              d.index_size = isize;
@@ -1374,7 +1445,7 @@ index 1973efb..1a6afa6 100644
          return;
      }
      D9DrawCall call;
-@@ -1856,8 +2262,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
+@@ -1856,8 +2288,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
      call.stride = arg(c, 8);
      call.indices = arg(c, 5);
      call.index_size = arg(c, 6) == 102 ? 4 : 2;
@@ -1384,7 +1455,7 @@ index 1973efb..1a6afa6 100644
  }
  
  // ---------------------------------------------------------------------------
-@@ -1885,7 +2290,22 @@ RES_STUB(Tex, AddDirtyRect)
+@@ -1885,7 +2316,22 @@ RES_STUB(Tex, AddDirtyRect)
  RES_STUB(Tex, AddDirtyRectCube)
  RES_STUB(Surf, GetDC)
  RES_STUB(Surf, ReleaseDC)
@@ -1408,12 +1479,13 @@ index 1973efb..1a6afa6 100644
  
  // (this, riid, ppContainer): the texture a level or face belongs to, or the
  // device when the surface stands alone.
-@@ -1930,12 +2350,20 @@ void Res_GetDevice(X86 *c) {
+@@ -1930,12 +2376,24 @@ void Res_GetDevice(X86 *c) {
  // a no-op: there is nothing to upload to yet.
  static void buffer_lock(X86 *c) {
      ComObj *o = com_this_arg(c);
 -    uint32_t offset = arg(c, 1), out = arg(c, 3);
 +    uint32_t offset = arg(c, 1), size = arg(c, 2), out = arg(c, 3);
++    const bool no_overwrite = (arg(c, 4) & 0x00001000u) != 0; // D3DLOCK_NOOVERWRITE
      if (!o || !out) {
          com_ret(c, D3DERR_INVALIDCALL);
          return;
@@ -1427,11 +1499,14 @@ index 1973efb..1a6afa6 100644
 +        const uint32_t room = (uint32_t)o->blob.size() - offset;
 +        const uint32_t hi = (size && size <= room) ? offset + size : (uint32_t)o->blob.size();
 +        staged = stage_lock(o, offset, hi);
++        if (staged)
++            o->lock_no_overwrite =
++                o->lock_count == 1 ? no_overwrite : o->lock_no_overwrite && no_overwrite;
 +    }
      com_out_ptr(out, staged ? staged + offset : 0);
      com_ret(c, staged ? D3D_OK9 : E_OUTOFMEMORY);
  }
-@@ -1970,7 +2398,7 @@ void Surf_LockRect(X86 *c) {
+@@ -1970,7 +2428,7 @@ void Surf_LockRect(X86 *c) {
          com_ret(c, D3DERR_INVALIDCALL);
          return;
      }
@@ -1440,7 +1515,7 @@ index 1973efb..1a6afa6 100644
      wr32(out, s->pitch);
      wr32(out + 4, staged);
      com_ret(c, staged ? D3D_OK9 : E_OUTOFMEMORY);
-@@ -2051,7 +2479,7 @@ void Tex_LockRectCube(X86 *c) {
+@@ -2051,7 +2509,7 @@ void Tex_LockRectCube(X86 *c) {
          com_ret(c, D3DERR_INVALIDCALL);
          return;
      }
@@ -1449,7 +1524,7 @@ index 1973efb..1a6afa6 100644
      wr32(out, s->pitch);
      wr32(out + 4, staged);
      com_ret(c, staged ? D3D_OK9 : E_OUTOFMEMORY);
-@@ -2113,7 +2541,7 @@ void Tex_LockRect(X86 *c) {
+@@ -2113,7 +2571,7 @@ void Tex_LockRect(X86 *c) {
          com_ret(c, D3DERR_INVALIDCALL);
          return;
      }
@@ -1458,7 +1533,7 @@ index 1973efb..1a6afa6 100644
      wr32(out, s->pitch);
      wr32(out + 4, staged);
      com_ret(c, staged ? D3D_OK9 : E_OUTOFMEMORY);
-@@ -2258,6 +2686,14 @@ static const ComMethod g_decl9[] = {
+@@ -2258,6 +2716,14 @@ static const ComMethod g_decl9[] = {
      {"GetDeclaration", 3, Decl_GetDeclaration},
  };
  
@@ -1473,7 +1548,7 @@ index 1973efb..1a6afa6 100644
  static const ComMethod g_query9[] = {
      {"QueryInterface", 3, com_QueryInterface},
      {"AddRef", 1, com_AddRef},
-@@ -2361,6 +2797,126 @@ void Dev_SetRenderState(X86 *c) {
+@@ -2361,6 +2827,126 @@ void Dev_SetRenderState(X86 *c) {
      com_ret(c, D3D_OK9);
  }
  
@@ -1600,7 +1675,7 @@ index 1973efb..1a6afa6 100644
  // (this, Sampler, Type, Value)
  void Dev_SetSamplerState(X86 *c) {
      ComObj *dev = this_device9(c);
-@@ -2593,6 +3149,15 @@ void d3d9_register() {
+@@ -2593,6 +3179,15 @@ void d3d9_register() {
      com_bind(IF_D3DINDEXBUFFER9, K_D3D9IB);
      com_bind(IF_D3DVERTEXDECL9, K_D3D9DECL);
      com_bind(IF_D3DQUERY9, K_D3D9QUERY);
@@ -1954,7 +2029,7 @@ index 976bcb6..e4d755b 100644
  
  } // namespace d9wgsl
 diff --git a/dx/ddraw.cpp b/dx/ddraw.cpp
-index 0b42f52..08ec931 100644
+index 0b42f52..88ae118 100644
 --- a/dx/ddraw.cpp
 +++ b/dx/ddraw.cpp
 @@ -183,6 +183,10 @@ namespace {
@@ -1968,7 +2043,20 @@ index 0b42f52..08ec931 100644
  const Mode kBuiltInModes[] = {
      {640, 480, 8},   {640, 480, 16},  {800, 600, 8},    {800, 600, 16},   {1024, 768, 8},
      {1024, 768, 16}, {1280, 720, 16}, {1920, 1080, 16}, {2560, 1440, 16}, {3840, 2160, 16},
-@@ -4459,8 +4463,8 @@ void DD_GetCaps(X86 *c) {
+@@ -2302,6 +2306,12 @@ void baseline_resync(const ComObj *s) {
+ // The dirty range for a surface's pixels, opened by a guest Lock and closed
+ // by its Unlock. Four at most; a fifth lock simply is not tracked.
+ bool dirty_open(const ComObj *s) {
++#if !RECOMP_STORE_HOOKS
++    // Generated stores do not widen dirty ranges in this build: an untracked
++    // lock, whose Unlock compares the whole surface, is the correct answer.
++    (void)s;
++    return false;
++#endif
+     if (g_dirty_count >= RECOMP_DIRTY_SLOTS)
+         return false;
+     RecompDirty &d = g_dirty[g_dirty_count++];
+@@ -4459,8 +4469,8 @@ void DD_GetCaps(X86 *c) {
          wr32(addr + DDCAPS_OFF_dwCaps, DDCAPS_BLT | DDCAPS_BLTCOLORFILL | DDCAPS_BLTSTRETCH |
                                             DDCAPS_COLORKEY | DDCAPS_PALETTE | DDCAPS_3D);
          if (size > DDCAPS_OFF_dwVidMemTotal + 4) {
@@ -1979,7 +2067,7 @@ index 0b42f52..08ec931 100644
          }
      }
      com_ret(c, DD_OK);
-@@ -4657,10 +4661,15 @@ void DD_WaitForVerticalBlank(X86 *c) {
+@@ -4657,10 +4667,15 @@ void DD_WaitForVerticalBlank(X86 *c) {
  void DD_GetAvailableVidMem(X86 *c) {
      uint32_t total = arg(c, 2), free_ = arg(c, 3);
      if (total && gm_valid(total, 4))
@@ -1997,7 +2085,7 @@ index 0b42f52..08ec931 100644
  }
  
  // --- IDirectDraw4 additions
-@@ -4699,6 +4708,11 @@ void DD_GetDeviceIdentifier(X86 *c) {
+@@ -4699,6 +4714,11 @@ void DD_GetDeviceIdentifier(X86 *c) {
      com_ret(c, DD_OK);
  }
  
@@ -2009,7 +2097,7 @@ index 0b42f52..08ec931 100644
  // ---------------------------------------------------------------------------
  // DirectDraw vtables
  // ---------------------------------------------------------------------------
-@@ -4750,6 +4764,25 @@ const ComMethod g_ddraw4[] = {
+@@ -4750,6 +4770,25 @@ const ComMethod g_ddraw4[] = {
      {"GetDeviceIdentifier", 3, DD_GetDeviceIdentifier},
  };
  
@@ -2035,7 +2123,7 @@ index 0b42f52..08ec931 100644
  // ===========================================================================
  // DDRAW.dll exports
  // ===========================================================================
-@@ -4787,9 +4820,9 @@ void DirectDrawCreate(X86 *c) {
+@@ -4787,9 +4826,9 @@ void DirectDrawCreate(X86 *c) {
      com_ret(c, DD_OK);
  }
  
@@ -2048,7 +2136,7 @@ index 0b42f52..08ec931 100644
  void DirectDrawCreateEx(X86 *c) {
      const uint32_t out = arg(c, 1), iid = arg(c, 2), outer = arg(c, 3);
      if (!out || !gm_valid(out, 4)) {
-@@ -4805,7 +4838,21 @@ void DirectDrawCreateEx(X86 *c) {
+@@ -4805,7 +4844,21 @@ void DirectDrawCreateEx(X86 *c) {
          com_ret(c, CLASS_E_NOAGGREGATION);
          return;
      }
@@ -2071,7 +2159,7 @@ index 0b42f52..08ec931 100644
  }
  
  void enumerate_devices(X86 *c, bool wide, bool extended) {
-@@ -4909,6 +4956,7 @@ void ddraw_register() {
+@@ -4909,6 +4962,7 @@ void ddraw_register() {
      com_define(IF_DIRECTDRAW, "DDRAW.dll", "IDirectDraw", g_ddraw1, std::size(g_ddraw1));
      com_define(IF_DIRECTDRAW2, "DDRAW.dll", "IDirectDraw2", g_ddraw2, std::size(g_ddraw2));
      com_define(IF_DIRECTDRAW4, "DDRAW.dll", "IDirectDraw4", g_ddraw4, std::size(g_ddraw4));
@@ -2079,7 +2167,7 @@ index 0b42f52..08ec931 100644
      com_define(IF_DDSURFACE, "DDRAW.dll", "IDirectDrawSurface", g_surface1, std::size(g_surface1));
      com_define(IF_DDSURFACE2, "DDRAW.dll", "IDirectDrawSurface2", g_surface2,
                 std::size(g_surface2));
-@@ -4924,6 +4972,18 @@ void ddraw_register() {
+@@ -4924,6 +4978,18 @@ void ddraw_register() {
      com_bind(IF_DIRECTDRAW, K_DDRAW);
      com_bind(IF_DIRECTDRAW2, K_DDRAW);
      com_bind(IF_DIRECTDRAW4, K_DDRAW);
@@ -2098,7 +2186,7 @@ index 0b42f52..08ec931 100644
      com_bind(IF_DDSURFACE, K_SURFACE);
      com_bind(IF_DDSURFACE2, K_SURFACE);
      com_bind(IF_DDSURFACE3, K_SURFACE);
-@@ -4935,6 +4995,7 @@ void ddraw_register() {
+@@ -4935,6 +5001,7 @@ void ddraw_register() {
      com_register_iid(IF_DIRECTDRAW, IID_IDirectDraw_);
      com_register_iid(IF_DIRECTDRAW2, IID_IDirectDraw2_);
      com_register_iid(IF_DIRECTDRAW4, IID_IDirectDraw4_);
@@ -2635,10 +2723,22 @@ index 72e0d0a..322408d 100644
          }
      if (used.size() >= MAX_AUDIO_CHANNELS) {
 diff --git a/dx/host_d9.h b/dx/host_d9.h
-index f489558..e30cdfa 100644
+index f489558..163f152 100644
 --- a/dx/host_d9.h
 +++ b/dx/host_d9.h
-@@ -104,6 +104,11 @@ typedef struct HostD9Draw {
+@@ -46,6 +46,11 @@ int host_d9_texture_read(uint32_t id, uint32_t face, uint32_t level, uint8_t *by
+ // changed.
+ void host_d9_buffer_upload(uint32_t id, uint32_t total, uint32_t offset, const uint8_t *bytes,
+                            uint32_t size);
++// The same, from Locks that all carried D3DLOCK_NOOVERWRITE: the application
++// promised that no draw it has issued reads the bytes it changed, so a
++// backend may write them in place instead of preserving the old contents.
++void host_d9_buffer_upload_no_overwrite(uint32_t id, uint32_t total, uint32_t offset,
++                                        const uint8_t *bytes, uint32_t size);
+ void host_d9_buffer_drop(uint32_t id);
+ 
+ typedef struct HostD9Surface {
+@@ -104,6 +109,11 @@ typedef struct HostD9Draw {
      // is, so a host may reuse its copy from an earlier draw with the same value.
      uint64_t state_version;
      const char *label; // what bound the shaders, for diagnostics; may be null
@@ -2650,6 +2750,19 @@ index f489558..e30cdfa 100644
  } HostD9Draw;
  
  void host_d9_draw(const HostD9Draw *draw);
+diff --git a/dx/host_d9_default.cpp b/dx/host_d9_default.cpp
+index 8643704..bc61ee9 100644
+--- a/dx/host_d9_default.cpp
++++ b/dx/host_d9_default.cpp
+@@ -16,6 +16,8 @@ HOST_D9_DEFAULT int host_d9_texture_read(uint32_t, uint32_t, uint32_t, uint8_t *
+ }
+ HOST_D9_DEFAULT void host_d9_buffer_upload(uint32_t, uint32_t, uint32_t, const uint8_t *,
+                                            uint32_t) {}
++HOST_D9_DEFAULT void host_d9_buffer_upload_no_overwrite(uint32_t, uint32_t, uint32_t,
++                                                        const uint8_t *, uint32_t) {}
+ HOST_D9_DEFAULT void host_d9_buffer_drop(uint32_t) {}
+ HOST_D9_DEFAULT void host_d9_draw(const HostD9Draw *) {}
+ HOST_D9_DEFAULT void host_d9_clear(const HostD9Target *, const int32_t[4], uint32_t,
 diff --git a/dx/tests/dx_tests.cpp b/dx/tests/dx_tests.cpp
 index 7771a52..d158978 100644
 --- a/dx/tests/dx_tests.cpp
@@ -2838,7 +2951,7 @@ index 7771a52..d158978 100644
          {"DirectShow graph playback", test_dshow_graph_playback},
          {"palette versions", test_palette_versions},
 diff --git a/host/CMakeLists.txt b/host/CMakeLists.txt
-index 58e79fd..85e4377 100644
+index 58e79fd..2bb52c7 100644
 --- a/host/CMakeLists.txt
 +++ b/host/CMakeLists.txt
 @@ -266,7 +266,13 @@ if(TARGET recomp_gen)
@@ -2856,15 +2969,20 @@ index 58e79fd..85e4377 100644
        file(COPY ${POP_BUILD_ROOT}/recomp/symbols.json DESTINATION ${web_resources})
      endif()
      if(EXISTS ${RECOMP_GAME_DIR}/mods/core)
-@@ -283,6 +289,7 @@ if(TARGET recomp_gen)
+@@ -283,6 +289,12 @@ if(TARGET recomp_gen)
        -sSTACK_SIZE=8388608 -sDEFAULT_PTHREAD_STACK_SIZE=16777216
        -sENVIRONMENT=web,worker -sEXIT_RUNTIME=0 -sINVOKE_RUN=0
        -sEXPORTED_RUNTIME_METHODS=ENV,callMain,FS
++      # The link runs without -O (the module is optimized separately), which
++      # would otherwise leave the JavaScript glue's runtime assertions on: they
++      # cost on every wasm/JS crossing and turn a read of an unexported Module
++      # property into abort().
++      -sASSERTIONS=0
 +      --js-library ${HOST}/sdl/library_demand_files.js
        --preload-file ${web_resources}@/app/resources)
    elseif(APPLE)
      pop_mac_bundle(recomp_app)
-@@ -349,3 +356,16 @@ add_test(NAME headless_tests COMMAND headless_tests ${CMAKE_CURRENT_BINARY_DIR}/
+@@ -349,3 +361,16 @@ add_test(NAME headless_tests COMMAND headless_tests ${CMAKE_CURRENT_BINARY_DIR}/
    WORKING_DIRECTORY ${POP_ROOT})
  set_tests_properties(headless_tests PROPERTIES LABELS nogame)
  endif()
@@ -2918,10 +3036,23 @@ index dd2b3e5..089989c 100644
  }
  
 diff --git a/host/gpu/d3d9_backend.h b/host/gpu/d3d9_backend.h
-index d42bc8b..5dd0163 100644
+index d42bc8b..5460ddd 100644
 --- a/host/gpu/d3d9_backend.h
 +++ b/host/gpu/d3d9_backend.h
-@@ -67,3 +67,11 @@ bool host_d9_web_start(gpu::Device *device);
+@@ -28,6 +28,12 @@ class D9Backend {
+ 
+     virtual void buffer_upload(uint32_t id, uint32_t total, uint32_t offset, const uint8_t *bytes,
+                                uint32_t size) = 0;
++    // host_d9_buffer_upload_no_overwrite. A backend without a cheaper path
++    // treats it as an ordinary upload, which is always correct.
++    virtual void buffer_upload_no_overwrite(uint32_t id, uint32_t total, uint32_t offset,
++                                            const uint8_t *bytes, uint32_t size) {
++        buffer_upload(id, total, offset, bytes, size);
++    }
+     virtual void buffer_drop(uint32_t id) = 0;
+ 
+     virtual void draw(const HostD9Draw &d) = 0;
+@@ -67,3 +73,11 @@ bool host_d9_web_start(gpu::Device *device);
  void host_d9_pump(void);
  void host_d9_frame(bool inside);
  #endif
@@ -2934,18 +3065,20 @@ index d42bc8b..5dd0163 100644
 +uint64_t host_d9_present_wait_ns(void);
 +uint64_t host_d9_present_calls(void);
 diff --git a/host/gpu/d3d9_host.cpp b/host/gpu/d3d9_host.cpp
-index cfe1034..c466f23 100644
+index cfe1034..e7f1517 100644
 --- a/host/gpu/d3d9_host.cpp
 +++ b/host/gpu/d3d9_host.cpp
-@@ -16,6 +16,7 @@
+@@ -16,7 +16,9 @@
  
  #include "../../dx/d3d9_shader.h"
  #include "../../platform/os.h"
 +#include "../../runtime/perf_stats.h"
  #include "../d3d_render.h"
++#include "../present.h"
  
  #include <atomic>
-@@ -67,6 +68,14 @@ D9Backend *make_backend(gpu::Device *device) {
+ #include <condition_variable>
+@@ -67,6 +69,14 @@ D9Backend *make_backend(gpu::Device *device) {
  std::atomic<D9Backend *> g_web_backend{nullptr};
  #endif
  
@@ -2960,7 +3093,48 @@ index cfe1034..c466f23 100644
  D9Backend *backend() {
      if (g_test_backend)
          return g_test_backend;
-@@ -242,7 +251,13 @@ class RenderThread {
+@@ -118,6 +128,8 @@ struct Command {
+     int32_t r0[4] = {}, r1[4] = {};
+     float z = 0;
+     std::function<void()> *call = nullptr; // Op::Call: run on the render thread
++    bool owned_call = false;               // call_async's job: freed after it runs
++    bool no_overwrite = false;             // Op::BufferUpload from NOOVERWRITE locks
+ };
+ 
+ struct Batch {
+@@ -183,6 +195,31 @@ class RenderThread {
+         return f(); // the worker waits on m_ for new work, so it cannot run now
+     }
+ 
++    // `job` runs on the render side after everything queued before it; the
++    // caller waits only while `limit` such jobs are still queued. Readbacks
++    // still go through sync(), which drains these jobs with everything else.
++    void call_async(std::function<void()> job, int limit) {
++        if (!threaded_) {
++            execute(*filling_);
++            filling_->clear();
++            job();
++            return;
++        }
++        {
++            std::unique_lock<std::mutex> lock(m_);
++            idle_cv_.wait(lock, [&] { return async_pending_ < limit; });
++            ++async_pending_;
++        }
++        Command c{Op::Call};
++        c.call = new std::function<void()>(std::move(job));
++        c.owned_call = true;
++        filling_->commands.push_back(c);
++        hand_over();
++    }
++    bool pumped() const {
++        return pumped_;
++    }
++
+     // The pumped queue: `f` runs on the pumping thread, after everything
+     // queued before it, while the caller waits.
+     template <class F> auto sync_on_pump(F &&f) -> decltype(f()) {
+@@ -242,7 +279,13 @@ class RenderThread {
              queue_.pop_front();
              busy_ = true;
              lock.unlock();
@@ -2974,7 +3148,43 @@ index cfe1034..c466f23 100644
              b->clear();
              lock.lock();
              busy_ = false;
-@@ -448,6 +463,18 @@ void RenderThread::execute_pooled(Batch &b) {
+@@ -350,7 +393,10 @@ class RenderThread {
+                 r_->drop(cmd.a);
+                 break;
+             case Op::BufferUpload:
+-                r_->buffer_upload(cmd.a, cmd.b, cmd.c, base + cmd.at, cmd.d);
++                if (cmd.no_overwrite)
++                    r_->buffer_upload_no_overwrite(cmd.a, cmd.b, cmd.c, base + cmd.at, cmd.d);
++                else
++                    r_->buffer_upload(cmd.a, cmd.b, cmd.c, base + cmd.at, cmd.d);
+                 break;
+             case Op::BufferDrop:
+                 r_->buffer_drop(cmd.a);
+@@ -369,6 +415,15 @@ class RenderThread {
+                 break;
+             case Op::Call:
+                 (*cmd.call)();
++                if (cmd.owned_call) {
++                    delete cmd.call;
++                    cmd.call = nullptr;
++                    {
++                        std::lock_guard<std::mutex> lock(m_);
++                        --async_pending_;
++                    }
++                    idle_cv_.notify_all();
++                }
+                 break;
+             }
+         }
+@@ -388,6 +443,7 @@ class RenderThread {
+     std::vector<std::unique_ptr<Batch>> spare_;
+     std::unique_ptr<Batch> filling_ = std::make_unique<Batch>();
+     bool busy_ = false;
++    int async_pending_ = 0; // call_async jobs queued and not yet run
+ };
+ 
+ RenderThread *render_thread() {
+@@ -448,6 +504,18 @@ void RenderThread::execute_pooled(Batch &b) {
  int host_d9_active(void) {
      return backend() != nullptr;
  }
@@ -2993,15 +3203,65 @@ index cfe1034..c466f23 100644
  void host_d9_texture_define(const HostD9TextureDesc *desc) {
      RenderThread *t = render_thread();
      if (!t || !desc)
-@@ -565,8 +592,15 @@ void host_d9_stretch(HostD9Surface src, const int32_t src_rect[4], HostD9Surface
+@@ -471,13 +539,14 @@ int host_d9_texture_read(uint32_t id, uint32_t face, uint32_t level, uint8_t *by
+     RenderThread *t = render_thread();
+     return t && t->sync([&] { return backend()->read(id, face, level, bytes, pitch); }) ? 1 : 0;
+ }
+-void host_d9_buffer_upload(uint32_t id, uint32_t total, uint32_t offset, const uint8_t *bytes,
+-                           uint32_t size) {
++static void buffer_upload_command(uint32_t id, uint32_t total, uint32_t offset,
++                                  const uint8_t *bytes, uint32_t size, bool no_overwrite) {
+     RenderThread *t = render_thread();
+     if (!t || !bytes)
+         return;
+     Batch &b = t->batch();
+     Command c{Op::BufferUpload};
++    c.no_overwrite = no_overwrite;
+     c.a = id;
+     c.b = total;
+     c.c = offset;
+@@ -486,6 +555,14 @@ void host_d9_buffer_upload(uint32_t id, uint32_t total, uint32_t offset, const u
+     b.commands.push_back(c);
+     t->submitted();
+ }
++void host_d9_buffer_upload(uint32_t id, uint32_t total, uint32_t offset, const uint8_t *bytes,
++                           uint32_t size) {
++    buffer_upload_command(id, total, offset, bytes, size, false);
++}
++void host_d9_buffer_upload_no_overwrite(uint32_t id, uint32_t total, uint32_t offset,
++                                        const uint8_t *bytes, uint32_t size) {
++    buffer_upload_command(id, total, offset, bytes, size, true);
++}
+ void host_d9_buffer_drop(uint32_t id) {
+     push(Op::BufferDrop, id);
+ }
+@@ -565,8 +642,32 @@ void host_d9_stretch(HostD9Surface src, const int32_t src_rect[4], HostD9Surface
      t->submitted();
  }
  void host_d9_present(uint32_t backbuffer, uint32_t width, uint32_t height) {
 -    if (RenderThread *t = render_thread())
+-        t->sync([&] { backend()->present(backbuffer, width, height); });
 +    if (RenderThread *t = render_thread()) {
 +        const bool timing = perf_stats::on();
 +        const uint64_t began = timing ? os_monotonic_ns() : 0;
-         t->sync([&] { backend()->present(backbuffer, width, height); });
++        // On the web the render side is the browser's main thread at its own
++        // pace, and waiting for it every frame made the game and the browser
++        // take turns. The present is queued instead, one frame deep. It must
++        // still stage into the frame being presented, which the guest seals
++        // right after this returns: the presenter hands that frame to the
++        // job, and whichever of seal and staging comes last finishes the seal.
++        static const bool async = [] {
++            const char *v = recomp_env("D3D9_ASYNC_PRESENT");
++            return !(v && v[0] == '0');
++        }();
++        std::shared_ptr<void> frame =
++            async && t->pumped() ? host_present_begin_async_stage() : nullptr;
++        if (frame)
++            t->call_async([frame, backbuffer, width, height] {
++                host_present_run_async_stage(frame, [&] { backend()->present(backbuffer, width, height); });
++            }, 1);
++        else
++            t->sync([&] { backend()->present(backbuffer, width, height); });
 +        if (timing) {
 +            g_present_wait_ns.fetch_add(os_monotonic_ns() - began, std::memory_order_relaxed);
 +            g_present_calls.fetch_add(1, std::memory_order_relaxed);
@@ -3051,7 +3311,7 @@ index cae581c..5264e4e 100644
          Tex *bound[16];
          for (uint32_t s = 0; s < 16; ++s) {
 diff --git a/host/gpu/webgpu/d3d9_webgpu.cpp b/host/gpu/webgpu/d3d9_webgpu.cpp
-index 03c2df2..97fcd4b 100644
+index 03c2df2..2e3d2a5 100644
 --- a/host/gpu/webgpu/d3d9_webgpu.cpp
 +++ b/host/gpu/webgpu/d3d9_webgpu.cpp
 @@ -15,10 +15,12 @@
@@ -3103,7 +3363,7 @@ index 03c2df2..97fcd4b 100644
          bc_ = d->has_feature(WGPUFeatureName_TextureCompressionBC);
          unorm16_ = d->has_feature(WGPUFeatureName_Unorm16TextureFormats);
          float32_filterable_ = d->has_feature(WGPUFeatureName_Float32Filterable);
-@@ -507,11 +531,30 @@ class WebGpuRenderer final : public D9Backend {
+@@ -507,13 +531,75 @@ class WebGpuRenderer final : public D9Backend {
              b.buffer = make_buffer(std::max<uint64_t>(need, 4),
                                     WGPUBufferUsage_Vertex | WGPUBufferUsage_Index);
              write_padded(b.buffer, 0, b.shadow.data(), b.shadow.size());
@@ -3134,8 +3394,53 @@ index 03c2df2..97fcd4b 100644
 +        }
          write_padded(b.buffer, offset, bytes, size);
      }
++    // The guest promised no queued draw reads the changed bytes, so they can
++    // be written where those draws would look, with no snapshot of the whole
++    // buffer and no early submit. Draws recorded since a rename read the
++    // ring snapshot, which is patched instead; the base is then rewritten
++    // whole after the submit, as for any renamed buffer.
++    void buffer_upload_no_overwrite(uint32_t id, uint32_t total, uint32_t offset,
++                                    const uint8_t *bytes, uint32_t size) override {
++        auto it = buffers_.find(id);
++        const uint64_t need = (total + 3) & ~3u;
++        if (it == buffers_.end() || !bytes || offset + size > total || !it->second.buffer ||
++            wgpuBufferGetSize(it->second.buffer) < need ||
++            it->second.shadow.size() != total) {
++            buffer_upload(id, total, offset, bytes, size);
++            return;
++        }
++        Buf &b = it->second;
++        memcpy(b.shadow.data() + offset, bytes, size);
++        ++no_overwrite_writes_;
++        if (!b.version) {
++            write_padded(b.buffer, offset, bytes, size);
++            return;
++        }
++        if (batch_uploads_) {
++            Ring &r = vertex_ring_;
++            for (size_t i = 0; i < r.chunks.size(); ++i) {
++                if (r.chunks[i] != b.version)
++                    continue;
++                auto &pending = r.pending[i];
++                const size_t at = size_t(b.version_offset) + offset;
++                if (pending.size() >= at + size) {
++                    memcpy(pending.data() + at, bytes, size);
++                    return;
++                }
++                break;
++            }
++            // Snapshot not found where expected: take the ordinary path.
++            --no_overwrite_writes_;
++            b.version = ring_write(b.shadow.data(), b.shadow.size(), &b.version_offset,
++                                   WGPUBufferUsage_Vertex);
++            return;
++        }
++        write_padded(b.version, b.version_offset + offset, bytes, size);
++    }
      void buffer_drop(uint32_t id) override {
-@@ -576,8 +619,8 @@ class WebGpuRenderer final : public D9Backend {
+         auto it = buffers_.find(id);
+         if (it == buffers_.end())
+@@ -576,8 +662,8 @@ class WebGpuRenderer final : public D9Backend {
              }
              slot_key = slot_key << 2 | (uint64_t)slots[s];
          }
@@ -3146,7 +3451,7 @@ index 03c2df2..97fcd4b 100644
          if (!vmod || !fmod) {
              skip("untranslated shader");
              return;
-@@ -637,6 +680,10 @@ class WebGpuRenderer final : public D9Backend {
+@@ -637,6 +723,10 @@ class WebGpuRenderer final : public D9Backend {
          ps.bias = (int32_t)std::lround(bias * 16777215.0f);
          ps.slope = slope;
          ps.colors = d9msl::pixel_color_outputs(pp);
@@ -3157,7 +3462,7 @@ index 03c2df2..97fcd4b 100644
          WGPURenderPipeline pso = pipeline(ps, vkey);
          if (!pso) {
              skip("no pipeline");
-@@ -760,6 +807,7 @@ class WebGpuRenderer final : public D9Backend {
+@@ -760,6 +850,7 @@ class WebGpuRenderer final : public D9Backend {
              const HostD9Stream &st = d.stream[i];
              WGPUBuffer vb = nullptr;
              uint64_t off = 0;
@@ -3165,7 +3470,7 @@ index 03c2df2..97fcd4b 100644
              if (st.buffer) {
                  auto b = buffers_.find(st.buffer);
                  if (b == buffers_.end() || !b->second.buffer) {
-@@ -767,14 +815,23 @@ class WebGpuRenderer final : public D9Backend {
+@@ -767,14 +858,23 @@ class WebGpuRenderer final : public D9Backend {
                      return;
                  }
                  b->second.used = serial_;
@@ -3191,7 +3496,7 @@ index 03c2df2..97fcd4b 100644
          }
          if (vl.zero)
              wgpuRenderPassEncoderSetVertexBuffer(pass_, vl.zero_slot, zero_, 0, WGPU_WHOLE_SIZE);
-@@ -940,10 +997,14 @@ class WebGpuRenderer final : public D9Backend {
+@@ -940,10 +1040,14 @@ class WebGpuRenderer final : public D9Backend {
          Tex *t = tex_ptr(backbuffer);
          if (!t || !t->texture) {
              submit();
@@ -3206,7 +3511,7 @@ index 03c2df2..97fcd4b 100644
          if (t->info.format == WGPUTextureFormat_BGRA8Unorm) {
              if (!t->imported) {
                  WGPUTextureViewDescriptor vd = WGPU_TEXTURE_VIEW_DESCRIPTOR_INIT;
-@@ -1013,9 +1074,12 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1013,9 +1117,12 @@ class WebGpuRenderer final : public D9Backend {
              return;
          wgpuQueueWriteBuffer(queue_, b, offset, pad_.data(), aligned);
      }
@@ -3220,7 +3525,7 @@ index 03c2df2..97fcd4b 100644
          Ring &r = usage == WGPUBufferUsage_Uniform ? uniform_ring_ : vertex_ring_;
          const uint64_t align = usage == WGPUBufferUsage_Uniform ? uniform_align_ : 4;
          const uint64_t aligned = round_up(size, 4);
-@@ -1024,7 +1088,17 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1024,7 +1131,17 @@ class WebGpuRenderer final : public D9Backend {
                  const uint64_t at = round_up(r.used, align);
                  if (at + aligned <= r.chunk_size) {
                      r.used = at + aligned;
@@ -3239,7 +3544,7 @@ index 03c2df2..97fcd4b 100644
                      *offset = at;
                      return r.chunks[r.chunk];
                  }
-@@ -1037,10 +1111,21 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1037,10 +1154,21 @@ class WebGpuRenderer final : public D9Backend {
      }
      struct Ring {
          std::vector<WGPUBuffer> chunks;
@@ -3261,7 +3566,7 @@ index 03c2df2..97fcd4b 100644
  
      WFmt format_for(uint32_t fmt) const {
          const FormatInfo f = d9gpu::format_info(fmt, bc_);
-@@ -1103,6 +1188,11 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1103,6 +1231,11 @@ class WebGpuRenderer final : public D9Backend {
      }
  
      void retire(Tex &t) {
@@ -3273,7 +3578,7 @@ index 03c2df2..97fcd4b 100644
          if (t.imported) {
              dev_->destroy(t.imported);
              t.imported = {};
-@@ -1179,7 +1269,15 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1179,7 +1312,15 @@ class WebGpuRenderer final : public D9Backend {
      void submit() {
          if (!encoder_)
              return;
@@ -3289,7 +3594,7 @@ index 03c2df2..97fcd4b 100644
          WGPUQuerySet qs = query_set_;
          WGPUBuffer resolve = nullptr, readback = nullptr;
          const uint32_t nq = queries_used_;
-@@ -1197,6 +1295,20 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1197,6 +1338,20 @@ class WebGpuRenderer final : public D9Backend {
          encoder_ = nullptr;
          wgpuQueueSubmit(queue_, 1, &cb);
          wgpuCommandBufferRelease(cb);
@@ -3310,7 +3615,7 @@ index 03c2df2..97fcd4b 100644
          if (readback)
              read_queries(serial_, readback, nq, resolve, qs);
          else if (qs)
-@@ -1205,6 +1317,10 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1205,6 +1360,10 @@ class WebGpuRenderer final : public D9Backend {
          // The rings are free again once the queue has taken their data.
          uniform_ring_.chunk = uniform_ring_.used = 0;
          vertex_ring_.chunk = vertex_ring_.used = 0;
@@ -3321,7 +3626,7 @@ index 03c2df2..97fcd4b 100644
          for (auto &kv : groups_)
              wgpuBindGroupRelease(kv.second);
          groups_.clear();
-@@ -1429,14 +1545,15 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1429,14 +1588,15 @@ class WebGpuRenderer final : public D9Backend {
  
      // ---- shaders and pipelines ---------------------------------------------------
      WGPUShaderModule module(uint64_t code_key, const d9sh::Program &p, const d9msl::PixelVariant &v,
@@ -3341,7 +3646,7 @@ index 03c2df2..97fcd4b 100644
          WGPUShaderModule m = nullptr;
          if (ok) {
              WGPUShaderSourceWGSL s = WGPU_SHADER_SOURCE_WGSL_INIT;
-@@ -1606,12 +1723,14 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1606,12 +1766,14 @@ class WebGpuRenderer final : public D9Backend {
          int32_t bias;
          float slope;
          uint32_t colors;
@@ -3358,7 +3663,7 @@ index 03c2df2..97fcd4b 100644
          key = mix(key, (uint64_t)(uintptr_t)p.layout->pipeline);
          for (int i = 0; i < 4; ++i)
              key = mix(key, (uint64_t)pass_formats_[i] + 1000 * (uint64_t)i);
-@@ -1729,8 +1848,10 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1729,8 +1891,10 @@ class WebGpuRenderer final : public D9Backend {
          pd.vertex.bufferCount = p.vl->buffers.size();
          pd.vertex.buffers = p.vl->buffers.data();
          pd.primitive.topology = p.topology;
@@ -3370,7 +3675,7 @@ index 03c2df2..97fcd4b 100644
          pd.primitive.frontFace = WGPUFrontFace_CW;
          pd.primitive.cullMode = p.cull;
          pd.depthStencil = pass_depth_view_ ? &ds : nullptr;
-@@ -1738,6 +1859,7 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1738,6 +1902,7 @@ class WebGpuRenderer final : public D9Backend {
          pd.fragment = &fs;
          WGPURenderPipeline pso = wgpuDeviceCreateRenderPipeline(device_, &pd);
          pipelines_[key] = pso;
@@ -3378,7 +3683,7 @@ index 03c2df2..97fcd4b 100644
          last_pipeline_key_ = key;
          last_pipeline_ = pso;
          return pso;
-@@ -1755,6 +1877,10 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1755,6 +1920,10 @@ class WebGpuRenderer final : public D9Backend {
          auto it = groups_.find(key);
          if (it != groups_.end())
              return it->second;
@@ -3389,7 +3694,7 @@ index 03c2df2..97fcd4b 100644
          std::vector<WGPUBindGroupEntry> e;
          for (uint32_t i = 0; i < 4; ++i) {
              WGPUBindGroupEntry b = WGPU_BIND_GROUP_ENTRY_INIT;
-@@ -1781,6 +1907,7 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1781,6 +1950,7 @@ class WebGpuRenderer final : public D9Backend {
          d.entryCount = e.size();
          d.entries = e.data();
          WGPUBindGroup g = wgpuDeviceCreateBindGroup(device_, &d);
@@ -3397,7 +3702,7 @@ index 03c2df2..97fcd4b 100644
          groups_[key] = g;
          return g;
      }
-@@ -1953,6 +2080,7 @@ class WebGpuRenderer final : public D9Backend {
+@@ -1953,6 +2123,7 @@ class WebGpuRenderer final : public D9Backend {
          pd.fragment = &fs;
          WGPURenderPipeline pso = wgpuDeviceCreateRenderPipeline(device_, &pd);
          pipelines_[key] = pso;
@@ -3405,7 +3710,7 @@ index 03c2df2..97fcd4b 100644
          return pso;
      }
      WGPURenderPipeline clear_pipeline(bool color, bool depth, bool stencil) {
-@@ -2039,8 +2167,11 @@ class WebGpuRenderer final : public D9Backend {
+@@ -2039,8 +2210,11 @@ class WebGpuRenderer final : public D9Backend {
                  if ((uint64_t)(d.start + count) * isize > b->second.shadow.size())
                      return;
                  b->second.used = serial_;
@@ -3419,7 +3724,7 @@ index 03c2df2..97fcd4b 100644
                  wgpuRenderPassEncoderDrawIndexed(pass_, count, 1, d.start, d.base_vertex, 0);
              } else {
                  uint64_t off = 0;
-@@ -2122,7 +2253,8 @@ class WebGpuRenderer final : public D9Backend {
+@@ -2122,7 +2296,8 @@ class WebGpuRenderer final : public D9Backend {
          ++skips_[why];
      }
      void report() {
@@ -3429,7 +3734,7 @@ index 03c2df2..97fcd4b 100644
              return;
          double t = (double)os_monotonic_ns() * 1e-9;
          double fps = report_time_ > 0 ? (presents_ - report_frames_) / (t - report_time_) : 0.0;
-@@ -2131,12 +2263,57 @@ class WebGpuRenderer final : public D9Backend {
+@@ -2131,12 +2306,60 @@ class WebGpuRenderer final : public D9Backend {
                  "d3d9 webgpu: frame %llu: %.1f fps, %.0f draws/frame, %zu textures, %zu pipelines",
                  (unsigned long long)presents_, fps, double(draws_ - report_draws_) / double(frames),
                  textures_.size(), pipelines_.size());
@@ -3446,6 +3751,8 @@ index 03c2df2..97fcd4b 100644
 +                double(buffer_renames_ - report_buffer_renames_) / double(frames));
 +        fprintf(stderr, ", %.1f buffer_barriers/frame",
 +                double(buffer_barriers_ - report_buffer_barriers_) / double(frames));
++        fprintf(stderr, ", %.1f no_overwrite_writes/frame",
++                double(no_overwrite_writes_ - report_no_overwrite_writes_) / double(frames));
          for (auto &s : skips_)
              fprintf(stderr, ", %s %llu", s.first.c_str(), (unsigned long long)s.second);
          fprintf(stderr, "\n");
@@ -3484,10 +3791,11 @@ index 03c2df2..97fcd4b 100644
 +        report_ring_uploads_ = ring_uploads_;
 +        report_buffer_renames_ = buffer_renames_;
 +        report_buffer_barriers_ = buffer_barriers_;
++        report_no_overwrite_writes_ = no_overwrite_writes_;
      }
  
      struct EncoderState {
-@@ -2187,6 +2364,10 @@ class WebGpuRenderer final : public D9Backend {
+@@ -2187,6 +2410,11 @@ class WebGpuRenderer final : public D9Backend {
      std::unordered_map<uint32_t, Tex> textures_;
      std::vector<Tex *> tex_index_;
      std::unordered_map<uint32_t, Buf> buffers_;
@@ -3495,10 +3803,11 @@ index 03c2df2..97fcd4b 100644
 +    std::vector<uint32_t> renamed_buffers_;
 +    uint64_t renamed_bytes_pending_ = 0, buffer_renames_ = 0, report_buffer_renames_ = 0;
 +    uint64_t buffer_barriers_ = 0, report_buffer_barriers_ = 0;
++    uint64_t no_overwrite_writes_ = 0, report_no_overwrite_writes_ = 0;
      std::unordered_map<uint64_t, WGPUShaderModule> modules_;
      std::unordered_map<uint64_t, Layout> layouts_;
      std::unordered_map<uint64_t, VLayout> vlayouts_;
-@@ -2194,6 +2375,11 @@ class WebGpuRenderer final : public D9Backend {
+@@ -2194,6 +2422,11 @@ class WebGpuRenderer final : public D9Backend {
      uint64_t last_pipeline_key_ = 0;
      WGPURenderPipeline last_pipeline_ = nullptr;
      std::unordered_map<uint64_t, WGPUBindGroup> groups_;
@@ -3510,7 +3819,7 @@ index 03c2df2..97fcd4b 100644
      std::unordered_map<uint64_t, WGPUSampler> samplers_;
      WGPUSampler shadow_sampler_ = nullptr;
      std::unordered_map<uint64_t, WGPUTextureView> fitted_;
-@@ -2206,6 +2392,16 @@ class WebGpuRenderer final : public D9Backend {
+@@ -2206,6 +2439,16 @@ class WebGpuRenderer final : public D9Backend {
      uint64_t draws_ = 0, presents_ = 0, stat_calls_ = 0;
      double report_time_ = 0;
      uint64_t report_frames_ = 0, report_draws_ = 0;
@@ -3528,7 +3837,7 @@ index 03c2df2..97fcd4b 100644
  };
  
 diff --git a/host/gpu/webgpu/webgpu_device.cpp b/host/gpu/webgpu/webgpu_device.cpp
-index 615367d..4d0c510 100644
+index 615367d..5fb9ad6 100644
 --- a/host/gpu/webgpu/webgpu_device.cpp
 +++ b/host/gpu/webgpu/webgpu_device.cpp
 @@ -1,6 +1,7 @@
@@ -3611,6 +3920,19 @@ index 615367d..4d0c510 100644
      uint64_t id = next_id_++;
      textures_[id] = t; // owned: released when presented or released
      c.current = id;
+@@ -1114,8 +1145,10 @@ void WebGpuDevice::destroy(Swapchain s) {
+ }
+ 
+ double WebGpuDevice::now_seconds() {
+-    if (off_main())
+-        return on_main([&] { return now_seconds(); });
++    // Any thread: with pthreads, emscripten_get_now is performance.timeOrigin +
++    // performance.now(), the same absolute clock in every worker. Proxying it
++    // made the guest wait for the busy main thread just to read the time (the
++    // presenter's seal does it every frame).
+     return emscripten_get_now() / 1000.0;
+ }
+ 
 diff --git a/host/gpu/webgpu/webgpu_device.h b/host/gpu/webgpu/webgpu_device.h
 index 2bec49d..cf2d111 100644
 --- a/host/gpu/webgpu/webgpu_device.h
@@ -3803,6 +4125,246 @@ index 9211514..fd4b7ff 100644
  
  // A resize is a latest-value mailbox independent of presenter acknowledgement.
  // The next input event rebuilds layout geometry at this size, including when
+diff --git a/host/present.h b/host/present.h
+index 48521e7..88e1ac5 100644
+--- a/host/present.h
++++ b/host/present.h
+@@ -336,6 +336,12 @@ bool host_present_running();
+ void host_present_drop_current();
+ // A dirty surface pins its pool storage until coherence or transfer to a new writer.
+ std::shared_ptr<void> host_present_target_lease(gpu::Texture world);
++// Deferred present: on the guest thread, mark the frame being written (empty
++// when there is none); on the render side, run the backend present against
++// that frame and finish its seal if the guest has already sealed it.
++std::shared_ptr<void> host_present_begin_async_stage();
++void host_present_run_async_stage(const std::shared_ptr<void> &frame,
++                                  const std::function<void()> &stage);
+ HostSceneTarget host_present_acquire_target(int guest_w, int guest_h, int scene_w, int scene_h);
+ // Copy the UI by value, never a pointer into a sealed frame. The world/overlay
+ // must belong to the acquired target. Task 4/6 supplies this before seal.
+diff --git a/host/present_frame.h b/host/present_frame.h
+index 5f58481..111185f 100644
+--- a/host/present_frame.h
++++ b/host/present_frame.h
+@@ -28,6 +28,10 @@ struct Composite {
+ struct Target {
+     gpu::Device *device = nullptr;
+     HostSceneTarget scene;
++    // The overlay's size as created. Asking the device instead is a
++    // synchronous round trip to the browser's main thread on WebGPU, which
++    // the guest paid on every Present while that thread was encoding.
++    int overlay_w = 0, overlay_h = 0;
+     gpu::Texture pixels;
+     int pixels_w = 0, pixels_h = 0;
+     gpu::Format pixels_format = gpu::Format::RGBA8;
+@@ -40,6 +44,7 @@ struct Target {
+                 device->destroy(scene.overlay);
+         }
+         scene = {};
++        overlay_w = overlay_h = 0;
+     }
+     ~Target() {
+         release_scene();
+@@ -53,6 +58,14 @@ struct Frame {
+     bool had_draws = false, supplied = false, gpu = false, shown = false;
+     bool released = false, dropped = false, success = true, repeat = false, staged_pixels = false;
+     bool completion_fallback = false;
++    // Deferred present (web): a render job stages this frame's pixels after
++    // the guest may already have sealed it. The seal is finished by whichever
++    // of the two comes last, so the frame never reaches the mailbox unstaged.
++    bool staging_pending = false, seal_waiting = false;
++    int seal_guest_w = 0, seal_guest_h = 0;
++    // The front-end seal chose the staged pixels as this frame's image while
++    // they were still pending; finish_seal points the input at them.
++    bool legacy_when_staged = false;
+     double presented_ts = 0, gpu_ts = 0, submitted_ts = 0, sealed_ts = 0, gpu_ms = 0;
+     double acknowledgement_deadline = 0;
+     unsigned pending_prefixes = 0;
+diff --git a/host/present_thread.cpp b/host/present_thread.cpp
+index ff08381..edbc3a9 100644
+--- a/host/present_thread.cpp
++++ b/host/present_thread.cpp
+@@ -200,6 +200,9 @@ struct Service : std::enable_shared_from_this<Service> {
+     std::array<std::shared_ptr<Target>, 7> targets;
+     size_t flight_limit = 1;
+     std::shared_ptr<Frame> writing;
++    // Set while a deferred present runs on the render side: its staging and
++    // command tracking belong to this frame, not to the one being written.
++    std::shared_ptr<Frame> staging;
+     std::deque<std::shared_ptr<Frame>> flights;
+     std::deque<std::shared_ptr<Frame>> mailbox, retiring;
+     std::shared_ptr<Target> history_lease;
+@@ -451,20 +454,37 @@ struct Service : std::enable_shared_from_this<Service> {
+         f->input.classic = mods_display_classic() != 0;
+         f->input.narrow = mods_display_wide() == 0;
+         mods_display_transition(epoch, cls);
++        f->input.scale_override = mods_display_scale();
++        if (prefix_pending)
++            f->prefix->done = false;
++        f->seal_guest_w = guest_w;
++        f->seal_guest_h = guest_h;
++        if (f->staging_pending && !f->dropped) {
++            f->seal_waiting = true; // the deferred present finishes this seal
++            return;
++        }
++        finish_seal(f);
++    }
++    // The part of a seal that needs the frame's pixels staged. Mutex held.
++    void finish_seal(std::shared_ptr<Frame> f) {
++        const HostScreenClass cls = f->cls;
++        if (f->legacy_when_staged && f->staged_pixels && f->target) {
++            f->input.legacy = true;
++            f->input.legacy_frame = f->target->pixels;
++            f->input.guest_w = guest_w; // set by the staging that just ran
++            f->input.guest_h = guest_h;
++        }
+         // CPU-only Classic classes use the entire guest surface, including
+         // menu backgrounds that Enhanced extracts as individual UI records.
+         if (f->input.classic && cls != HOST_SCREEN_GAMEPLAY && f->staged_pixels) {
+             f->input.legacy = true;
+             f->input.legacy_frame = f->target->pixels;
+-            f->input.guest_w = guest_w;
+-            f->input.guest_h = guest_h;
++            f->input.guest_w = f->seal_guest_w;
++            f->input.guest_h = f->seal_guest_h;
+             f->input.world = {};
+             f->input.overlay = {};
+             f->supplied = true;
+         }
+-        f->input.scale_override = mods_display_scale();
+-        if (prefix_pending)
+-            f->prefix->done = false;
+         if (f->dropped) {
+             f->gpu = true;
+             retiring.push_back(f);
+@@ -486,8 +506,8 @@ struct Service : std::enable_shared_from_this<Service> {
+             // gameplay and the UI extractor supply their layered inputs.
+             f->input.legacy = true;
+             f->input.legacy_frame = f->target->pixels;
+-            f->input.guest_w = guest_w;
+-            f->input.guest_h = guest_h;
++            f->input.guest_w = f->seal_guest_w;
++            f->input.guest_h = f->seal_guest_h;
+         }
+         f->input.ui = &f->ui;
+         if (!f->target->scene.w || (!fake && !f->supplied && !f->target->pixels)) {
+@@ -588,11 +608,10 @@ struct Service : std::enable_shared_from_this<Service> {
+         if (!target)
+             target = std::make_shared<Target>();
+         target->device = fake ? nullptr : device;
+-        const gpu::TextureDesc overlay_desc = !fake && target->scene.overlay
+-                                                  ? device->describe(target->scene.overlay)
+-                                                  : gpu::TextureDesc{};
++        const int overlay_w = !fake && target->scene.overlay ? target->overlay_w : 0;
++        const int overlay_h = !fake && target->scene.overlay ? target->overlay_h : 0;
+         if (target->scene.w != w || target->scene.h != h ||
+-            (!fake && (overlay_desc.width != gw || overlay_desc.height != gh))) {
++            (!fake && (overlay_w != gw || overlay_h != gh))) {
+             target->release_scene();
+             while (true) {
+                 bool failed = fail_allocations > 0;
+@@ -616,6 +635,8 @@ struct Service : std::enable_shared_from_this<Service> {
+                         overlay = {fake_texture_ids++};
+                     }
+                     target->scene = {world, overlay, w, h};
++                    target->overlay_w = gw;
++                    target->overlay_h = gh;
+                     break;
+                 }
+                 if (w == gw && h == gh) {
+@@ -1309,11 +1330,19 @@ bool host_present_stage_texture(gpu::Texture src, int w, int h, int guest_w, int
+     // A GPU blit copies bytes, not colors. Keep the source format so BGRA
+     // backbuffers are not sampled as RGBA, including when a frame slot is reused.
+     const auto format = s->device->describe(src).format;
+-    s->acquire(guest_w, guest_h, 0, 0);
++    std::shared_ptr<Frame> frame;
++    {
++        std::lock_guard lock(s->mutex);
++        frame = s->staging; // a deferred present stages into its own frame
++    }
++    if (!frame)
++        s->acquire(guest_w, guest_h, 0, 0);
+     std::lock_guard lock(s->mutex);
+-    if (s->stop || !s->writing || !s->writing->target)
++    if (!frame)
++        frame = s->writing;
++    if (s->stop || !frame || !frame->target)
+         return false;
+-    auto &t = *s->writing->target;
++    auto &t = *frame->target;
+     t.device = s->device;
+     if (!t.pixels || t.pixels_w != w || t.pixels_h != h || t.pixels_format != format) {
+         if (t.pixels)
+@@ -1329,10 +1358,46 @@ bool host_present_stage_texture(gpu::Texture src, int w, int h, int guest_w, int
+     // their dimensions here sends touches beyond that area and hides cursors.
+     s->guest_w = guest_w;
+     s->guest_h = guest_h;
+-    s->writing->staged_pixels = true;
++    frame->staged_pixels = true;
+     s->device->blit(cb, src, {0, 0, w, h}, t.pixels, 0, 0);
+     return true;
+ }
++// A present whose backend work runs later on the render side (the web's
++// pumped queue). On the guest thread, before the frame is sealed: mark the
++// frame being written and hand it back, or nothing when there is none to stage.
++std::shared_ptr<void> host_present_begin_async_stage() {
++    auto s = active.load();
++    if (!s || s->fake)
++        return {};
++    std::lock_guard lock(s->mutex);
++    if (s->stop || !s->writing || s->writing->dropped || !s->writing->target)
++        return {};
++    s->writing->staging_pending = true;
++    return s->writing;
++}
++// On the render side: run `stage` (the backend present) against that frame,
++// then finish its seal if the guest has already sealed it.
++void host_present_run_async_stage(const std::shared_ptr<void> &handle,
++                                  const std::function<void()> &stage) {
++    auto s = active.load();
++    auto f = std::static_pointer_cast<Frame>(handle);
++    if (!s || !f) {
++        stage();
++        return;
++    }
++    {
++        std::lock_guard lock(s->mutex);
++        s->staging = f;
++    }
++    stage();
++    std::lock_guard lock(s->mutex);
++    s->staging.reset();
++    f->staging_pending = false;
++    if (f->seal_waiting && !s->stop) {
++        f->seal_waiting = false;
++        s->finish_seal(f);
++    }
++}
+ // The drawable the presenter composes into, in pixels. False before one exists.
+ bool host_present_drawable(int *w, int *h) {
+     auto s = active.load();
+@@ -1383,9 +1448,9 @@ void *host_present_prefix_begin() {
+     std::shared_ptr<Frame> frame;
+     {
+         std::lock_guard lock(s->mutex);
+-        if (!s->writing)
++        frame = s->staging ? s->staging : s->writing;
++        if (!frame)
+             return nullptr;
+-        frame = s->writing;
+         frame->prefix = fence;
+         ++frame->pending_prefixes;
+         ++s->pending_commands;
+@@ -1486,6 +1551,9 @@ extern "C" void host_frame_seal() {
+                     writer.staged_pixels ? writer.target->pixels : gpu::Texture{};
+                 writer.input.guest_w = writer.staged_pixels ? s->guest_w : writer.ui.guest_w;
+                 writer.input.guest_h = writer.staged_pixels ? s->guest_h : writer.ui.guest_h;
++                // A deferred present stages after this point: the frame still
++                // gets its pixels, once finish_seal sees them staged.
++                writer.legacy_when_staged = writer.staging_pending && !writer.staged_pixels;
+             }
+         }
+     }
 diff --git a/host/sdl/main.cpp b/host/sdl/main.cpp
 index d983f15..5c33d71 100644
 --- a/host/sdl/main.cpp
@@ -4060,6 +4622,34 @@ index d983f15..5c33d71 100644
      std::string dir = g_web_exe.substr(0, g_web_exe.find_last_of('/'));
      if (!dir.empty() && os_chdir(dir.c_str()) != 0)
          fprintf(stderr, "[host] could not enter %s\n", dir.c_str());
+diff --git a/host/sdl/platform_ui_desktop.cpp b/host/sdl/platform_ui_desktop.cpp
+index 42dd869..554afab 100644
+--- a/host/sdl/platform_ui_desktop.cpp
++++ b/host/sdl/platform_ui_desktop.cpp
+@@ -3,6 +3,7 @@
+ #include "platform_ui.h"
+ 
+ #include "../game_path.h"
++#include "../../platform/os.h"
+ 
+ #ifdef __ANDROID__
+ #include "../audio.h"
+@@ -201,6 +202,15 @@ bool platform_ui_keypad_wanted() {
+ bool platform_ui_touch_device() {
+ #ifdef __ANDROID__
+     return true;
++#elif defined(__EMSCRIPTEN__)
++    // The player page knows whether the browser's primary pointer is a finger
++    // and says so in RECOMP_TOUCH_DEVICE; the runtime runs in workers, which
++    // cannot ask the page. A desktop browser leaves it unset.
++    static const bool touch = [] {
++        const char *v = recomp_env("TOUCH_DEVICE");
++        return v && v[0] == '1';
++    }();
++    return touch;
+ #else
+     return false;
+ #endif
 diff --git a/host/tests/host_tests.cpp b/host/tests/host_tests.cpp
 index 8bc24e5..8389757 100644
 --- a/host/tests/host_tests.cpp
@@ -5988,7 +6578,7 @@ index 0cefcbe..a0c100f 100644
  const char *interp_last_error(void);
  
 diff --git a/runtime/kernel32.cpp b/runtime/kernel32.cpp
-index 529d27d..04aefa6 100644
+index 529d27d..5dba056 100644
 --- a/runtime/kernel32.cpp
 +++ b/runtime/kernel32.cpp
 @@ -1,4 +1,5 @@
@@ -6005,7 +6595,25 @@ index 529d27d..04aefa6 100644
  #include "memory.h"
  #include "win32.h"
  #include "native_seam.h"
-@@ -98,8 +100,9 @@ struct HObj {
+@@ -28,12 +30,17 @@
+ #include <time.h>
+ 
+ #include <map>
++#include <memory>
+ #include <chrono>
+ #include <condition_variable>
+ #include <mutex>
+ #include <algorithm>
+ #include <string>
+ #include <vector>
++#ifdef __EMSCRIPTEN__
++#include <thread>
++#include <unistd.h>
++#endif
+ 
+ // ---------------------------------------------------------------------------
+ // Win32 constants
+@@ -98,8 +105,9 @@ struct HObj {
      HKind kind = H_NONE;
      std::string object_name; // Named events, mutexes and mappings share a kernel object.
      uint32_t references = 1;
@@ -6017,7 +6625,17 @@ index 529d27d..04aefa6 100644
      // H_FILE opened for writing on an existing file: the open went through
      // the read tier, and the write tier is resolved by the first write. See
      // file_promote_for_write.
-@@ -239,6 +242,20 @@ std::map<std::string, std::map<std::string, std::string>> &dir_cache() {
+@@ -208,6 +216,9 @@ void sched_enter_critsec(uint32_t cs);
+ bool sched_try_critsec(uint32_t cs);
+ void sched_leave_critsec(uint32_t cs);
+ void sched_wake_all();
++// Reads `want` bytes at the handle's file pointer and advances it, like
++// os_fd_read; a read that waits on the network lets other guest threads run.
++int64_t file_read_cursor(HObj *o, uint8_t *dst, uint32_t want);
+ 
+ struct VmRegion {
+     uint32_t size = 0;
+@@ -239,6 +250,20 @@ std::map<std::string, std::map<std::string, std::string>> &dir_cache() {
      return m;
  }
  
@@ -6038,7 +6656,7 @@ index 529d27d..04aefa6 100644
  int collect_listing(const char *name, void *user) {
      auto *entries = (std::map<std::string, std::string> *)user;
      entries->emplace(lower(name), name);
-@@ -275,6 +292,7 @@ std::vector<std::string> split_path(const std::string &p) {
+@@ -275,6 +300,7 @@ std::vector<std::string> split_path(const std::string &p) {
  
  void win32_invalidate_dir_cache() {
      dir_cache().clear();
@@ -6046,7 +6664,7 @@ index 529d27d..04aefa6 100644
  }
  
  const std::string &win32_game_dir() {
-@@ -313,9 +331,23 @@ void win32_set_file_ops(int (*resolve)(const char *, int, char *, size_t),
+@@ -313,9 +339,23 @@ void win32_set_file_ops(int (*resolve)(const char *, int, char *, size_t),
      win32_invalidate_dir_cache();
  }
  
@@ -6072,7 +6690,7 @@ index 529d27d..04aefa6 100644
  static std::vector<std::string> normalise_components(const std::string &guest_path) {
      std::string p = guest_path;
      bool absolute = false;
-@@ -337,14 +369,18 @@ static std::vector<std::string> normalise_components(const std::string &guest_pa
+@@ -337,14 +377,18 @@ static std::vector<std::string> normalise_components(const std::string &guest_pa
          comps.push_back(c);
  
      std::vector<std::string> norm;
@@ -6094,7 +6712,7 @@ index 529d27d..04aefa6 100644
          norm.push_back(c);
      }
      // An absolute path spelled through the guest root - which GetModuleFileNameA
-@@ -412,11 +448,33 @@ std::string win32_host_path_op(const std::string &guest_path, int op) {
+@@ -412,11 +456,33 @@ std::string win32_host_path_op(const std::string &guest_path, int op) {
      if (guest_path.empty())
          return std::string();
      std::vector<std::string> norm = normalise_components(guest_path);
@@ -6129,7 +6747,7 @@ index 529d27d..04aefa6 100644
          // No answer. A read falls through to the game directory; a mutation
          // does NOT - refusing is the whole point, and silently writing into
          // the GOG folder is the failure this seam exists to prevent.
-@@ -428,7 +486,7 @@ std::string win32_host_path_op(const std::string &guest_path, int op) {
+@@ -428,7 +494,7 @@ std::string win32_host_path_op(const std::string &guest_path, int op) {
      // this an unmodded MoveFileA or CopyFileA to a new filename fails, which
      // is a behaviour change and not one this seam is allowed to make.
      bool may_create = (op == WIN32_FILE_WRITE || op == WIN32_FILE_RENAME_DST);
@@ -6138,7 +6756,7 @@ index 529d27d..04aefa6 100644
  }
  
  extern "C" int recomp_writable_path(const char *guest_path, char *out, size_t out_len) {
-@@ -546,7 +604,10 @@ void win32_init(const std::string &game_dir) {
+@@ -546,7 +612,10 @@ void win32_init(const std::string &game_dir) {
      handles().clear();
      modules().clear();
      vm_regions().clear();
@@ -6150,7 +6768,7 @@ index 529d27d..04aefa6 100644
      g_next_handle = 0x00010004;
      modules()[lower(std::string(RECOMP_EXECUTABLE))] = IMAGE_BASE;
      g_process_heap = handle_new(H_HEAP);
-@@ -805,9 +866,28 @@ void k_CreateFileA(X86 *c) {
+@@ -805,9 +874,28 @@ void k_CreateFileA(X86 *c) {
      create_file_named(c, gm_str(arg(c, 0)));
  }
  
@@ -6180,7 +6798,7 @@ index 529d27d..04aefa6 100644
      if (!o) {
          if (handle_get(arg(c, 0), H_STD)) {
              if (pread)
-@@ -824,21 +904,109 @@ void k_ReadFile(X86 *c) {
+@@ -824,21 +912,109 @@ void k_ReadFile(X86 *c) {
          set_eax(c, 0);
          return;
      }
@@ -6212,7 +6830,7 @@ index 529d27d..04aefa6 100644
 +    }
 +    const bool measure_read = want && perf_stats::on();
 +    const uint64_t read_started = measure_read ? os_monotonic_ns() : 0;
-+    int64_t n = want ? os_fd_read(o->fd, g_mem + buf, want) : 0;
++    int64_t n = want ? file_read_cursor(o, g_mem + buf, want) : 0;
 +    if (measure_read) {
 +        ++perf_stats::file_read_calls;
 +        perf_stats::file_read_bytes += n > 0 ? uint64_t(n) : 0;
@@ -6291,7 +6909,7 @@ index 529d27d..04aefa6 100644
  void k_WriteFile(X86 *c) {
      uint32_t h = arg(c, 0), buf = arg(c, 1), want = arg(c, 2), pwrote = arg(c, 3);
      HObj *o = handle_any(h);
-@@ -1145,6 +1313,36 @@ uint32_t call_dll_entry(X86 *c, const LoaderModule &m, uint32_t reason) {
+@@ -1145,6 +1321,36 @@ uint32_t call_dll_entry(X86 *c, const LoaderModule &m, uint32_t reason) {
      return result;
  }
  
@@ -6328,7 +6946,7 @@ index 529d27d..04aefa6 100644
  void load_library_named(X86 *c, const std::string &module_name) {
      std::string name = library_name(module_name);
      auto it = modules().find(name);
-@@ -1245,7 +1443,14 @@ void k_GetProcAddress(X86 *c) {
+@@ -1245,7 +1451,14 @@ void k_GetProcAddress(X86 *c) {
              dll = kv.first;
              break;
          }
@@ -6344,7 +6962,7 @@ index 529d27d..04aefa6 100644
      if (!a) {
          log_once(("gpa:" + dll + "!" + proc).c_str(),
                   "GetProcAddress(%s, \"%s\") -> 0 (no shim registered)",
-@@ -1302,6 +1507,11 @@ void k_GetCommandLineA(X86 *c) {
+@@ -1302,6 +1515,11 @@ void k_GetCommandLineA(X86 *c) {
      get_command_line(c);
  }
  } // namespace
@@ -6356,7 +6974,7 @@ index 529d27d..04aefa6 100644
  void win32_reset_command_line_for_test() {
      kernel32_wide_reset_command_line();
      g_cmdline_addr = 0;
-@@ -1495,12 +1705,29 @@ void k_GetDriveTypeA(X86 *c) {
+@@ -1495,12 +1713,29 @@ void k_GetDriveTypeA(X86 *c) {
  // -------------------------------------------------------------------------
  // Time
  // -------------------------------------------------------------------------
@@ -6391,7 +7009,7 @@ index 529d27d..04aefa6 100644
      using Clock = std::chrono::steady_clock;
      static FrameDeadline deadline;
      static int active = 0;
-@@ -1537,6 +1764,12 @@ static uint32_t native_frame_clock(X86 *c) {
+@@ -1537,6 +1772,12 @@ static uint32_t native_frame_clock(X86 *c) {
          return RECOMP_HOOK_FRAME_CLOCK_WAIT_DEADLINE;
      }
      return 0;
@@ -6404,7 +7022,7 @@ index 529d27d..04aefa6 100644
  }
  void k_GetTickCount(X86 *c) {
      const uint32_t draw_deadline = native_frame_clock(c);
-@@ -1689,7 +1922,10 @@ void k_QueryPerformanceCounter(X86 *c) {
+@@ -1689,7 +1930,10 @@ void k_QueryPerformanceCounter(X86 *c) {
      host_note_cadence("QueryPerformanceCounter");
      uint32_t p = arg(c, 0);
      if (p) {
@@ -6416,7 +7034,7 @@ index 529d27d..04aefa6 100644
          wr32(p, (uint32_t)ticks);
          wr32(p + 4, (uint32_t)(ticks >> 32));
      }
-@@ -1728,6 +1964,26 @@ void k_InitializeCriticalSection(X86 *c) {
+@@ -1728,6 +1972,26 @@ void k_InitializeCriticalSection(X86 *c) {
      }
      set_eax(c, 0);
  }
@@ -6443,7 +7061,7 @@ index 529d27d..04aefa6 100644
  void k_EnterCriticalSection(X86 *c) {
      imports_call_leaves_surfaces();
      sched_enter_critsec(arg(c, 0));
-@@ -1775,6 +2031,11 @@ void k_ReleaseSemaphore(X86 *c) {
+@@ -1775,6 +2039,11 @@ void k_ReleaseSemaphore(X86 *c) {
      }
      o->count += n;
      set_eax(c, 1);
@@ -6455,7 +7073,7 @@ index 529d27d..04aefa6 100644
  }
  
  void k_CreateEventA(X86 *c) {
-@@ -1822,6 +2083,12 @@ void k_WaitForSingleObject(X86 *c) {
+@@ -1822,6 +2091,12 @@ void k_WaitForSingleObject(X86 *c) {
      set_eax(c, sched_wait_objects(&h, 1, false, arg(c, 1)));
  }
  
@@ -6468,7 +7086,7 @@ index 529d27d..04aefa6 100644
  void k_WaitForMultipleObjects(X86 *c) {
      wait_multiple_objects(c);
  }
-@@ -1848,9 +2115,10 @@ void k_WaitForMultipleObjects(X86 *c) {
+@@ -1848,9 +2123,10 @@ void k_WaitForMultipleObjects(X86 *c) {
  // The baton moves only where Windows would have descheduled the running
  // thread anyway: a wait that cannot be satisfied yet, Sleep, and the status
  // poll a spin loop makes (GetExitCodeThread).  A guest that makes no such
@@ -6482,7 +7100,7 @@ index 529d27d..04aefa6 100644
  //
  //   RECOMP_CREATETHREAD=skip   record a thread without running it
  //   RECOMP_CREATETHREAD=sync   run the body to completion in CreateThread
-@@ -2196,7 +2464,10 @@ void thread_finish_exit_process();
+@@ -2196,7 +2472,10 @@ void thread_finish_exit_process();
  // across a host slice, so the host may call back into the runtime - signalling
  // a guest event, most obviously - without deadlocking against the scheduler.
  void sched_wait_locked(size_t me, double until, double max_slice) {
@@ -6494,7 +7112,7 @@ index 529d27d..04aefa6 100644
      if (until && until <= now)
          return;
  
-@@ -2213,10 +2484,13 @@ void sched_wait_locked(size_t me, double until, double max_slice) {
+@@ -2213,10 +2492,13 @@ void sched_wait_locked(size_t me, double until, double max_slice) {
          // above all - until it holds the baton itself.
          g_in_idle_slice = true;
          // AppKit's event wait cannot hear g_sched_cv. Sleeping there for each
@@ -6509,7 +7127,7 @@ index 529d27d..04aefa6 100644
          g_in_idle_slice = false;
          g_sched_m.lock();
          if (!awaiting_baton || g_baton == me)
-@@ -2225,14 +2499,17 @@ void sched_wait_locked(size_t me, double until, double max_slice) {
+@@ -2225,14 +2507,17 @@ void sched_wait_locked(size_t me, double until, double max_slice) {
  
      // The host has been serviced, or none is installed. Sleep interruptibly,
      // capped so host events and deadlines are still re-examined.
@@ -6528,7 +7146,7 @@ index 529d27d..04aefa6 100644
  }
  
  // ---------------------------------------------------------------------------
-@@ -2258,6 +2535,7 @@ Handoff g_handoffs[16];
+@@ -2258,6 +2543,7 @@ Handoff g_handoffs[16];
  uint32_t g_handoff_count = 0;
  
  void record_handoff_locked(size_t from, size_t to, const char *why) {
@@ -6536,7 +7154,7 @@ index 529d27d..04aefa6 100644
      g_handoffs[g_handoff_count % 16] = Handoff{from, to, why};
      ++g_handoff_count;
  }
-@@ -2698,8 +2976,15 @@ bool guest_yield() {
+@@ -2698,8 +2984,15 @@ bool guest_yield() {
  // call: the frame limiter spins on GetTickCount and would otherwise starve the
  // DirectInput service threads indefinitely, expired 200 ms waits and all.  Any
  // call into the runtime is a checkpoint, and a thread yields at most once per
@@ -6554,7 +7172,29 @@ index 529d27d..04aefa6 100644
  
  } // namespace
  
-@@ -2789,6 +3074,25 @@ void sched_checkpoint() {
+@@ -2774,21 +3067,46 @@ void sched_checkpoint() {
+     // Drain first and unconditionally: a guest with no worker threads never
+     // reaches the scheduler proper, and a signal it never applied is a wait
+     // that never ends.
++    bool signalled = false;
+     if (!g_host_signals.empty()) {
+         g_sched_m.lock();
+         apply_host_signals_locked();
+         g_sched_m.unlock();
++        signalled = true;
+     }
+     if (threads().size() < 2 || t_atomic)
+         return;
+     GuestThread *me = threads()[t_self];
+     double now = sched_now();
+-    if (now - me->last_yield < SCHED_SLICE_SECONDS)
++    // A host completion (a file read, an audio notification) just released a
++    // thread that was blocked on it: let it run now rather than at the end of
++    // this slice. Otherwise every completed read waited up to a slice for the
++    // baton, and a loading screen issuing hundreds of reads took twice as long.
++    if (!signalled && now - me->last_yield < SCHED_SLICE_SECONDS)
+         return;
+     me->last_yield = now;
      guest_yield();
  }
  
@@ -6580,7 +7220,178 @@ index 529d27d..04aefa6 100644
  namespace {
  
  // A shim that changed an object's state calls this so a thread blocked on it
-@@ -2838,6 +3142,11 @@ uint32_t sched_wait_objects(const uint32_t *handles_, uint32_t count, bool wait_
+@@ -2817,6 +3135,170 @@ void sched_sleep_ms(uint32_t ms) {
+     guest_block("sleep");
+ }
+ 
++#ifdef __EMSCRIPTEN__
++// A read from the demand filesystem (/stream-game/) is answered by the archive
++// reader on WasmFS's proxy worker, which may first have to fetch a 4 MiB block
++// over the network: hundreds of milliseconds. Done under the baton, that read
++// stopped every guest thread, so GTA SA's main loop froze whenever its
++// streaming thread missed the cache. Windows blocks only the caller, and so
++// does this: a host I/O thread performs the read; the caller waits a moment
++// with the baton, which is enough for a block the reader holds in memory, and
++// otherwise blocks in the scheduler on a private event the I/O thread signals.
++// The guest still sees one synchronous ReadFile with the same result.
++namespace host_io {
++struct Read {
++    int fd = -1;
++    uint8_t *dst = nullptr;
++    size_t n = 0;
++    int64_t offset = 0;
++    int64_t result = -1;
++    bool done = false;
++    uint32_t event = 0; // the caller's event, once it has parked on it
++    uint64_t done_ns = 0;
++};
++// RECOMP_PERF_STATS=1: how reads split between the inline wait and parking,
++// how long they took, and how long a parked reader waited for the baton after
++// its data arrived. [0] the main thread, [1] the others.
++struct ReadStats {
++    uint64_t reads = 0, parked = 0, read_ns = 0, resume_ns = 0, resume_max_ns = 0;
++};
++ReadStats g_stats[2];
++uint64_t g_stats_report_ns = 0;
++void note_read(bool main, bool parked, uint64_t began, uint64_t done_ns) {
++    if (!perf_stats::on())
++        return;
++    const uint64_t now = os_monotonic_ns();
++    ReadStats &s = g_stats[main ? 0 : 1];
++    ++s.reads;
++    s.read_ns += now - began;
++    if (parked) {
++        ++s.parked;
++        const uint64_t resume = done_ns && now > done_ns ? now - done_ns : 0;
++        s.resume_ns += resume;
++        s.resume_max_ns = std::max(s.resume_max_ns, resume);
++    }
++    if (now - g_stats_report_ns < 5000000000ull)
++        return;
++    g_stats_report_ns = now;
++    for (int i = 0; i < 2; ++i) {
++        const ReadStats &r = g_stats[i];
++        fprintf(stderr,
++                "[recomp] file: %s archive reads %llu, parked %llu, avg %.2f ms, resume avg %.2f "
++                "max %.2f ms\n",
++                i ? "other-thread" : "main-thread", (unsigned long long)r.reads,
++                (unsigned long long)r.parked, r.reads ? r.read_ns / 1e6 / r.reads : 0.0,
++                r.parked ? r.resume_ns / 1e6 / r.parked : 0.0, r.resume_max_ns / 1e6);
++    }
++}
++std::mutex g_m;
++std::condition_variable g_work, g_done;
++std::vector<std::shared_ptr<Read>> g_queue;
++bool g_started = false;
++// Two threads: an audio stream read is not left queued behind a model block
++// that is still downloading.
++const int THREADS = 2;
++// A read the archive reader answers from memory or its persistent cache
++// usually completes within this; only a network fetch outlasts it.
++const auto INLINE_WAIT = std::chrono::milliseconds(4);
++
++void worker() {
++    for (;;) {
++        std::shared_ptr<Read> r;
++        {
++            std::unique_lock<std::mutex> lock(g_m);
++            g_work.wait(lock, [] { return !g_queue.empty(); });
++            r = g_queue.front();
++            g_queue.erase(g_queue.begin());
++        }
++        // Positional: another guest thread may move this descriptor's file
++        // pointer while the caller is parked.
++        const ssize_t got = pread(r->fd, r->dst, r->n, (off_t)r->offset);
++        uint32_t event;
++        {
++            std::lock_guard<std::mutex> lock(g_m);
++            r->result = got < 0 ? -1 : (int64_t)got;
++            r->done = true;
++            r->done_ns = os_monotonic_ns();
++            event = r->event;
++        }
++        g_done.notify_all();
++        if (event)
++            guest_event_signal_from_host(event);
++    }
++}
++
++int64_t read_at(int fd, uint8_t *dst, size_t n, int64_t offset, bool main) {
++    const uint64_t began = perf_stats::on() ? os_monotonic_ns() : 0;
++    auto r = std::make_shared<Read>();
++    r->fd = fd;
++    r->dst = dst;
++    r->n = n;
++    r->offset = offset;
++    {
++        std::unique_lock<std::mutex> lock(g_m);
++        if (!g_started) {
++            g_started = true;
++            for (int i = 0; i < THREADS; ++i)
++                std::thread(worker).detach();
++        }
++        g_queue.push_back(r);
++        g_work.notify_one();
++        if (g_done.wait_for(lock, INLINE_WAIT, [&] { return r->done; })) {
++            const int64_t result = r->result;
++            lock.unlock();
++            note_read(main, false, began, 0);
++            return result;
++        }
++    }
++    // Still waiting on the archive: give the baton away until it answers.
++    const uint32_t event = win32_create_event(true, false);
++    {
++        std::lock_guard<std::mutex> lock(g_m);
++        if (!r->done)
++            r->event = event;
++    }
++    if (r->event) {
++        static bool noted = false;
++        if (!noted) {
++            noted = true;
++            fprintf(stderr, "[recomp] file: archive reads release the guest baton while they wait\n");
++        }
++        if (sched_wait_objects(&event, 1, false, 0xffffffffu) != 0) {
++            // Not a normal wake: wait for the result without the scheduler.
++            std::unique_lock<std::mutex> lock(g_m);
++            g_done.wait(lock, [&] { return r->done; });
++        }
++    }
++    handles().erase(event);
++    int64_t result;
++    uint64_t done_ns;
++    {
++        std::lock_guard<std::mutex> lock(g_m);
++        result = r->result;
++        done_ns = r->done_ns;
++    }
++    note_read(main, r->event != 0, began, done_ns);
++    return result;
++}
++} // namespace host_io
++#endif
++
++int64_t file_read_cursor(HObj *o, uint8_t *dst, uint32_t want) {
++#ifdef __EMSCRIPTEN__
++    if (o->path.compare(0, 13, "/stream-game/") == 0 && t_atomic == 0 && sched_is_guest_thread() &&
++        sched_holds_baton()) {
++        const int64_t at = os_fd_seek(o->fd, 0, OS_SEEK_CUR);
++        if (at >= 0) {
++            const int64_t n = host_io::read_at(o->fd, dst, want, at, cur_thread()->is_main);
++            if (n > 0)
++                os_fd_seek(o->fd, at + n, OS_SEEK_SET);
++            return n;
++        }
++    }
++#endif
++    return os_fd_read(o->fd, dst, want);
++}
++
+ // WAIT_OBJECT_0 + index, WAIT_TIMEOUT or WAIT_FAILED. Nothing here reports a
+ // timeout that did not happen: a zero timeout answers from the current state,
+ // and any other wait is a real block that ends when the object is taken or the
+@@ -2838,6 +3320,11 @@ uint32_t sched_wait_objects(const uint32_t *handles_, uint32_t count, bool wait_
  
      // Satisfiable right now?  Taken here so a zero timeout still consumes.
      g_sched_m.lock();
@@ -6592,7 +7403,7 @@ index 529d27d..04aefa6 100644
      bool ready = true, abandoned = false;
      uint32_t index = 0;
      if (wait_all) {
-@@ -3373,7 +3682,16 @@ void k_SetThreadPriority(X86 *c) {
+@@ -3373,7 +3860,16 @@ void k_SetThreadPriority(X86 *c) {
  }
  
  void k_ExitProcess(X86 *c) {
@@ -6610,7 +7421,7 @@ index 529d27d..04aefa6 100644
      if (request_process_exit(arg(c, 0)))
          return; // never returns
      publish_process_exit(arg(c, 0));
-@@ -3594,6 +3912,14 @@ void k_lstrlenA(X86 *c) {
+@@ -3594,6 +4090,14 @@ void k_lstrlenA(X86 *c) {
      set_eax(c, (uint32_t)gm_str(arg(c, 0)).size());
  }
  
@@ -6625,7 +7436,7 @@ index 529d27d..04aefa6 100644
  void k_lstrcpyA(X86 *c) {
      uint32_t d = arg(c, 0);
      std::string s = gm_str(arg(c, 1));
-@@ -3943,6 +4269,86 @@ void k_GetLocaleInfoW(X86 *c) {
+@@ -3943,6 +4447,86 @@ void k_GetLocaleInfoW(X86 *c) {
  
  } // namespace
  
@@ -6712,7 +7523,7 @@ index 529d27d..04aefa6 100644
  // ---------------------------------------------------------------------------
  // The run thread's own ending.
  //
-@@ -4168,6 +4574,16 @@ void sched_drive_release(void) {
+@@ -4168,6 +4752,16 @@ void sched_drive_release(void) {
  // ---------------------------------------------------------------------------
  // Encoding-independent bodies shared by the ANSI and wide import tables.
  void create_file_named(X86 *c, const std::string &name) {
@@ -6729,7 +7540,7 @@ index 529d27d..04aefa6 100644
      if (recomp_env("TRACE_FILES"))
          LOGW("file: open \"%s\" -> \"%s\"", name.c_str(), win32_host_path(name).c_str());
      uint32_t access = arg(c, 1), disp = arg(c, 4);
-@@ -4218,6 +4634,7 @@ void create_file_named(X86 *c, const std::string &name) {
+@@ -4218,6 +4812,7 @@ void create_file_named(X86 *c, const std::string &name) {
      uint32_t h = handle_new(H_FILE);
      handles()[h].fd = fd;
      handles()[h].path = host;
@@ -6737,7 +7548,7 @@ index 529d27d..04aefa6 100644
      if (deferred) {
          handles()[h].write_pending = true;
          handles()[h].write_flags = wanted;
-@@ -4849,7 +5266,7 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4849,7 +5444,7 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "GetTimeFormatA", 6, nullptr},
      {"KERNEL32.dll", "GetDiskFreeSpaceExA", 4, nullptr},
      {"KERNEL32.dll", "GetLongPathNameA", 3, nullptr},
@@ -6746,7 +7557,7 @@ index 529d27d..04aefa6 100644
      {"KERNEL32.dll", "HeapValidate", 3, nullptr},
      {"KERNEL32.dll", "QueueUserAPC", 3, nullptr},
      {"KERNEL32.dll", "SetConsoleCtrlHandler", 2, nullptr},
-@@ -4864,6 +5281,9 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4864,6 +5459,9 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "InterlockedDecrement", 1, k_InterlockedDecrement},
      {"KERNEL32.dll", "InterlockedExchange", 2, k_InterlockedExchange},
      {"KERNEL32.dll", "InitializeCriticalSection", 1, k_InitializeCriticalSection},
@@ -6756,7 +7567,7 @@ index 529d27d..04aefa6 100644
      {"KERNEL32.dll", "EnterCriticalSection", 1, k_EnterCriticalSection},
      {"KERNEL32.dll", "LeaveCriticalSection", 1, k_LeaveCriticalSection},
      {"KERNEL32.dll", "DeleteCriticalSection", 1, k_DeleteCriticalSection},
-@@ -4874,6 +5294,7 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4874,6 +5472,7 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "ResetEvent", 1, k_ResetEvent},
      {"KERNEL32.dll", "CreateMutexA", 3, k_CreateMutexA},
      {"KERNEL32.dll", "WaitForSingleObject", 2, k_WaitForSingleObject},
@@ -6764,7 +7575,7 @@ index 529d27d..04aefa6 100644
      {"KERNEL32.dll", "WaitForMultipleObjects", 4, k_WaitForMultipleObjects},
      // threads and process exit
      {"KERNEL32.dll", "CreateThread", 6, k_CreateThread},
-@@ -4898,6 +5319,7 @@ const ImportShim g_kernel32_shims[] = {
+@@ -4898,6 +5497,7 @@ const ImportShim g_kernel32_shims[] = {
      {"KERNEL32.dll", "RtlUnwind", 4, k_RtlUnwind},
      // strings, code pages, locale
      {"KERNEL32.dll", "lstrlenA", 1, k_lstrlenA},
@@ -6928,6 +7739,23 @@ index bfe336c..1140cad 100644
 +// process-lifetime load reference, so a later LoadLibrary only adds another.
 +// Returns false when a DllMain failed; the caller must not run the entry then.
 +bool loader_attach_auxiliary(X86 *c);
+diff --git a/runtime/memory.cpp b/runtime/memory.cpp
+index 714d83a..cd66efe 100644
+--- a/runtime/memory.cpp
++++ b/runtime/memory.cpp
+@@ -39,6 +39,12 @@ struct WatchArm {
+         const char *s = recomp_env("WATCH");
+         if (!s || !*s)
+             return;
++#if !RECOMP_STORE_HOOKS
++        // The generated stores of this build carry no watch check, so an armed
++        // watchpoint would never fire: say so rather than report silence.
++        fprintf(stderr, "[recomp] RECOMP_WATCH ignored: built with store_hooks = false\n");
++        return;
++#endif
+         char *end = nullptr;
+         const unsigned long long base = strtoull(s, &end, 16);
+         unsigned long long len = 4;
 diff --git a/runtime/misc.cpp b/runtime/misc.cpp
 index 3c955d7..3c0dbb1 100644
 --- a/runtime/misc.cpp
@@ -8677,7 +9505,7 @@ index 2ef5486..f9af73e 100644
      // host layer can reach them.
      {"USER32.dll", "SendMessageA", 4, u_SendMessageA},
 diff --git a/runtime/x86.h b/runtime/x86.h
-index 4dc8955..8ab4427 100644
+index 4dc8955..83814e2 100644
 --- a/runtime/x86.h
 +++ b/runtime/x86.h
 @@ -23,6 +23,24 @@
@@ -8705,7 +9533,81 @@ index 4dc8955..8ab4427 100644
  #ifdef __cplusplus
  extern "C" {
  #endif
-@@ -344,6 +362,16 @@ static inline float xmm_f32(const X86 *c, int reg) {
+@@ -161,11 +179,35 @@ static inline void recomp_dirty(uint32_t a, uint32_t n) {
+     }
+ }
+ 
++/* RECOMP_STORE_HOOKS=0 ([game] store_hooks = false) builds every guest store
++ * as a plain store. The two checks above are cheap one at a time but not in
++ * aggregate: a store through g_mem may alias any global, so the compiler
++ * reloads g_mem, g_watch_len, g_dirty_count and the register file after each
++ * one, and the widening loop is an out-of-line call. Measured on a GTA SA
++ * chunk at -O2, dropping them removes 34% of the code, 38% of the loads and
++ * 64% of the branches. Such a build refuses RECOMP_WATCH, and ddraw.cpp opens
++ * no dirty range, so an Unlock compares the whole surface instead. */
++#ifndef RECOMP_STORE_HOOKS
++#define RECOMP_STORE_HOOKS 1
++#endif
++#if RECOMP_STORE_HOOKS
++#define RECOMP_STORE_DIRTY(a, n)                                                                   \
++    do {                                                                                           \
++        if (g_dirty_count != 0)                                                                    \
++            recomp_dirty((a), (n));                                                                \
++    } while (0)
++#else
++#define RECOMP_STORE_DIRTY(a, n) ((void)0)
++#endif
++
+ static inline void recomp_watch(uint32_t a, uint32_t n, uint64_t v) {
++#if RECOMP_STORE_HOOKS
+     if (g_watch_len != 0 && a < g_watch_base + g_watch_len && g_watch_base < a + n)
+         recomp_watch_hit(a, n, v);
+-    if (g_dirty_count != 0)
+-        recomp_dirty(a, n);
++    RECOMP_STORE_DIRTY(a, n);
++#else
++    (void)a, (void)n, (void)v;
++#endif
+ }
+ 
+ RECOMP_HOT_INLINE void wr8(uint32_t a, uint8_t v) {
+@@ -199,13 +241,11 @@ RECOMP_HOT_INLINE double rdf64(uint32_t a) {
+ }
+ RECOMP_HOT_INLINE void wrf32(uint32_t a, float v) {
+     memcpy(g_mem + a, &v, 4);
+-    if (g_dirty_count != 0)
+-        recomp_dirty(a, 4);
++    RECOMP_STORE_DIRTY(a, 4);
+ }
+ RECOMP_HOT_INLINE void wrf64(uint32_t a, double v) {
+     memcpy(g_mem + a, &v, 8);
+-    if (g_dirty_count != 0)
+-        recomp_dirty(a, 8);
++    RECOMP_STORE_DIRTY(a, 8);
+ }
+ 
+ /* 80-bit x87 extended precision.  x87 registers are `double` here (plan
+@@ -258,8 +298,7 @@ static inline void wrbcd80(uint32_t a, double v) {
+     if (!(fabs(r) < 1e18)) {
+         static const uint8_t indefinite[10] = {0, 0, 0, 0, 0, 0, 0, 0xc0, 0xff, 0xff};
+         memcpy(g_mem + a, indefinite, 10);
+-        if (g_dirty_count != 0)
+-            recomp_dirty(a, 10);
++        RECOMP_STORE_DIRTY(a, 10);
+         return;
+     }
+     uint64_t m = (uint64_t)fabs(r);
+@@ -273,8 +312,7 @@ static inline void wrbcd80(uint32_t a, double v) {
+     if (r < 0 || (r == 0 && signbit(v)))
+         out[9] = 0x80;
+     memcpy(g_mem + a, out, 10);
+-    if (g_dirty_count != 0)
+-        recomp_dirty(a, 10);
++    RECOMP_STORE_DIRTY(a, 10);
+ }
+ 
+ /* ------------------------------------------------------------- cpu state */
+@@ -344,6 +382,16 @@ static inline float xmm_f32(const X86 *c, int reg) {
  static inline void xmm_set_f32(X86 *c, int reg, float v) {
      memcpy(&c->xmm[reg][0], &v, 4);
  }
@@ -8722,7 +9624,7 @@ index 4dc8955..8ab4427 100644
  
  /* SQRTSD and SQRTSS of a negative operand return the "indefinite" quiet NaN,
   * which has its sign bit set; the host's sqrt returns a positive NaN and sets
-@@ -418,6 +446,14 @@ void recomp_profile_pop(void);
+@@ -418,6 +466,14 @@ void recomp_profile_pop(void);
   * target), then the import shim range.  Anything else aborts. */
  void recomp_jump(X86 *c, uint32_t target);
  
@@ -8737,7 +9639,7 @@ index 4dc8955..8ab4427 100644
  /* Indirect JMP whose target is neither a block entry nor a shim.  Aborts with
   * the target and the jumping instruction's address. */
  void recomp_unknown_jump(X86 *c, uint32_t target);
-@@ -432,6 +468,7 @@ void recomp_unknown_call(X86 *c, uint32_t target);
+@@ -432,6 +488,7 @@ void recomp_unknown_call(X86 *c, uint32_t target);
  /* A popped callback sentinel can bypass translated callers. The innermost
   * guest_call owns the live host return checkpoint and its guest stack range. */
  void recomp_callback_return(X86 *c);
@@ -8745,7 +9647,7 @@ index 4dc8955..8ab4427 100644
  uint32_t recomp_callback_depth(void);
  void recomp_callback_truncate(uint32_t depth);
  void recomp_callback_reset(X86 *c);
-@@ -530,7 +567,7 @@ static inline void recomp_return(X86 *c) {
+@@ -530,7 +587,7 @@ static inline void recomp_return(X86 *c) {
          recomp_callback_return(c);
          return;
      }
@@ -8754,7 +9656,7 @@ index 4dc8955..8ab4427 100644
          return;
      if (recomp_is_call_return(c->eip) || recomp_module_is_call_return(c->eip))
          return;
-@@ -947,7 +984,7 @@ static inline void x86_popad(X86 *c) {
+@@ -947,7 +1004,7 @@ static inline void x86_popad(X86 *c) {
      /* The port string forms. A user-mode guest that reaches one has been      \
       * misdecoded - Windows would fault - so they exist to be translatable      \
       * rather than useful: the port shims answer, and the pointer and count     \
@@ -8852,6 +9754,41 @@ index 81654b4..7abbd88 100644
      flags = ["-i"] if args.write else ["--dry-run", "--Werror"]
      for offset in range(0, len(files), 50):
          subprocess.run([str(binary), *flags, *map(str, files[offset:offset + 50])],
+diff --git a/tools/game_config.py b/tools/game_config.py
+index 20838eb..be0cb40 100644
+--- a/tools/game_config.py
++++ b/tools/game_config.py
+@@ -152,10 +152,18 @@ def load(game_dir):
+         raise ValueError("%s: missing [game] keys: %s" % (source, ", ".join(missing)))
+     game["heap_base"] = validate_heap_base(int(game.get("heap_base", HEAP_BASE_DEFAULT)))
+     windows_version(game.setdefault("windows_version", "4.10"))
++    # [game] store_hooks = false builds guest stores without the watchpoint and
++    # DirectDraw dirty-range checks (runtime/x86.h RECOMP_STORE_HOOKS).
++    if not isinstance(game.setdefault("store_hooks", True), bool):
++        raise ValueError("%s: [game] store_hooks must be a boolean" % source)
+     translate = cfg.setdefault("translate", {})
+     resumable = translate.setdefault("resumable_stacks", False)
+     if not isinstance(resumable, bool):
+         raise ValueError("%s: [translate] resumable_stacks must be a boolean" % source)
++    if translate.setdefault("flag_liveness", "straight") not in ("straight", "flow"):
++        raise ValueError('%s: [translate] flag_liveness must be "straight" or "flow"' % source)
++    if not isinstance(translate.setdefault("flags_cross_calls", True), bool):
++        raise ValueError("%s: [translate] flags_cross_calls must be a boolean" % source)
+     alignment = translate.setdefault("function_alignment", 16)
+     if type(alignment) is not int or alignment <= 0:
+         raise ValueError("%s: [translate] function_alignment must be a positive integer" % source)
+diff --git a/tools/gen_game_config.py b/tools/gen_game_config.py
+index e9d2983..21e0fdb 100644
+--- a/tools/gen_game_config.py
++++ b/tools/gen_game_config.py
+@@ -116,6 +116,7 @@ def render_cmake(cfg):
+     lines.append("set(RECOMP_IMAGE_BASE %s)" % c_hex(game["image_base"]))
+     lines.append("set(RECOMP_HEAP_BASE %s)" % c_hex(game["heap_base"]))
+     lines.append("set(RECOMP_GUEST_SIZE %s)" % c_hex(game["guest_size"]))
++    lines.append("set(RECOMP_STORE_HOOKS %d)" % (1 if game.get("store_hooks", True) else 0))
+     # The generated sources include this header before they define FN_<addr>,
+     # which is how a game replaces one translated function with a native one.
+     lines.append('set(RECOMP_OVERRIDE_HEADER "%s")'
 diff --git a/tools/recomp/tests/test_interp_unicorn.py b/tools/recomp/tests/test_interp_unicorn.py
 index 3108489..68d3203 100644
 --- a/tools/recomp/tests/test_interp_unicorn.py
@@ -9518,7 +10455,7 @@ index e31c835..7c0fbff 100644
                                                   ("ESP", True, False)])
  def test_frame_establishment_through_edx_needs_a_zero_base(reg, zeroed, checkpoint):
 diff --git a/tools/recomp/translate.py b/tools/recomp/translate.py
-index 944f2ca..97abd6f 100644
+index 944f2ca..9e8186b 100644
 --- a/tools/recomp/translate.py
 +++ b/tools/recomp/translate.py
 @@ -18,13 +18,15 @@ are enabled by the native host, never by the baseline/differential build.
@@ -9538,23 +10475,51 @@ index 944f2ca..97abd6f 100644
  from pathlib import Path
  from bisect import bisect_right
  
-@@ -83,6 +85,7 @@ def configure_module(cfg, key):
+@@ -44,6 +46,13 @@ ANIMATION_COUNTER = 0
+ VISUAL_ANIMATION_READS = frozenset()
+ EXTRA_ENTRY_POINTS = frozenset()
+ RESUMABLE_STACKS = False
++# [translate] flag_liveness = "flow": flag liveness over each function's
++# control-flow graph instead of straight-line runs (Translator.liveness_flow).
++FLAG_FLOW = False
++# [translate] flags_cross_calls = false: with FLAG_FLOW, assume the calling
++# convention compilers target - a callee does not read its caller's flags and
++# a caller does not read its callee's. --check-flags measures it for a game.
++FLAGS_CROSS_CALLS = True
+ FUNCTION_ALIGNMENT = 16
+ 
+ #: game.toml [translate] rewrites: an instruction's memory operand moved to a
+@@ -81,8 +90,15 @@ def configure_module(cfg, key):
+     reads, no curated symbols (those describe the executable)."""
+     global LISTINGS, FUNCS_TSV, BINARY, CURATED, ANIMATION_COUNTER, VISUAL_ANIMATION_READS
      global EXTRA_ENTRY_POINTS, FUNCTION_ALIGNMENT, SYMBOL_PREFIX, AUX_MODULE
-     global RESUMABLE_STACKS
+-    global RESUMABLE_STACKS
++    global RESUMABLE_STACKS, FLAG_FLOW, FLAGS_CROSS_CALLS
++    global OPERAND_REDIRECTS, INSTRUCTION_PATCHES, DATA_SEEDS
      RESUMABLE_STACKS = cfg["translate"].get("resumable_stacks", False)
++    FLAG_FLOW = cfg["translate"].get("flag_liveness", "straight") == "flow"
++    FLAGS_CROSS_CALLS = cfg["translate"].get("flags_cross_calls", True)
 +    configure_legacy_intrinsics(cfg["translate"].get("legacy_address_intrinsics", True))
++    # Operand redirects, instruction patches and data seeds name addresses in
++    # the executable, never in a module.
++    OPERAND_REDIRECTS, INSTRUCTION_PATCHES, DATA_SEEDS = {}, {}, []
      mods = {m["key"]: m for m in cfg.get("aux_modules", [])}
      if key not in mods:
          raise SystemExit("game.toml has no [modules.aux.%s]" % key)
-@@ -130,6 +133,7 @@ def configure(cfg):
+@@ -128,8 +144,11 @@ def configure(cfg):
+     ANIMATION_COUNTER = cfg["translate"]["animation_counter"]
+     VISUAL_ANIMATION_READS = frozenset(cfg["translate"].get("volatile_reads", ()))
      global EXTRA_ENTRY_POINTS, FUNCTION_ALIGNMENT
-     global RESUMABLE_STACKS
+-    global RESUMABLE_STACKS
++    global RESUMABLE_STACKS, FLAG_FLOW, FLAGS_CROSS_CALLS
      RESUMABLE_STACKS = cfg["translate"].get("resumable_stacks", False)
++    FLAG_FLOW = cfg["translate"].get("flag_liveness", "straight") == "flow"
++    FLAGS_CROSS_CALLS = cfg["translate"].get("flags_cross_calls", True)
 +    configure_legacy_intrinsics(cfg["translate"].get("legacy_address_intrinsics", True))
      EXTRA_ENTRY_POINTS = frozenset(int(a) for a in cfg["translate"].get("entry_points", ()))
      FUNCTION_ALIGNMENT = cfg["translate"].get("function_alignment", 16)
      global OPERAND_REDIRECTS, INSTRUCTION_PATCHES, DATA_SEEDS
-@@ -301,6 +305,16 @@ INTRINSIC_BODY = {
+@@ -301,6 +320,16 @@ INTRINSIC_BODY = {
      INTRINSIC_LONGJMP: "recomp_longjmp(c);",
      INTRINSIC_SETJMP:  "recomp_setjmp(c);",   # single-call fallback, indirect only
  }
@@ -9571,7 +10536,7 @@ index 944f2ca..97abd6f 100644
  
  # --------------------------------------------------------------- registers --
  
-@@ -433,6 +447,18 @@ IMM_RE = re.compile(r"^-?0x[0-9a-fA-F]+$|^-?[0-9]+$")
+@@ -433,6 +462,18 @@ IMM_RE = re.compile(r"^-?0x[0-9a-fA-F]+$|^-?[0-9]+$")
  #: and data selectors, FS for the TEB.  Read-only here; the game never
  #: reloads a segment register.
  SEGMENT_SELECTOR = {"CS": 0x1b, "DS": 0x23, "ES": 0x23, "SS": 0x23, "FS": 0x3b, "GS": 0x00}
@@ -9590,7 +10555,7 @@ index 944f2ca..97abd6f 100644
  ST_RE = re.compile(r"^ST([0-7])$")
  MM_RE = re.compile(r"^MM([0-7])$")
  
-@@ -456,12 +482,12 @@ VECTOR_MNEM = frozenset((
+@@ -456,12 +497,12 @@ VECTOR_MNEM = frozenset((
  def is_vector_insn(mnem, ops):
      """True for an MMX/SSE/SSE2 instruction (see VECTOR_REG_RE).
  
@@ -9605,7 +10570,7 @@ index 944f2ca..97abd6f 100644
          return False
      return mnem in VECTOR_MNEM or any(VECTOR_REG_RE.search(o) for o in ops)
  
-@@ -668,6 +694,8 @@ def parse_listing_text(text):
+@@ -668,6 +709,8 @@ def parse_listing_text(text):
                  raise TranslateError("bad listing line %r" % line)
              addr = int(m.group(1), 16)
              mnem = m.group(2)
@@ -9614,7 +10579,7 @@ index 944f2ca..97abd6f 100644
              rep = None
              if "." in mnem:
                  mnem, rep = mnem.split(".", 1)
-@@ -708,9 +736,14 @@ for _dst, _src in (("E", "Z"), ("NE", "NZ"), ("NAE", "C"), ("NB", "NC"),
+@@ -708,9 +751,14 @@ for _dst, _src in (("E", "Z"), ("NE", "NZ"), ("NAE", "C"), ("NB", "NC"),
  
  JCC = {"J" + k: v for k, v in COND.items()}
  JCC["JECXZ"] = ("c->r[1] == 0", ())
@@ -9629,7 +10594,7 @@ index 944f2ca..97abd6f 100644
  SETCC = {"SET" + k: v for k, v in COND.items()}
  CMOVCC = {"CMOV" + k: v for k, v in COND.items()}
  
-@@ -765,6 +798,9 @@ FLAG_EFFECT = {
+@@ -765,6 +813,9 @@ FLAG_EFFECT = {
      "SAHF": (frozenset(("cf", "pf", "af", "zf", "sf")), NO_FLAGS),
      "POPFD": (ALL_FLAGS, NO_FLAGS),
      "PUSHFD": (NO_FLAGS, ALL_FLAGS),
@@ -9639,7 +10604,7 @@ index 944f2ca..97abd6f 100644
      "POPF": (ALL_FLAGS, NO_FLAGS),
      "PUSHF": (NO_FLAGS, ALL_FLAGS),
      "SCASB": (ARITH_ALL, NO_FLAGS),
-@@ -776,6 +812,17 @@ FLAG_EFFECT = {
+@@ -776,6 +827,17 @@ FLAG_EFFECT = {
      "CLC": (frozenset(("cf",)), NO_FLAGS),
      "STC": (frozenset(("cf",)), NO_FLAGS),
      "NOT": (NO_FLAGS, NO_FLAGS),
@@ -9657,7 +10622,7 @@ index 944f2ca..97abd6f 100644
  }
  
  
-@@ -818,6 +865,9 @@ def flag_effect(insn):
+@@ -818,6 +880,9 @@ def flag_effect(insn):
  
  # ------------------------------------------------------------------- image --
  
@@ -9667,7 +10632,7 @@ index 944f2ca..97abd6f 100644
  class Image(object):
      def __init__(self, path):
          import pefile
-@@ -917,8 +967,61 @@ class Image(object):
+@@ -917,8 +982,61 @@ class Image(object):
          return out
  
      def is_exec(self, va):
@@ -9729,7 +10694,7 @@ index 944f2ca..97abd6f 100644
      def seh_landings(self, stub):
          """Classify a Delphi handler stub by structure, never by its target's name.
  
-@@ -1266,12 +1369,23 @@ class Image(object):
+@@ -1266,12 +1384,23 @@ class Image(object):
          looks at every byte offset.
          """
          starts, interior = set(), set()
@@ -9756,7 +10721,7 @@ index 944f2ca..97abd6f 100644
              blob = self.data[lo - self.base:hi - self.base]
              # len(blob) - 3 so the section's final dword is examined too.
              for off in range(len(blob) - 3):
-@@ -1335,7 +1449,7 @@ class Image(object):
+@@ -1335,7 +1464,7 @@ class Image(object):
      REP_PREFIX = {"rep": "REP", "repe": "REPE", "repz": "REPE",
                    "repne": "REPNE", "repnz": "REPNE"}
      #: Mnemonics capstone spells differently from the listing grammar.
@@ -9765,7 +10730,7 @@ index 944f2ca..97abd6f 100644
                    "POPFL": "POPFD", "PUSHFL": "PUSHFD",
                    "CWTL": "CWDE", "CLTD": "CDQ", "CBTW": "CBW",
                    "IRETD": "IRET"}
-@@ -1344,7 +1458,7 @@ class Image(object):
+@@ -1344,7 +1473,7 @@ class Image(object):
          if mnem.startswith("F") and mnem not in self.X87_INT:
              return {4: "float", 8: "double", 10: "extended double"}.get(nbytes)
          return {1: "byte", 2: "word", 4: "dword", 8: "qword",
@@ -9774,7 +10739,7 @@ index 944f2ca..97abd6f 100644
  
      def _op_text(self, ci, op, mnem):
          import capstone.x86_const as X
-@@ -1381,7 +1495,17 @@ class Image(object):
+@@ -1381,7 +1510,17 @@ class Image(object):
              words = words[1:]
          mnem = words[-1].upper()
          mnem = self.MNEM_ALIAS.get(mnem, mnem)
@@ -9793,7 +10758,7 @@ index 944f2ca..97abd6f 100644
          if rep or mnem in Translator.STRING_MNEM:
              ops = []            # implicit ES:EDI / ESI operands carry nothing
          text = "%08x  %s%s%s" % (ci.address, mnem, "." + rep if rep else "",
-@@ -1400,6 +1524,27 @@ class Image(object):
+@@ -1400,6 +1539,27 @@ class Image(object):
      #: 00430ad2 was reaching back 60 KB to 0041fc70.
      RECOVER_WINDOW = 0x8000
  
@@ -9821,7 +10786,7 @@ index 944f2ca..97abd6f 100644
      def recover(self, start, listed, limit=None, bounds=None, boundaries=(),
                  may_pass=None):
          """Decode the block at `start`, following its branches.
-@@ -1432,22 +1577,33 @@ class Image(object):
+@@ -1432,22 +1592,33 @@ class Image(object):
          boundary_set = set(boundaries)
          self.md.detail = True
          seen = {}
@@ -9860,7 +10825,7 @@ index 944f2ca..97abd6f 100644
                  index = bisect_right(boundaries, va)
                  if index < len(boundaries) and ci.address + ci.size > boundaries[index]:
                      break  # Do not consume another candidate's first opcode byte.
-@@ -1456,25 +1612,35 @@ class Image(object):
+@@ -1456,25 +1627,35 @@ class Image(object):
                          self.md.detail = False
                          return []
                      break
@@ -9904,7 +10869,7 @@ index 944f2ca..97abd6f 100644
                  va = nxt
              else:
                  truncated = True
-@@ -1495,8 +1661,13 @@ class Image(object):
+@@ -1495,8 +1676,13 @@ class Image(object):
          """
          if self.md is None or not (self.base <= va and va + 16 <= self.end):
              return None
@@ -9920,7 +10885,7 @@ index 944f2ca..97abd6f 100644
          if not got:
              return None
          if (got[0].mnemonic in ("wait", "fwait") and mnem != "WAIT"
-@@ -1520,6 +1691,23 @@ class Image(object):
+@@ -1520,6 +1706,23 @@ class Image(object):
  
  # -------------------------------------------------------------- translator --
  
@@ -9944,7 +10909,7 @@ index 944f2ca..97abd6f 100644
  class Function(object):
      def __init__(self, addr, name, size, insns):
          self.addr = addr
-@@ -1544,7 +1732,7 @@ class Function(object):
+@@ -1544,7 +1747,7 @@ class Function(object):
                  self.contiguous[i] = False
  
  
@@ -9953,7 +10918,7 @@ index 944f2ca..97abd6f 100644
  
  
  def seh_chain_operand(op, zero_base=0):
-@@ -1553,14 +1741,15 @@ def seh_chain_operand(op, zero_base=0):
+@@ -1553,14 +1756,15 @@ def seh_chain_operand(op, zero_base=0):
              and op.base in (None, zero_base) and op.index is None and op.disp == 0)
  
  
@@ -9972,7 +10937,7 @@ index 944f2ca..97abd6f 100644
      for j in range(i - 1, max(-1, i - 16), -1):
          if not fn.contiguous[j] or fn.insns[j + 1].addr in targets:
              return False
-@@ -1579,11 +1768,17 @@ def seh_zero_base(fn, i, reg):
+@@ -1579,11 +1783,17 @@ def seh_zero_base(fn, i, reg):
  def seh_restore_sites(fn):
      """Recognize unlink-only helpers as well as restores in establishing bodies."""
      result = set()
@@ -9992,7 +10957,7 @@ index 944f2ca..97abd6f 100644
              continue
          if ins.mnem == "POP":
              result.add(i)
-@@ -1594,9 +1789,23 @@ def seh_restore_sites(fn):
+@@ -1594,9 +1804,23 @@ def seh_restore_sites(fn):
      return result
  
  
@@ -10017,7 +10982,7 @@ index 944f2ca..97abd6f 100644
      helper = getattr(image, "seh_constructor_helper", None)
      if helper is not None:
          stub = helper(fn.addr)
-@@ -1605,7 +1814,7 @@ def seh_frame_sites(fn, image=None):
+@@ -1605,7 +1829,7 @@ def seh_frame_sites(fn, image=None):
              # through ECX. Keep its checkpoint live until its return, then
              # let the caller adopt it; never leave setjmp in a dead helper.
              for i, ins in enumerate(fn.insns):
@@ -10026,7 +10991,7 @@ index 944f2ca..97abd6f 100644
                      dst, src = [parse_operand(op) for op in ins.ops]
                      if (seh_chain_operand(dst, 2) and dst.base == 2
                              and src.kind == "reg" and src.reg == 1):
-@@ -1624,16 +1833,50 @@ def seh_frame_sites(fn, image=None):
+@@ -1624,16 +1848,50 @@ def seh_frame_sites(fn, image=None):
              stub = helper(target)
              if stub is not None:
                  sites[i] = stub
@@ -10079,7 +11044,7 @@ index 944f2ca..97abd6f 100644
              if (not seh_chain_operand(dst, zero_base) or src.kind != "reg" or src.reg != 4
                      or src.size != 32 or not seh_chain_operand(parse_operand(push.ops[0]), zero_base)
                      or not fn.contiguous[i - 1]):
-@@ -1679,11 +1922,27 @@ def noreturn_callees_from(parsed, iat_names, image=None):
+@@ -1679,11 +1937,27 @@ def noreturn_callees_from(parsed, iat_names, image=None):
  
      returns = {fn.addr for fn in parsed
                 if any(i.mnem == "RET" for i in fn.insns) and not ends_process(fn)}
@@ -10107,7 +11072,7 @@ index 944f2ca..97abd6f 100644
          last = fn.insns[-1]
          if last.mnem == "CALL":
              target = Translator.branch_target(last)
-@@ -1693,7 +1952,7 @@ def noreturn_callees_from(parsed, iat_names, image=None):
+@@ -1693,7 +1967,7 @@ def noreturn_callees_from(parsed, iat_names, image=None):
              if image is not None:
                  nxt = last.addr + 5 - image.base
                  padded = 0 <= nxt < len(image.data) and image.data[nxt] == 0xCC
@@ -10116,7 +11081,7 @@ index 944f2ca..97abd6f 100644
                  out.add(target)
      return out
  
-@@ -1734,6 +1993,9 @@ class Translator(object):
+@@ -1734,6 +2008,9 @@ class Translator(object):
          #: A CALL to one ends its block: the emitter leaves a trap in place of
          #: the fall-through instead of a jump onto the padding that follows.
          self.noreturn_callees = set()
@@ -10126,7 +11091,7 @@ index 944f2ca..97abd6f 100644
          self.seh_helpers = set()
          #: Does a pointer to this address name data rather than code? The
          #: driver installs its judgement before the first translation pass
-@@ -1796,7 +2058,21 @@ class Translator(object):
+@@ -1796,7 +2073,21 @@ class Translator(object):
          if ins.mnem != "CALL":
              return False
          t = self.branch_target(ins)
@@ -10149,7 +11114,7 @@ index 944f2ca..97abd6f 100644
  
      @staticmethod
      def closed_noreturn_loop(fn):
-@@ -1918,7 +2194,7 @@ class Translator(object):
+@@ -1918,7 +2209,7 @@ class Translator(object):
              writes = set()
              # Read-only instructions and calls do not explicitly redefine a
              # saved return register. All unmodelled forms invalidate the proof.
@@ -10158,7 +11123,7 @@ index 944f2ca..97abd6f 100644
                          "PAUSE", "CLC", "STC", "CMC", "CLD", "STD", "SAHF", "CLI", "STI"}
              dest_write = {"MOV", "MOVZX", "MOVSX", "LEA", "POP", "ADD", "ADC", "SUB",
                            "SBB", "AND", "OR", "XOR", "INC", "DEC", "NEG", "NOT", "SHL",
-@@ -1944,6 +2220,9 @@ class Translator(object):
+@@ -1944,6 +2235,9 @@ class Translator(object):
                  writes.add(R_EDX)
              elif m in ("CBW", "CWDE", "LAHF", "XLAT"):
                  writes.add(R_EAX)
@@ -10168,7 +11133,7 @@ index 944f2ca..97abd6f 100644
              else:
                  return unknown
              if m == "IMUL" and len(ops) == 1:
-@@ -1956,12 +2235,16 @@ class Translator(object):
+@@ -1956,12 +2250,16 @@ class Translator(object):
                  result.add(ops[0].reg)
              adjustment = None
              if m in ("PUSH", "POP"):
@@ -10186,7 +11151,7 @@ index 944f2ca..97abd6f 100644
              elif (m in ("ADD", "SUB") and ops[0].kind == "reg"
                    and ops[0].reg == R_ESP and ops[0].size == 32 and ops[1].kind == "imm"):
                  immediate = ops[1].imm & 0xffffffff
-@@ -2011,6 +2294,8 @@ class Translator(object):
+@@ -2011,6 +2309,8 @@ class Translator(object):
          if t is not None and t not in fn.pushed_continuations:
              return [fn.index[t]] if t in fn.index else []
          nxt = i + 1 if (i + 1 < len(fn.insns) and fn.contiguous[i]) else None
@@ -10195,7 +11160,7 @@ index 944f2ca..97abd6f 100644
          if m == "INT3":
              # MSVC pads between functions with INT3, and a listing cut at a
              # call that never returns runs that padding into the next
-@@ -2020,7 +2305,21 @@ class Translator(object):
+@@ -2020,7 +2320,21 @@ class Translator(object):
              return []
          if m == "RET":
              return [fn.index[t] for t in sorted(fn.pushed_continuations)]
@@ -10217,7 +11182,7 @@ index 944f2ca..97abd6f 100644
              out = [nxt] if nxt is not None else []
              t = self.branch_target(ins)
              if t is not None and t in fn.index:
-@@ -2072,10 +2371,6 @@ class Translator(object):
+@@ -2072,10 +2386,6 @@ class Translator(object):
          """Indices control flow reaches from `roots` and the pushed
          continuations; every index if the body has a computed jump that is
          not POP reg; JMP reg. A call that never returns ends a path."""
@@ -10228,7 +11193,7 @@ index 944f2ca..97abd6f 100644
          roots = set(roots) | set(fn.pushed_continuations)
          work = [fn.index[a] for a in roots if a in fn.index]
          live = set()
-@@ -2086,18 +2381,123 @@ class Translator(object):
+@@ -2086,18 +2396,123 @@ class Translator(object):
              live.add(i)
              if self.never_returns(fn.insns[i]):
                  continue
@@ -10354,7 +11319,105 @@ index 944f2ca..97abd6f 100644
      @staticmethod
      def branch_target(ins):
          if ins.ops and ins.ops[0].startswith("0x"):
-@@ -2547,9 +2947,11 @@ class Translator(object):
+@@ -2116,6 +2531,8 @@ class Translator(object):
+         flag write that a later instruction in the same run overwrites before
+         anything reads it, which is most of them.
+         """
++        if FLAG_FLOW:
++            return self.liveness_flow(fn)
+         n = len(fn.insns)
+         live_out = [ALL_FLAGS] * n
+         for i in range(n - 2, -1, -1):
+@@ -2131,6 +2548,88 @@ class Translator(object):
+             live_out[i] = (live_out[i + 1] - d) | u
+         return live_out
+ 
++    def liveness_flow(self, fn):
++        """Flag liveness over the body's control-flow graph ([translate]
++        flag_liveness = "flow").
++
++        liveness() keeps all six flags live at every branch, so CMP/JZ stores
++        five flags only ZF is read for - parity, the costliest, among them.
++        This follows what the successors actually read instead. Whatever the
++        body cannot see keeps all six live, exactly as liveness() does: a
++        return, a branch or jump out of the body, a computed jump without a
++        fully decoded table, a listing gap, a trap. A CALL keeps them live too
++        unless [translate] flags_cross_calls is false, which assumes the
++        calling convention: no callee reads its caller's flags and no caller
++        reads its callee's after the RET (proven POP reg; JMP reg returns
++        included, SEH-escaping returns excluded). Branch proofs are not used:
++        both edges of every conditional jump count.
++        """
++        n = len(fn.insns)
++        abi = not FLAGS_CROSS_CALLS
++        escape = [False] * n  # all six flags live on the way out
++        succ = [()] * n
++        continuations = tuple(fn.index[a] for a in sorted(fn.pushed_continuations)
++                              if a in fn.index)
++        for i, ins in enumerate(fn.insns):
++            m = ins.mnem
++            nxt = i + 1 if (i + 1 < n and fn.contiguous[i]) else None
++            t = self.push_ret_target(fn, i)
++            if t is not None and t not in fn.pushed_continuations:
++                if t in fn.index:
++                    succ[i] = (fn.index[t],)
++                else:
++                    escape[i] = True
++            elif m in ("RET", "IRETD", "RETF", "JMPF", "UD2", "INT3"):
++                succ[i] = continuations
++                escape[i] = not (abi and m == "RET" and i not in fn.seh_escapes)
++            elif m in JCC:
++                target = self.branch_target(ins)
++                if nxt is None or target is None or target not in fn.index:
++                    escape[i] = True
++                else:
++                    succ[i] = (nxt, fn.index[target])
++            elif m == "JMP":
++                if ins.ops and ins.ops[0].startswith("0x"):
++                    target = int(ins.ops[0], 16)
++                    if target in fn.index:
++                        succ[i] = (fn.index[target],)
++                    else:
++                        escape[i] = True
++                else:
++                    table = self.jumptables.get((fn.addr, ins.addr))
++                    if table and all(a in fn.index for a in table):
++                        succ[i] = tuple(sorted({fn.index[a] for a in table}))
++                    elif abi and i in fn.return_jumps and i not in fn.seh_escapes:
++                        succ[i] = continuations
++                    else:
++                        escape[i] = True
++            elif nxt is None:
++                escape[i] = True
++            else:
++                succ[i] = (nxt,)
++        live_in = [NO_FLAGS] * n
++        live_out = [NO_FLAGS] * n
++        changed = True
++        while changed:
++            changed = False
++            for i in range(n - 1, -1, -1):
++                if escape[i]:
++                    lo = ALL_FLAGS
++                else:
++                    lo = NO_FLAGS
++                    for s in succ[i]:
++                        lo = lo | live_in[s]
++                ins = fn.insns[i]
++                if ins.mnem == "CALL":
++                    li = NO_FLAGS if abi else ALL_FLAGS
++                else:
++                    d, u = flag_effect(ins)
++                    li = (lo - d) | u
++                if li != live_in[i] or lo != live_out[i]:
++                    live_in[i], live_out[i] = li, lo
++                    changed = True
++        return live_out
++
+     def liveness_cfg(self, fn, call_transparent=False):
+         """CFG-wide liveness, used only by --check-flags to measure how often
+         a flag would cross a call or return boundary."""
+@@ -2547,9 +3046,11 @@ class Translator(object):
  
      @staticmethod
      def writes_reg32(ins, reg):
@@ -10367,7 +11430,7 @@ index 944f2ca..97abd6f 100644
              return reg == 1                # ECX
          if ins.mnem in ("CMP", "TEST", "PUSH", "JMP") or ins.mnem in JCC:
              return False
-@@ -2571,9 +2973,12 @@ class Translator(object):
+@@ -2571,9 +3072,12 @@ class Translator(object):
          is strict and a target that is still not an instruction boundary is an
          error."""
          fn.index = {ins.addr: k for k, ins in enumerate(fn.insns)}
@@ -10381,7 +11444,7 @@ index 944f2ca..97abd6f 100644
          self.strict = strict
          for i, ins in enumerate(fn.insns):
              if ins.mnem == "JMP" and ins.ops and not ins.ops[0].startswith("0x"):
-@@ -2595,6 +3000,17 @@ class Translator(object):
+@@ -2595,6 +3099,17 @@ class Translator(object):
          preceded by a dispatch switch, and every entry is a three-line wrapper,
          so no code is duplicated."""
          entries = sorted(set(entries))
@@ -10399,7 +11462,7 @@ index 944f2ca..97abd6f 100644
          # An alternate entry must be an instruction in THIS body.  A block can
          # be re-recovered between the discovery rounds and the final pass -
          # recursive descent makes them grow - so an entry registered against
-@@ -2612,9 +3028,30 @@ class Translator(object):
+@@ -2612,9 +3127,30 @@ class Translator(object):
              live_out = [ALL_FLAGS] * len(fn.insns)
          else:
              live_out = self.liveness(fn)
@@ -10431,7 +11494,7 @@ index 944f2ca..97abd6f 100644
  
          labels = set(fn.pushed_continuations)
          # RTL fill/move routines compute addresses within unrolled code rather
-@@ -2637,12 +3074,13 @@ class Translator(object):
+@@ -2637,12 +3173,13 @@ class Translator(object):
                      labels.add(t)
              # A listing gap or an end-of-block fall-through emits a transfer
              # too, and its target needs a label just as much as a branch's.
@@ -10447,7 +11510,7 @@ index 944f2ca..97abd6f 100644
              t = fn.fallthrough[last] or fn.end
              if t in fn.index:
                  labels.add(t)
-@@ -2683,6 +3121,17 @@ class Translator(object):
+@@ -2683,6 +3220,17 @@ class Translator(object):
          prologue = len(out)          # everything emitted so far is dispatch
          for i, ins in enumerate(fn.insns):
              if i in dead:
@@ -10465,7 +11528,7 @@ index 944f2ca..97abd6f 100644
                  continue
              if ins.addr in labels:
                  out.append("L_%08x: ;" % ins.addr)
-@@ -2693,7 +3142,8 @@ class Translator(object):
+@@ -2693,7 +3241,8 @@ class Translator(object):
              # functions: the byte after it belongs to whatever comes next, so
              # this body ends here rather than falling through into it.
              if (not fn.contiguous[i] and ins.mnem not in TERMINATORS
@@ -10475,7 +11538,7 @@ index 944f2ca..97abd6f 100644
                  t = fn.fallthrough[i]
                  self.stats["_listing_gap"] += 1
                  self.notes.append(
-@@ -2705,7 +3155,7 @@ class Translator(object):
+@@ -2705,7 +3254,7 @@ class Translator(object):
          last_i = max(i for i in range(len(fn.insns)) if i not in dead)
          last = fn.insns[last_i]
          if (last.mnem not in TERMINATORS and last.mnem != "INT3"
@@ -10484,7 +11547,7 @@ index 944f2ca..97abd6f 100644
              t = fn.fallthrough[last_i] or fn.end
              self.stats["_fallthrough_exit"] += 1
              out.append("    " + " ".join(self.goto_target(fn, t, last)))
-@@ -2829,13 +3279,50 @@ class Translator(object):
+@@ -2829,13 +3378,50 @@ class Translator(object):
              # before parsing refuses the whole function over a path CPUID
              # keeps the guest from taking.
              return ["recomp_unmodelled(c, %s); return;" % hexlit(ins.addr)]
@@ -10536,7 +11599,7 @@ index 944f2ca..97abd6f 100644
          # ---------------------------------------------------------- data --
          if m == "MOV":
              size = operand_size(ops)
-@@ -2846,10 +3333,20 @@ class Translator(object):
+@@ -2846,10 +3432,20 @@ class Translator(object):
                  # These come from data Ghidra decoded as code.
                  return ["recomp_int(c, 6u);"] if dst.imm == SEGMENT_SELECTOR["CS"] else [";"]
              L.append(write_op(dst, size, read_op(src, size)))
@@ -10560,7 +11623,7 @@ index 944f2ca..97abd6f 100644
                      L.append("{ jmp_buf *b_ = recomp_seh_frame_enter(c); "
                               "if (setjmp(*b_)) { recomp_seh_land(c); return; } }")
                  else:
-@@ -2924,7 +3421,7 @@ class Translator(object):
+@@ -2924,7 +3520,7 @@ class Translator(object):
              return L
  
          if m == "PUSH":
@@ -10569,7 +11632,7 @@ index 944f2ca..97abd6f 100644
              if size == 16:
                  L.append("uint32_t v_ = %s;" % read_op(ops[0], 16))
                  L.append("c->r[4] -= 2; wr16(c->r[4], (uint16_t)v_);")
-@@ -2942,6 +3439,20 @@ class Translator(object):
+@@ -2942,6 +3538,20 @@ class Translator(object):
              return L
  
          if m == "POP":
@@ -10590,7 +11653,7 @@ index 944f2ca..97abd6f 100644
              size = operand_size(ops, hint=32)
              if size == 16:
                  L.append("uint32_t v_ = rd16(c->r[4]); c->r[4] += 2;")
-@@ -2955,12 +3466,36 @@ class Translator(object):
+@@ -2955,12 +3565,36 @@ class Translator(object):
                  L.append("c->eip = %s; recomp_seh_frame_leave(c);" % hexlit(ins.addr))
              return L
  
@@ -10628,7 +11691,7 @@ index 944f2ca..97abd6f 100644
          if m == "POPFD":
              return ["x86_set_eflags(c, rd32(c->r[4])); c->r[4] += 4;"]
          if m == "PUSHF":
-@@ -2991,6 +3526,50 @@ class Translator(object):
+@@ -2991,6 +3625,50 @@ class Translator(object):
                      "((uint32_t)(int32_t)(int8_t)c->r[0] & 0xffffu);"]
          if m == "CWDE":
              return ["c->r[0] = (uint32_t)(int32_t)(int16_t)c->r[0];"]
@@ -10679,7 +11742,7 @@ index 944f2ca..97abd6f 100644
          if m in ("LDMXCSR", "STMXCSR"):
              # The SSE control word. This kit models one rounding mode and
              # masks every exception, which is what a guest sets it to; a store
-@@ -3163,6 +3742,19 @@ class Translator(object):
+@@ -3163,6 +3841,19 @@ class Translator(object):
          # ---------------------------------------------------- control flow --
          if m in JCC:
              cond = JCC[m][0]
@@ -10699,7 +11762,7 @@ index 944f2ca..97abd6f 100644
              t = self.branch_target(ins)
              if t is None:
                  raise TranslateError("indirect conditional jump")
-@@ -3178,7 +3770,7 @@ class Translator(object):
+@@ -3178,7 +3869,7 @@ class Translator(object):
              if ins.ops and ins.ops[0].startswith("0x"):
                  t = int(ins.ops[0], 16)
                  L.append("c->r[4] -= 4; wr32(c->r[4], %s);" % hexlit(nxt))
@@ -10708,7 +11771,7 @@ index 944f2ca..97abd6f 100644
                      # The host jmp_buf has to belong to a frame that is still
                      # live when _longjmp fires, so setjmp is taken here rather
                      # than inside the runtime (runtime/intrinsics.h).
-@@ -3194,6 +3786,22 @@ class Translator(object):
+@@ -3194,6 +3885,22 @@ class Translator(object):
                  else:
                      self.reject_offimage_call(t)
                      self.stats["_call_unknown"] += 1
@@ -10731,7 +11794,7 @@ index 944f2ca..97abd6f 100644
                      L.append("recomp_call(c, %s);" % hexlit(t))
                  if RESUMABLE_STACKS:
                      L.append("if (c->eip != %s) return;" % hexlit(nxt))
-@@ -3201,19 +3809,24 @@ class Translator(object):
+@@ -3201,19 +3908,24 @@ class Translator(object):
                      L.append("c->eip = %s;" % hexlit(ins.addr))
                      L.append("{ jmp_buf *b_ = recomp_seh_frame_adopt(c); "
                               "if (b_) { if (setjmp(*b_)) { recomp_seh_land(c); return; } } }")
@@ -10768,7 +11831,7 @@ index 944f2ca..97abd6f 100644
              return L
  
          if m == "RET":
-@@ -3231,6 +3844,24 @@ class Translator(object):
+@@ -3231,6 +3943,24 @@ class Translator(object):
                  return L
              return ["c->eip = rd32(c->r[4]); c->r[4] += %du; " % (4 + n) +
                      orphan + "recomp_return(c); return;"]
@@ -10793,7 +11856,7 @@ index 944f2ca..97abd6f 100644
  
          # ------------------------------------------------------------ SSE --
          # Data movement only, in dword lanes. A Delphi runtime's FillChar and
-@@ -3250,7 +3881,8 @@ class Translator(object):
+@@ -3250,7 +3980,8 @@ class Translator(object):
                          "ANDPS": "&", "POR": "|", "ORPD": "|", "ORPS": "|"}
          SSE_LANE_FORMS = ("PANDN", "ANDNPD", "ANDNPS", "PCMPEQD", "PUNPCKLDQ", "PUNPCKHDQ",
                            "PUNPCKLQDQ", "UNPCKLPD", "UNPCKHPD", "MOVDDUP", "MOVLPD", "MOVLPS",
@@ -10803,7 +11866,7 @@ index 944f2ca..97abd6f 100644
          if m in SSE_LANE_OPS or m in SSE_LANE_FORMS:
              dst, src = ops[0], ops[1]
  
-@@ -3280,7 +3912,7 @@ class Translator(object):
+@@ -3280,7 +4011,7 @@ class Translator(object):
              elif m == "PCMPEQD":
                  L.extend(put(dst, i, "%s == %s ? 0xffffffffu : 0u" % (d(i), sv(i)))
                           for i in range(4))
@@ -10812,7 +11875,7 @@ index 944f2ca..97abd6f 100644
                  L.extend(put(dst, i, sv(i)) for i in range(4))
              elif m == "PUNPCKLDQ":            # d0 s0 d1 s1
                  L.extend([put(dst, 0, d(0)), put(dst, 1, sv(0)),
-@@ -3316,6 +3948,43 @@ class Translator(object):
+@@ -3316,6 +4047,43 @@ class Translator(object):
                            put(dst, 2, sv(hi)), put(dst, 3, sv(hi + 1))])
              return L
  
@@ -10856,7 +11919,7 @@ index 944f2ca..97abd6f 100644
          # Scalar double and single forms. The host's double and float are the
          # same IEEE formats in the same rounding mode, and scalar SSE leaves
          # the lanes above its result alone, which is why nothing here clears
-@@ -3439,9 +4108,11 @@ class Translator(object):
+@@ -3439,9 +4207,11 @@ class Translator(object):
          if m == "HLT":
              return ["recomp_hlt(c);"]
          if m == "INT":
@@ -10869,7 +11932,7 @@ index 944f2ca..97abd6f 100644
          if m == "IN":
              size = operand_size(ops[:1], hint=32)
              port = read_op(ops[1], 32) if len(ops) > 1 else "0u"
-@@ -3454,9 +4125,10 @@ class Translator(object):
+@@ -3454,9 +4224,10 @@ class Translator(object):
              return L
          if m in ("NOP", "WAIT", "PAUSE"):
              return [";"]
@@ -10882,7 +11945,7 @@ index 944f2ca..97abd6f 100644
              return ["c->fpu_tag = 0xffffu;"]
          if m == "STMXCSR":
              # No translated SSE arithmetic changes MXCSR, so expose its reset value.
-@@ -3497,7 +4169,7 @@ class Translator(object):
+@@ -3497,7 +4268,7 @@ class Translator(object):
              return  # a translator built without bytes, as the unit tests are
          if self.image.base <= t < self.image.end:
              return
@@ -10891,7 +11954,7 @@ index 944f2ca..97abd6f 100644
              return
          raise TranslateError("call to %08x, which is outside the image" % t)
  
-@@ -3506,7 +4178,25 @@ class Translator(object):
+@@ -3506,7 +4277,25 @@ class Translator(object):
              return ["goto L_%08x;" % t]
          if t in self.func_addrs:
              self.stats["_tailcall"] += 1
@@ -10917,7 +11980,7 @@ index 944f2ca..97abd6f 100644
          self.stats["_tailcall_unknown"] += 1
          self.notes.append("%08x: jump to %08x outside any known function" % (ins.addr, t))
          return ["c->eip = %s; recomp_jump(c, %s); return;" % (hexlit(ins.addr), hexlit(t))]
-@@ -3901,6 +4591,15 @@ class Translator(object):
+@@ -3901,6 +4690,15 @@ class Translator(object):
              return ["x87_set_cw(c, rd16(%s));" % addr_expr(ops[0])]
          if m == "FFREE":
              return [";"]
@@ -10933,7 +11996,7 @@ index 944f2ca..97abd6f 100644
          if m in ("FSAVE", "FNSAVE"):
              return ["x87_fnsave(c, %s);" % addr_expr(ops[0])]
          if m == "FRSTOR":
-@@ -3962,19 +4661,22 @@ def retarget_withdrawn(body, pruned):
+@@ -3962,19 +4760,22 @@ def retarget_withdrawn(body, pruned):
      if not pruned:
          return body
      out = []
@@ -10968,7 +12031,7 @@ index 944f2ca..97abd6f 100644
      return out
  
  
-@@ -3995,6 +4697,32 @@ def load_functions(only=None):
+@@ -3995,6 +4796,32 @@ def load_functions(only=None):
      return funcs
  
  
@@ -11001,7 +12064,7 @@ index 944f2ca..97abd6f 100644
  def main():
      ap = argparse.ArgumentParser()
      ap.add_argument("--out", required=True, help="where the generated sources go (build/recomp/gen)")
-@@ -4045,6 +4773,49 @@ def main():
+@@ -4045,6 +4872,49 @@ def main():
          AUX_MODULE = {"name": args.as_module, "base": cfg["game"]["image_base"],
                        "size": 0}  # the image's extent, filled in once it is read
      image = Image(BINARY)
@@ -11051,7 +12114,7 @@ index 944f2ca..97abd6f 100644
      discovered = []
      if args.discovered:
          global EXTRA_ENTRY_POINTS
-@@ -4072,11 +4843,17 @@ def main():
+@@ -4072,11 +4942,17 @@ def main():
  
      t0 = time.time()
      entries = load_functions(set(args.only) if args.only else None)
@@ -11069,7 +12132,7 @@ index 944f2ca..97abd6f 100644
              listed_starts.append(a)
              p = os.path.join(LISTINGS, "%08x.asm" % a)
              if os.path.exists(p) and os.path.getsize(p) > 0:
-@@ -4102,6 +4879,7 @@ def main():
+@@ -4102,6 +4978,7 @@ def main():
      for addr, name, nbytes, path in entries:
          try:
              insns = parse_listing(path)
@@ -11077,7 +12140,7 @@ index 944f2ca..97abd6f 100644
          except TranslateError as e:
              failures.append((addr, "parse: %s" % e))
              continue
-@@ -4195,6 +4973,13 @@ def main():
+@@ -4195,6 +5072,13 @@ def main():
  
      os.makedirs(args.out, exist_ok=True)
      chunks = []
@@ -11091,7 +12154,7 @@ index 944f2ca..97abd6f 100644
  
      def accepts(fn, reached=False):
          """Can the emitter translate every instruction of this block?
-@@ -4472,7 +5257,11 @@ def main():
+@@ -4472,7 +5356,11 @@ def main():
                                            or prior.addr in protected_entries)
          note_structural(provenance, owner if promote_owner else {}, t, why)
          if t in all_addrs and not separate:
@@ -11104,7 +12167,7 @@ index 944f2ca..97abd6f 100644
          if home is not None and t in home.addrs:
              return False
          if t in owner and not separate:
-@@ -4488,7 +5277,7 @@ def main():
+@@ -4488,7 +5376,7 @@ def main():
              return True
          bounds = None
          boundaries = set()
@@ -11113,7 +12176,7 @@ index 944f2ca..97abd6f 100644
          if protected and why == "config":
              # A configured entry states that this address IS a function, but
              # recovery still needs a ceiling. Unbounded, it runs past the body
-@@ -4543,7 +5332,7 @@ def main():
+@@ -4543,7 +5431,7 @@ def main():
                      owned.update(ins.addr for ins in block)
                      fragments.update((ins.addr, ins) for ins in block)
              if owned:
@@ -11122,7 +12185,7 @@ index 944f2ca..97abd6f 100644
              lo_index, hi_index = bisect_right(candidate_starts, t), bisect_right(candidate_starts, bounds[1])
              boundaries = {a for a in candidate_starts[lo_index:hi_index]
                            if a not in owned and a not in finally_owners}
-@@ -4849,10 +5638,35 @@ def main():
+@@ -4849,10 +5737,35 @@ def main():
                    "(already owned, or its recovery did not validate)" % addr,
                    file=sys.stderr)
  
@@ -11158,7 +12221,7 @@ index 944f2ca..97abd6f 100644
          tr.func_addrs = all_addrs
          tr.all_insn_addrs = set(owner)
          tr.jumptables.clear()
-@@ -4894,6 +5708,7 @@ def main():
+@@ -4894,6 +5807,7 @@ def main():
          for fn in list(parsed):
              if fn in retired_finally_bodies:
                  continue
@@ -11166,7 +12229,7 @@ index 944f2ca..97abd6f 100644
              for i, ins in enumerate(fn.insns):
                  # PUSH imm32 / RET names a continuation just as a direct JMP
                  # does; do not depend on heuristic pointer discovery for it.
-@@ -4903,14 +5718,20 @@ def main():
+@@ -4903,14 +5817,20 @@ def main():
                  # by the data-pointer scan calls functions Ghidra never listed
                  # either: 0049e800 calls 004c3110 and 004c31e0.
                  if ins.mnem in ("JMP", "CALL") or ins.mnem in JCC:
@@ -11190,7 +12253,7 @@ index 944f2ca..97abd6f 100644
              if fn.insns[-1].mnem not in TERMINATORS and not tr.never_returns(fn.insns[-1]):
                  changed |= resolve(fn.fallthrough[-1] or fn.end, listed, fn)
          for t in sorted(tr.unlisted_targets):
-@@ -5276,14 +6097,82 @@ def main():
+@@ -5276,14 +6196,82 @@ def main():
      # after mismatched returns have unwound the native call stack.
      if RESUMABLE_STACKS:
          starts = {f.addr for f in parsed}
@@ -11278,7 +12341,7 @@ index 944f2ca..97abd6f 100644
      for t, fn in extra.items():
          entries_by_fn[fn.addr].add(t)
  
-@@ -5306,13 +6195,16 @@ def main():
+@@ -5306,13 +6294,16 @@ def main():
      # came from Ghidra's listing are never dropped - a dangling target there is
      # a translator gap, and the invariant below turns it into a build failure.
      fn_ref = re.compile(r"FN\(([0-9a-f]{8})\)")
@@ -11298,7 +12361,7 @@ index 944f2ca..97abd6f 100644
          out = []
          for line in body:
              for kind in ("recomp_call", "recomp_jump"):
-@@ -5331,6 +6223,10 @@ def main():
+@@ -5331,6 +6322,10 @@ def main():
                  target = int(hit, 16)
                  if target not in known:
                      out.append((target, line.strip()))
@@ -11309,7 +12372,7 @@ index 944f2ca..97abd6f 100644
          return out
  
      # Entries the emitter had to drop are not entry points either.
-@@ -5343,6 +6239,10 @@ def main():
+@@ -5343,6 +6338,10 @@ def main():
      withdrawn = []
      recovered_addrs = prunable_blocks({f.addr for f in recovered}, provenance)
      pruned = []
@@ -11320,7 +12383,7 @@ index 944f2ca..97abd6f 100644
      if forget:
          for a in sorted(forget):
              if a in bodies:
-@@ -5542,6 +6442,20 @@ def main():
+@@ -5542,6 +6541,20 @@ def main():
          tr.stats["_withdrawn_retargeted"] = len(gone)
  
      ok = [fn for fn in parsed if fn.addr in bodies]
@@ -11341,7 +12404,7 @@ index 944f2ca..97abd6f 100644
      if args.as_module and (args.only or discovered):
          # Discovery ran over the whole image, as it must to recover a function
          # whole, but a module carries only the functions it was asked for:
-@@ -5589,6 +6503,25 @@ def main():
+@@ -5589,6 +6602,25 @@ def main():
                % (at, fn_addr, len(missing), total,
                   " ".join("%08x" % m for m in missing[:6])), file=sys.stderr)
      if (table_gaps or undecoded) and not args.allow_table_gaps:
@@ -11367,7 +12430,7 @@ index 944f2ca..97abd6f 100644
          raise TranslateError(
              "%d jump tables have entries that dispatch nowhere (%d slots in "
              "total) and %d table sites decoded nothing; pass "
-@@ -5663,6 +6596,48 @@ def main():
+@@ -5663,6 +6695,48 @@ def main():
                   % (target, line[:110])))
          dangling = []
      if dangling:
@@ -11416,7 +12479,7 @@ index 944f2ca..97abd6f 100644
          # A target that Ghidra listed but that failed to translate is the
          # usual cause, so name the failures first: they are what to fix.
          for a, why in failures[:40]:
-@@ -5699,9 +6674,10 @@ def main():
+@@ -5699,9 +6773,10 @@ def main():
          fh.write("extern const uint32_t %sfunc_addrs[];\nextern uint8_t %shooked[];\n"
                   "extern RecompHookFn %shook_ptrs[];\n" % (P, P, P))
          fh.write("#ifdef RECOMP_NO_HOOKS\n"
@@ -11428,7 +12491,7 @@ index 944f2ca..97abd6f 100644
                   "    uint32_t i_ = FIDX(a);\\\n"
                   "    uint32_t ebp_ = recomp_frame_watch ? c->r[5] : 0u;\\\n"
                   "    if (recomp_profile_enabled) { recomp_call(c, %sfunc_addrs[i_]); break; }\\\n"
-@@ -5782,7 +6758,8 @@ def main():
+@@ -5782,7 +6857,8 @@ def main():
      # neither another pop nor dispatching the continuation is correct here.
      call_returns = sorted({
          fn.fallthrough[i] or (fn.insns[i + 1].addr if i + 1 < len(fn.insns) else fn.end)
@@ -11439,7 +12502,7 @@ index 944f2ca..97abd6f 100644
  
      # table.c ---------------------------------------------------------------
 diff --git a/tools/web_launcher.py b/tools/web_launcher.py
-index d6375b4..3fd52c1 100755
+index d6375b4..3fd52c1 100644
 --- a/tools/web_launcher.py
 +++ b/tools/web_launcher.py
 @@ -6,7 +6,9 @@
@@ -12001,7 +13064,7 @@ index f64d0a9..984187d 100644
      const root = await dirFor(game.id + "/game");
      const outcome = await importGame(game, source, opfsStore(root), {
 diff --git a/web/player/index.html b/web/player/index.html
-index 66254e1..999420e 100644
+index 66254e1..d0da5f0 100644
 --- a/web/player/index.html
 +++ b/web/player/index.html
 @@ -12,19 +12,42 @@
@@ -12115,7 +13178,7 @@ index 66254e1..999420e 100644
  
    const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
    if (!adapter) throw new Error("WebGPU gave no adapter.");
-@@ -75,40 +143,139 @@ async function start() {
+@@ -75,40 +143,144 @@ async function start() {
                     "maxInterStageShaderVariables"])
      if (k in adapter.limits) requiredLimits[k] = adapter.limits[k];
    const device = await adapter.requestDevice({ requiredFeatures, requiredLimits });
@@ -12145,6 +13208,11 @@ index 66254e1..999420e 100644
 +        m.ENV.RECOMP_STREAMING_MOUNT = `/opfs/${id}/game/.streaming-mount`;
 +        m.ENV.RECOMP_STREAMING_BASE = `${location.origin}/gta-stream/${encodeURIComponent(id)}/${game.hosted.build}`;
 +      }
++      // A finger as the primary pointer: the runtime shows its on-screen
++      // controls (platform_ui_touch_device). A desktop with a touchscreen
++      // keeps its mouse as the primary pointer and gets none.
++      if (navigator.maxTouchPoints > 0 && matchMedia("(pointer: coarse)").matches)
++        m.ENV.RECOMP_TOUCH_DEVICE = "1";
        const extra = new URLSearchParams(location.search);
        for (const [k, v] of extra) if (k.startsWith("RECOMP_")) m.ENV[k] = v;
      }],
@@ -13643,10 +14711,10 @@ index 0000000..7565b7b
 +}
 diff --git a/host/sdl/library_demand_files.js b/host/sdl/library_demand_files.js
 new file mode 100644
-index 0000000..92d2f7e
+index 0000000..b6e416c
 --- /dev/null
 +++ b/host/sdl/library_demand_files.js
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,51 @@
 +// WasmFS fetch files backed by the project's verified, bounded archive cache.
 +// Runs on FetchBackend's proxy worker; never blocks the browser UI thread.
 +addToLibrary({
@@ -13667,7 +14735,12 @@ index 0000000..92d2f7e
 +        if (!installed || installed.inventory.build !== parts[2]) throw new Error('Streaming mount identity mismatch');
 +        var cache;
 +        try { cache = await api.browserBlockCache(); } catch (_) { cache = null; }
-+        return api.createDemandReader(game, installed.inventory, { cache: cache });
++        var demand = api.createDemandReader(game, installed.inventory, { cache: cache });
++        // The blocks a new game reads first, fetched while the game reads
++        // nothing; the reader yields to every guest read.
++        if (demand.prefetch && Array.isArray(installed.inventory.prefetch))
++          setTimeout(function() { demand.prefetch().catch(function() {}); }, 3000);
++        return demand;
 +      })();
 +      return { reader: await reader, path: parts.slice(3).join('/') };
 +    }
@@ -14798,6 +15871,102 @@ index 0000000..5b75b56
 +    mem_shutdown();
 +    return failures ? 1 : 0;
 +}
+diff --git a/tools/recomp/tests/test_translate_flags.py b/tools/recomp/tests/test_translate_flags.py
+new file mode 100644
+index 0000000..fdb99ba
+--- /dev/null
++++ b/tools/recomp/tests/test_translate_flags.py
+@@ -0,0 +1,90 @@
++"""Which flags an instruction stores: straight-line liveness and [translate]
++flag_liveness = "flow".
++
++    .venv/bin/python -m pytest -q tools/recomp/tests/test_translate_flags.py
++"""
++import os
++import sys
++
++HERE = os.path.dirname(os.path.abspath(__file__))
++ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
++sys.path.insert(0, os.path.join(ROOT, "tools/recomp"))
++sys.path.insert(0, HERE)
++import translate as T  # noqa: E402
++from test_translate_insns import NoImage, Opts  # noqa: E402
++
++FN, OTHER = 0x00401100, 0x00401200
++
++
++def translate(listing, flow, cross_calls=True):
++    saved = T.FLAG_FLOW, T.FLAGS_CROSS_CALLS
++    T.FLAG_FLOW, T.FLAGS_CROSS_CALLS = flow, cross_calls
++    try:
++        tr = T.Translator(NoImage(), {FN, OTHER}, Opts())
++        fn = T.Function(FN, "f", 0x40, T.parse_listing_text(listing))
++        fn.measure(NoImage())
++        tr.prepare(fn)
++        return "\n".join(tr.translate(fn, ()))
++    finally:
++        T.FLAG_FLOW, T.FLAGS_CROSS_CALLS = saved
++
++
++def stored_by_first(text, next_addr):
++    """The flags the instruction at FN stores: the code before the next one."""
++    head = text.split("/* %08x" % next_addr)[0]
++    return {f for f in ("cf", "zf", "sf", "of", "pf", "af") if "c->eflags_%s =" % f in head}
++
++
++ALL = {"cf", "zf", "sf", "of", "pf", "af"}
++
++# Both successors of the JZ overwrite every flag before anything reads one.
++BRANCH = ("00401100  CMP EAX,0x1\n"
++          "00401103  JZ 0x0040110a\n"
++          "00401105  ADD EAX,0x2\n"
++          "00401108  JMP 0x0040110c\n"
++          "0040110a  XOR EAX,EAX\n"
++          "0040110c  RET\n")
++
++
++def test_straight_liveness_keeps_every_flag_at_a_branch():
++    assert stored_by_first(translate(BRANCH, flow=False), 0x00401103) == ALL
++
++
++def test_flow_liveness_stores_only_what_the_branch_reads():
++    assert stored_by_first(translate(BRANCH, flow=True), 0x00401103) == {"zf"}
++
++
++def test_a_flag_read_after_the_paths_join_stays_live():
++    listing = ("00401100  CMP EAX,0x1\n"
++               "00401103  JZ 0x00401108\n"
++               "00401105  MOV ECX,EDX\n"
++               "00401107  NOP\n"
++               "00401108  JC 0x0040110e\n"
++               "0040110a  XOR EAX,EAX\n"
++               "0040110c  JMP 0x00401110\n"
++               "0040110e  XOR ECX,ECX\n"
++               "00401110  RET\n")
++    assert stored_by_first(translate(listing, flow=True), 0x00401103) == {"cf", "zf"}
++
++
++def test_a_branch_out_of_the_body_keeps_every_flag():
++    listing = ("00401100  CMP EAX,0x1\n"
++               "00401103  JZ 0x00401200\n"
++               "00401109  XOR EAX,EAX\n"
++               "0040110b  RET\n")
++    assert stored_by_first(translate(listing, flow=True), 0x00401103) == ALL
++
++
++def test_a_call_keeps_every_flag_unless_the_convention_is_assumed():
++    listing = ("00401100  CMP EAX,0x1\n"
++               "00401103  CALL 0x00401200\n"
++               "00401108  XOR EAX,EAX\n"
++               "0040110a  RET\n")
++    assert stored_by_first(translate(listing, flow=True), 0x00401103) == ALL
++    assert stored_by_first(translate(listing, flow=True, cross_calls=False), 0x00401103) == set()
++
++
++def test_a_return_keeps_every_flag():
++    listing = ("00401100  CMP EAX,0x1\n"
++               "00401103  RET\n")
++    assert stored_by_first(translate(listing, flow=True), 0x00401103) == ALL
 diff --git a/tools/recomp/tests/test_web_launcher_copy.py b/tools/recomp/tests/test_web_launcher_copy.py
 new file mode 100644
 index 0000000..b4a7de0
