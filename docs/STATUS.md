@@ -69,8 +69,20 @@ Candidato local: Wasm `3441cd8917abd8efee0fe780a9ce32908fbf471579b14105755e3b5d5
 - **Pendiente.**
   - Medir el candidato con la PC libre.
   - Probar en teléfonos reales: WebGPU, memoria inicial de 1 GiB y rendimiento.
-  - Publicar: `wrangler` está iniciado en otra cuenta de Cloudflare
-    (`b43bee1e…`), donde el Worker `gta-sa-oc` no existe.
+  - Publicar. El paquete está listo en `build/cloudflare-r10` (ignorado). Su
+    runtime es `debc57fdcb8c40e7c3d0d7ddd323c092bb7ea258137a3db75247c949a1f7b2f7`:
+    es el Wasm `3441cd89…` sin rutas locales, más su gzip de 23 MB. Lleva el
+    launcher nuevo y conserva `GAME_BUILD = a033b7fd3a69b951`, el inventario
+    publicado. Ese inventario es el local más seis textos de otros idiomas,
+    entre ellos `spanish.gxt`; los archivos en común coinciden por SHA256.
+    Faltan las credenciales de la cuenta que sirve `gta.galavic.world`, a la
+    que se pasó la zona el 2026-10-28 (nameservers leonidas/peaches).
+    Comprobado el 2026-11-25:
+    - la cuenta anterior (gracie/yahir) conserva un `gta-sa-oc` viejo en
+      workers.dev, con runtime `5889d8dd…` y sin presencia, y no tiene la zona;
+    - la cuenta iniciada en `wrangler` en esta máquina tampoco la tiene.
+
+    No se publicó nada en ninguna de las dos.
 
 ## Rendimiento: el doble de FPS en ciudad y lecturas que no congelan el juego (2026-11-25)
 
