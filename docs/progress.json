@@ -4,7 +4,20 @@
     "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
     "candidate_wasm_sha256": "3441cd8917abd8efee0fe780a9ce32908fbf471579b14105755e3b5d57a59a99",
     "candidate_wasm_bytes": 128997182,
-    "published": false,
+    "published": {
+      "url": "https://gta-sa-oc.enrimilioano09.workers.dev/",
+      "date": "2026-11-26",
+      "worker_version": "e80df0a8-5f94-4c3d-9471-6596349fd56f",
+      "previous_version": "4e246825-35d4-4286-af76-051caf44b917",
+      "runtime_build": "debc57fdcb8c40e7c3d0d7ddd323c092bb7ea258137a3db75247c949a1f7b2f7",
+      "game_build": "a033b7fd3a69b951",
+      "transport_verified": true,
+      "browser": {
+        "fresh_profile": "main menu at 60 fps",
+        "later_session": "first mission in the city, 39-47 fps"
+      },
+      "custom_domain": null
+    },
     "frame_limiter_default_off": {
       "patch": "0x00573bb8 MOV byte ptr [ESI + 0x4c],AL",
       "fresh_profile_city_fps_median": 54.0
@@ -35,10 +48,20 @@
       "backgrounds reduced to background.png and background-2.png"
     ],
     "blockers": [
-      "measure the candidate on an idle machine",
+      "custom domain for the new deployment",
       "real phone tests",
-      "wrangler is logged into another Cloudflare account; the gta-sa-oc Worker is not on it"
-    ]
+      "measure on an idle machine"
+    ],
+    "loading": {
+      "network_mb_per_s": 2.1,
+      "new_game_to_city_blocks": 334,
+      "new_game_to_city_gib": 1.3,
+      "block_cache_cap_gib": {
+        "before": 1,
+        "after": 6
+      },
+      "second_session_repeated_downloads": 0
+    }
   },
   "performance_round_20261125": {
     "checked_date": "2026-11-25",

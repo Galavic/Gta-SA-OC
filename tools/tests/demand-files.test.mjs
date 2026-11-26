@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { createDemandReader } from "../web/demand-files.mjs";
+import { browserBlockCache, createDemandReader } from "../web/demand-files.mjs";
 
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 function fixture() {
@@ -152,4 +152,46 @@ test("prefetch waits while the game has just read", async () => {
     idle: ms => { idles++; return new Promise(resolve => setTimeout(resolve, ms)); } });
   assert.equal(fetched, 1);
   assert.ok(idles >= 1);
+});
+
+// Cache Storage stand-in: insertion-ordered, with an optional entry quota.
+function fakeCacheStorage(quotaEntries = Infinity) {
+  const store = new Map();
+  const cache = {
+    async match(url) { return store.has(url) ? new Response(store.get(url)) : undefined; },
+    async put(url, response) {
+      if (!store.has(url) && store.size >= quotaEntries)
+        throw new DOMException("Quota exceeded", "QuotaExceededError");
+      store.set(url, new Uint8Array(await response.arrayBuffer()));
+    },
+    async keys() { return [...store.keys()].map(url => ({ url })); },
+    async delete(request) { return store.delete(request.url); },
+  };
+  return { store, open: async () => cache };
+}
+const block = n => new Uint8Array([n]);
+const names = storage => [...storage.store.keys()].map(url => url.split("/").pop());
+
+test("block cache keeps entries up to its cap and drops the oldest past it", async () => {
+  const storage = fakeCacheStorage();
+  const cache = await browserBlockCache({ maxBytes: 3 * 4 * 1024 * 1024, cacheStorage: storage, origin: "https://x.test" });
+  for (const key of ["a", "b", "c", "d"]) await cache.set(key, block(1));
+  assert.deepEqual(names(storage), ["b", "c", "d"]);
+  assert.deepEqual([...await cache.get("d")], [1]);
+  assert.equal(await cache.has("a"), false);
+});
+
+test("block cache frees the oldest quarter when the browser refuses a write", async () => {
+  const storage = fakeCacheStorage(8);
+  const cache = await browserBlockCache({ cacheStorage: storage, origin: "https://x.test" });
+  for (let i = 0; i < 9; i++) await cache.set("k" + i, block(i));
+  assert.deepEqual(names(storage), ["k2", "k3", "k4", "k5", "k6", "k7", "k8"]);
+  assert.deepEqual([...await cache.get("k8")], [8]);
+});
+
+test("the default block cache holds more than the whole hosted game", async () => {
+  const storage = fakeCacheStorage();
+  const cache = await browserBlockCache({ cacheStorage: storage, origin: "https://x.test" });
+  for (let i = 0; i < 1300; i++) await cache.set("b" + i, block(0));
+  assert.equal(storage.store.size, 1300);
 });

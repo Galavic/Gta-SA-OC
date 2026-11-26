@@ -1,5 +1,40 @@
 # Estado actual
 
+## Publicado en workers.dev de la cuenta anterior (2026-11-26)
+
+https://gta-sa-oc.enrimilioano09.workers.dev/ sirve la rama `perf-touch-launcher`.
+Es el Worker `gta-sa-oc` de la cuenta anterior, la de nameservers gracie/yahir.
+El usuario pidió publicar ahí y asignarle un dominio después.
+
+- Versión del Worker: `e80df0a8-5f94-4c3d-9471-6596349fd56f`. La anterior es
+  `4e246825-35d4-4286-af76-051caf44b917`, del 2026-10-24, para volver atrás.
+- Runtime: `debc57fdcb8c40e7c3d0d7ddd323c092bb7ea258137a3db75247c949a1f7b2f7`.
+  Se subieron los cuatro objetos a R2 `gta-sa-oc-runtime`.
+- Juego: `GAME_BUILD = a033b7fd3a69b951`. Sus 461 objetos ya estaban en R2,
+  todos con el tamaño correcto, y no se subieron de nuevo.
+- El Worker ahora tiene `LIVE_PLAYERS`, con la migración `presence-v1` aplicada.
+- `gta.galavic.world` sigue en la cuenta nueva y no cambió.
+- `tools/verify_cloudflare_release.py` pasó con un User-Agent de navegador,
+  porque Cloudflare responde 403 al de Python. Verificó:
+  - los 38 assets por SHA256;
+  - el Wasm y el paquete de datos, comprimidos y sin comprimir.
+- **En Chrome, con perfil nuevo**, se llega al menú principal a 60 FPS.
+- **Con el mismo perfil, en una sesión posterior**, se llega a la primera
+  misión en la ciudad: CJ en la BMX, 39–47 FPS en esta máquina.
+- **Carga en esta conexión.** La red da 2,1 MB/s, igual que
+  `speed.cloudflare.com`, y cuatro rangos en paralelo no la superan. Desde
+  una partida nueva hasta la ciudad se leen unos 334 bloques de 4 MiB
+  (~1,3 GiB), según las trazas en frío locales (`cold-r8` y `cold-r9`). La
+  primera vez son unos 10 minutos con esta conexión.
+- **Caché de bloques.** Antes guardaba como máximo 1 GiB, menos que esos
+  1,3 GiB, así que cada sesión volvía a bajar los bloques del arranque. Ahora
+  el máximo es 6 GiB, más que el juego entero. Si el navegador rechaza una
+  escritura, se libera el cuarto más viejo y se reintenta. Con ese cambio,
+  una segunda sesión no repitió ninguna descarga de la anterior.
+- La lista de prefetch sigue sin publicarse. La red de esta prueba está
+  limitada por ancho de banda, y la lista solo usaría los momentos sin
+  lecturas.
+
 ## Limitador apagado de fábrica, controles táctiles, lanzador y `Present` diferido (2026-11-25, tarde)
 
 Candidato local: Wasm `3441cd8917abd8efee0fe780a9ce32908fbf471579b14105755e3b5d57a59a99`

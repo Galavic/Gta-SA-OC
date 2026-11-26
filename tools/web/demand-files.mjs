@@ -221,10 +221,23 @@ export async function legacyBlockReader(game, root) {
   };
 }
 
-export async function browserBlockCache({ maxBytes = 1024 * 1024 * 1024 } = {}) {
-  if (!globalThis.caches) return null;
-  const cache = await caches.open("gta-demand-blocks-v1");
-  const url = key => new URL("/__gta_verified_block/" + key, location.origin).href;
+// Verified 4 MiB blocks kept across sessions. The cap is above the whole game
+// (about 5 GB): a new game reads ~1.3 GiB before the city, and a smaller cap
+// evicted the boot blocks, so every session downloaded part of it again.
+// Oldest entries go first, including older builds'. When the browser refuses
+// a write (quota), the oldest quarter is dropped and the write tried once more.
+export async function browserBlockCache({ maxBytes = 6 * 1024 * 1024 * 1024, cacheStorage = globalThis.caches,
+  origin = globalThis.location?.origin } = {}) {
+  if (!cacheStorage) return null;
+  const cache = await cacheStorage.open("gta-demand-blocks-v1");
+  const url = key => new URL("/__gta_verified_block/" + key, origin).href;
+  const maxEntries = Math.max(1, Math.floor(maxBytes / (4 * 1024 * 1024)));
+  let count = null;
+  async function dropOldest(n) {
+    const keys = await cache.keys();
+    for (const request of keys.slice(0, Math.max(0, n))) await cache.delete(request);
+    count = keys.length - Math.min(keys.length, Math.max(0, n));
+  }
   return {
     async get(key) {
       const response = await cache.match(url(key));
@@ -235,10 +248,13 @@ export async function browserBlockCache({ maxBytes = 1024 * 1024 * 1024 } = {}) 
       return !!(await cache.match(url(key)));
     },
     async set(key, bytes) {
-      await cache.put(url(key), new Response(bytes));
-      // Entries are <= 4 MiB. Bound disk use conservatively, including older builds.
-      const keys = await cache.keys(), maxEntries = Math.max(1, Math.floor(maxBytes / (4 * 1024 * 1024)));
-      for (const request of keys.slice(0, Math.max(0, keys.length - maxEntries))) await cache.delete(request);
+      if (count === null) count = (await cache.keys()).length;
+      try { await cache.put(url(key), new Response(bytes)); }
+      catch {
+        await dropOldest(Math.ceil(count / 4));
+        await cache.put(url(key), new Response(bytes));
+      }
+      if (++count > maxEntries) await dropOldest(count - maxEntries);
     },
   };
 }
