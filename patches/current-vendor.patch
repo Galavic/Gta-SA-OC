@@ -2951,7 +2951,7 @@ index 7771a52..d158978 100644
          {"DirectShow graph playback", test_dshow_graph_playback},
          {"palette versions", test_palette_versions},
 diff --git a/host/CMakeLists.txt b/host/CMakeLists.txt
-index 58e79fd..2bb52c7 100644
+index 58e79fd..3c1c633 100644
 --- a/host/CMakeLists.txt
 +++ b/host/CMakeLists.txt
 @@ -266,7 +266,13 @@ if(TARGET recomp_gen)
@@ -2969,7 +2969,16 @@ index 58e79fd..2bb52c7 100644
        file(COPY ${POP_BUILD_ROOT}/recomp/symbols.json DESTINATION ${web_resources})
      endif()
      if(EXISTS ${RECOMP_GAME_DIR}/mods/core)
-@@ -283,6 +289,12 @@ if(TARGET recomp_gen)
+@@ -277,12 +283,20 @@ if(TARGET recomp_gen)
+     set(APP ${RECOMP_APP_NAME})
+     set(TITLE ${RECOMP_GAME_NAME})
+     configure_file(${POP_ROOT}/web/player/index.html ${POP_OUT}/index.html @ONLY)
++    # GTA SA runs 8 threads; every idle pool worker still holds its own
++    # instance and JS heap, which matters on phones.
+     target_link_options(recomp_app PRIVATE
+-      -pthread -sPTHREAD_POOL_SIZE=24 -sWASMFS
++      -pthread -sPTHREAD_POOL_SIZE=12 -sWASMFS
+       -sINITIAL_MEMORY=1073741824 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4294967296
        -sSTACK_SIZE=8388608 -sDEFAULT_PTHREAD_STACK_SIZE=16777216
        -sENVIRONMENT=web,worker -sEXIT_RUNTIME=0 -sINVOKE_RUN=0
        -sEXPORTED_RUNTIME_METHODS=ENV,callMain,FS
@@ -2982,7 +2991,7 @@ index 58e79fd..2bb52c7 100644
        --preload-file ${web_resources}@/app/resources)
    elseif(APPLE)
      pop_mac_bundle(recomp_app)
-@@ -349,3 +361,16 @@ add_test(NAME headless_tests COMMAND headless_tests ${CMAKE_CURRENT_BINARY_DIR}/
+@@ -349,3 +363,16 @@ add_test(NAME headless_tests COMMAND headless_tests ${CMAKE_CURRENT_BINARY_DIR}/
    WORKING_DIRECTORY ${POP_ROOT})
  set_tests_properties(headless_tests PROPERTIES LABELS nogame)
  endif()
@@ -4728,7 +4737,7 @@ index 5178873..971d1cd 100644
  // app reads Documents/switches.txt at start). One NAME=VALUE per line, spaces
  // around either trimmed; blank lines, # comments and lines without '=' are
 diff --git a/platform/os_posix.cpp b/platform/os_posix.cpp
-index 17abe04..eff0275 100644
+index 17abe04..7525503 100644
 --- a/platform/os_posix.cpp
 +++ b/platform/os_posix.cpp
 @@ -1,6 +1,15 @@
@@ -4747,7 +4756,21 @@ index 17abe04..eff0275 100644
  
  #include <dirent.h>
  #include <dlfcn.h>
-@@ -33,6 +42,14 @@ struct OsThread {
+@@ -15,6 +24,13 @@
+ #include <string.h>
+ #include <strings.h>
+ #include <sys/mman.h>
++#ifdef __EMSCRIPTEN__
++#include <algorithm>
++#include <cstdint>
++#include <cstring>
++#include <malloc.h>
++#include <unistd.h>
++#endif
+ #include <sys/stat.h>
+ #include <sys/statvfs.h>
+ #include <sys/time.h>
+@@ -33,6 +49,14 @@ struct OsThread {
  
  extern "C" {
  
@@ -4762,6 +4785,40 @@ index 17abe04..eff0275 100644
  OsThread *os_thread_create(void *(*fn)(void *), void *arg, size_t stack_bytes) {
      OsThread *t = (OsThread *)calloc(1, sizeof *t);
      if (!t)
+@@ -72,6 +96,25 @@ OsThreadId os_thread_id_of(const OsThread *t) {
+     return (OsThreadId)(uintptr_t)t->handle;
+ }
+ 
++#ifdef __EMSCRIPTEN__
++// Emscripten's anonymous mmap memsets the whole range, which makes every page
++// resident at once: all 512 MiB of guest memory before the game used any, a
++// large part of why iOS closed the tab. WebAssembly memory starts zeroed and
++// nothing has written above the program break, so only the part of the block
++// below the previous break can hold old data and needs clearing.
++void *os_vm_reserve(size_t bytes) {
++    const uintptr_t fresh = (uintptr_t)sbrk(0);
++    uint8_t *p = (uint8_t *)memalign(65536, bytes);
++    if (!p)
++        return nullptr;
++    if ((uintptr_t)p < fresh)
++        memset(p, 0, std::min<size_t>(bytes, fresh - (uintptr_t)p));
++    return p;
++}
++void os_vm_release(void *p, size_t) {
++    free(p);
++}
++#else
+ void *os_vm_reserve(size_t bytes) {
+     void *p = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+     return p == MAP_FAILED ? nullptr : p;
+@@ -79,6 +122,7 @@ void *os_vm_reserve(size_t bytes) {
+ void os_vm_release(void *p, size_t bytes) {
+     munmap(p, bytes);
+ }
++#endif
+ 
+ void *os_dlopen(const char *path) {
+     return dlopen(path, RTLD_NOW | RTLD_LOCAL);
 diff --git a/platform/os_win32.cpp b/platform/os_win32.cpp
 index f84ba7e..eb5c889 100644
 --- a/platform/os_win32.cpp

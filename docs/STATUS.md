@@ -1,13 +1,59 @@
 # Estado actual
 
+## Memoria: un GB menos en uso; iPhone cerraba la pestaña (2026-11-26)
+
+En un iPhone, el sitio publicado mostraba «Ocurrió un problema varias veces»
+después de cargar. Es el mensaje de iOS cuando la página se cierra una y
+otra vez, normalmente por memoria. En Chrome de escritorio, la memoria en uso
+(working set) del proceso de la página medía:
+
+| Runtime | Menú | Ciudad |
+|---|---|---|
+| `3441cd89…` (publicado como `debc57fd…`) | ~2,0 GB | 2,3–2,46 GB |
+| `f2a6037d7121f5ea829fc26281b457acb93101540b46895d44e5b947821ccd7f` | ~1,04 GB | ~1,4 GB |
+
+Las dos filas son la misma prueba: servidor local, perfil nuevo y Enter para
+llegar a la ciudad. El proceso de GPU usa aparte 0,45–0,6 GB en los dos
+casos. Los bytes privados siguen cerca de 2 GB: V8 reserva la memoria de Wasm
+aunque no se use, y esa reserva no cuenta como memoria en uso.
+
+Hubo dos causas:
+
+- **La memoria de 512 MiB del juego se llenaba de ceros al arrancar.**
+  `os_vm_reserve` usaba `mmap` anónimo, y Emscripten lo implementa con
+  `memalign` más un `memset` del rango entero
+  (`system/lib/libc/emscripten_mmap.c`). Eso ocupaba los 512 MiB antes de que
+  el juego usara alguno. En la web ahora se usa `memalign` sin ese `memset`:
+  la memoria de Wasm empieza en cero y nada escribió por encima del break
+  anterior, así que solo se limpia la parte que quedó por debajo de él.
+- **Había 24 workers de pthreads para 8 hilos.** Durante toda la sesión,
+  `PThread.pthreads` tuvo 8 entradas y `unusedWorkers` 16. Cada worker ocioso
+  conserva su instancia y su heap de JS. `PTHREAD_POOL_SIZE` pasa a 12.
+
+Ni la compilación de Wasm ni los datos estáticos explicaban el consumo:
+- `WebAssembly.compile` del módulo tarda 82 ms y ocupa ~170 MB, porque V8
+  compila cada función recién cuando se usa;
+- los segmentos de datos suman 9 MB.
+
+Publicado el 2026-11-26 en https://gta-sa-oc.enrimilioano09.workers.dev/:
+- versión del Worker `361936db-9645-4214-82d2-c4866e114175`;
+- runtime `cee425ab2d705512b6bc248862a355dab01cc845c18dc4157409fa6e17567e14`,
+  que es `f2a6037d…` sin rutas locales.
+
+`verify_cloudflare_release.py` pasó. En Chrome, con el perfil que ya tenía
+los bloques, llegó a la ciudad: 41,7 FPS de mediana y 1,3–1,5 GB de memoria
+en uso, contra 2,2–2,3 GB en la misma prueba con el runtime anterior. No se
+probó todavía en un iPhone, y el límite de iOS depende del modelo.
+
 ## Publicado en workers.dev de la cuenta anterior (2026-11-26)
 
 https://gta-sa-oc.enrimilioano09.workers.dev/ sirve la rama `perf-touch-launcher`.
 Es el Worker `gta-sa-oc` de la cuenta anterior, la de nameservers gracie/yahir.
 El usuario pidió publicar ahí y asignarle un dominio después.
 
-- Versión del Worker: `e80df0a8-5f94-4c3d-9471-6596349fd56f`. La anterior es
-  `4e246825-35d4-4286-af76-051caf44b917`, del 2026-10-24, para volver atrás.
+- Primera publicación: Worker `e80df0a8-5f94-4c3d-9471-6596349fd56f`. La versión
+  previa de la cuenta es `4e246825-35d4-4286-af76-051caf44b917`, del 2026-10-24,
+  para volver atrás. La versión actual figura en la sección de memoria.
 - Runtime: `debc57fdcb8c40e7c3d0d7ddd323c092bb7ea258137a3db75247c949a1f7b2f7`.
   Se subieron los cuatro objetos a R2 `gta-sa-oc-runtime`.
 - Juego: `GAME_BUILD = a033b7fd3a69b951`. Sus 461 objetos ya estaban en R2,

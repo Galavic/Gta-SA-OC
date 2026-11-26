@@ -1,4 +1,33 @@
 {
+  "memory_20261126": {
+    "checked_date": "2026-11-26",
+    "symptom": "iPhone: Safari closed the page repeatedly after loading",
+    "fixes": [
+      "guest memory reserved without Emscripten's mmap memset (512 MiB resident at startup)",
+      "PTHREAD_POOL_SIZE 24 -> 12 (the game runs 8 threads)"
+    ],
+    "chrome_working_set_gb": {
+      "3441cd89": {
+        "menu": 2.0,
+        "city": [
+          2.3,
+          2.46
+        ]
+      },
+      "f2a6037d7121f5ea829fc26281b457acb93101540b46895d44e5b947821ccd7f": {
+        "menu": 1.04,
+        "city": 1.4
+      }
+    },
+    "published": {
+      "url": "https://gta-sa-oc.enrimilioano09.workers.dev/",
+      "worker_version": "361936db-9645-4214-82d2-c4866e114175",
+      "runtime_build": "cee425ab2d705512b6bc248862a355dab01cc845c18dc4157409fa6e17567e14",
+      "transport_verified": true,
+      "browser": "city reached, 41.7 fps median, 1.3-1.5 GB working set"
+    },
+    "iphone_verified": false
+  },
   "touch_limiter_launcher_20261125": {
     "checked_date": "2026-11-25",
     "executable_sha256": "a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26",
